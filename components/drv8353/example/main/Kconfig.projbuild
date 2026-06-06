@@ -1,0 +1,38 @@
+menu "DRV8353 Example Configuration"
+
+config EXAMPLE_SPI_SCLK_GPIO
+  int "SPI SCLK GPIO"
+  range 0 50
+  default 12
+
+config EXAMPLE_SPI_MOSI_GPIO
+  int "SPI MOSI GPIO"
+  range 0 50
+  default 11
+
+config EXAMPLE_SPI_MISO_GPIO
+  int "SPI MISO GPIO"
+  range 0 50
+  default 13
+
+config EXAMPLE_SPI_CS_GPIO
+  int "SPI CS GPIO"
+  range 0 50
+  default 10
+
+config EXAMPLE_SPI_CLOCK_SPEED
+  int "SPI Clock Speed (Hz)"
+  range 100000 10000000
+  default 1000000
+
+config EXAMPLE_ENABLE_GPIO
+  int "DRV8353 nSLEEP / enable GPIO (-1 if tied high)"
+  range -1 50
+  default -1
+
+config EXAMPLE_FAULT_GPIO
+  int "DRV8353 nFAULT GPIO (-1 if unused)"
+  range -1 50
+  default -1
+
+endmenu
