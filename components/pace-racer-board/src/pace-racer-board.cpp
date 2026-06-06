@@ -74,8 +74,13 @@ void PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_c
 
 std::shared_ptr<PaceRacerBoard::Encoder> PaceRacerBoard::encoder() { return encoder_; }
 
-void PaceRacerBoard::reset_encoder_accumulator() { encoder_->reset_accumulator(); }
-
+void PaceRacerBoard::reset_encoder_accumulator() {
+  if (!encoder_) {
+    logger_.error("Cannot reset encoder accumulator: encoder not initialized");
+    return;
+  }
+  encoder_->reset_accumulator();
+}
 std::shared_ptr<espp::BldcDriver> PaceRacerBoard::motor_driver() { return motor_driver_; }
 
 std::shared_ptr<PaceRacerBoard::BldcMotor> PaceRacerBoard::motor() { return motor_; }
