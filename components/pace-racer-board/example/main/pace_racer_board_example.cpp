@@ -37,6 +37,10 @@ extern "C" void app_main(void) {
 
   // get the motor objects (shared pointers) for use in the script
   auto motor = bsp.motor();
+  if (!motor) {
+    logger.error("Motor initialization failed");
+    return;
+  }
 
   static constexpr uint64_t core_update_period_us = 1'000;                  // microseconds
   static constexpr float core_update_period = core_update_period_us / 1e6f; // seconds
