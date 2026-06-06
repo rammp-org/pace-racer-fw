@@ -10,8 +10,8 @@ outputs the state as a CSV.
 
 ### Hardware Required
 
-This example requires a PACE RACER board, one Encoder boards, and one motor. The
-PACE RACER board should be connected to the Encoder boards and the motor.
+This example requires a PACE RACER board, one encoder board, and one motor. The
+PACE RACER board should be connected to the encoder board and the motor.
 
 ### Build and Flash
 
