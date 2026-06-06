@@ -20,7 +20,7 @@
 namespace espp {
 /// This class acts as a board support component for the PACE RACER board.
 /// It provides a high-level interface to the board's functionality.
-/// The PACE RACER board is a motor driver board that can drive two DC motors.
+/// The PACE RACER board is a motor driver board that can drive a BLDC motor.
 /// More information about the board can be found at:
 /// https://github.com/rammp-org/pace-racer-hardware
 ///
