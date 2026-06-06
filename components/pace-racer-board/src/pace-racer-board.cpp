@@ -44,8 +44,13 @@ void PaceRacerBoard::stop_breathing() {
   led_.set_duty(led_channels_[1].channel, 0.0f);
 }
 
-void PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_config,
+bool PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_config,
                                 const PaceRacerBoard::DriverConfig &driver_config) {
+  if (motor_ || motor_driver_ || encoder_) {
+    logger_.error("Motor, driver, or encoder already initialized");
+    return false;
+  }
+
   bool run_task = true;
   std::error_code ec;
   // make the encoder
@@ -54,7 +59,8 @@ void PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_c
   encoder_->initialize(run_task, ec);
   if (ec) {
     logger_.error("Could not initialize encoder: {}", ec.message());
-    return;
+    encoder_.reset();
+    return false;
   }
 
   // copy the config data for the driver
@@ -70,6 +76,8 @@ void PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_c
   // now make the motor
   motor_ = std::make_shared<BldcMotor>(_motor_config);
   motor_->initialize();
+
+  return true;
 }
 
 std::shared_ptr<PaceRacerBoard::Encoder> PaceRacerBoard::encoder() { return encoder_; }

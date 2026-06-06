@@ -187,7 +187,8 @@ public:
   ///          consists of initializing encoder, motor_driver, and motor.
   /// \param motor_config The motor configuration
   /// \param driver_config The driver configuration
-  void init_motor(const BldcMotor::Config &motor_config,
+  /// \return True if the motor was successfully initialized, false otherwise
+  bool init_motor(const BldcMotor::Config &motor_config,
                   const DriverConfig &driver_config = {.power_supply_voltage = 5.0f,
                                                        .limit_voltage = 5.0f});
 
