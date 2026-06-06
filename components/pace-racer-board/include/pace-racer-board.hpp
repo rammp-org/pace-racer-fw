@@ -16,6 +16,7 @@
 #include "oneshot_adc.hpp"
 #include "simple_lowpass_filter.hpp"
 #include "spi.hpp"
+#include "timer.hpp"
 
 namespace espp {
 /// This class acts as a board support component for the PACE RACER board.
