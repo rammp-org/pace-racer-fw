@@ -6,16 +6,16 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # add the component directories that we want to use
 set(EXTRA_COMPONENT_DIRS
-  "components/"
+  "../../../components/"
 )
 
 set(
   COMPONENTS
-  "main esptool_py pace-racer-board"
+  "main esptool_py filters task timer pace-racer-board"
   CACHE STRING
   "List of components to include"
   )
 
-project(pace-racer)
+project(pace_racer_board_example)
 
 set(CMAKE_CXX_STANDARD 20)
