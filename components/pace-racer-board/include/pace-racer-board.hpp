@@ -122,7 +122,7 @@ public:
   /// Start breathing the LEDs
   /// \details This function starts the LED timer which will periodically update
   ///          the LED duty cycle using the gaussian to create a breathing
-  ///          efect.
+  ///          effect.
   void start_breathing();
 
   /// Stop breathing the LEDs
