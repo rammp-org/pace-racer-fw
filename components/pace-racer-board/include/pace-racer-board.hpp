@@ -156,8 +156,8 @@ public:
       .kv_rating = 320,
       .current_limit = 1.0f,
       .foc_type = espp::detail::FocType::SPACE_VECTOR_PWM,
-      .driver = motor_driver_, // NOTE: user cannot override this
-      .sensor = encoder_,      // NOTE: user cannot override this
+      .driver = {}, // set by init_motor()
+      .sensor = {}, // set by init_motor()
       .velocity_pid_config =
           {
               .kp = 0.020f,
