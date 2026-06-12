@@ -619,12 +619,13 @@ bool Drv8353::unlock_protected_registers(uint16_t &gate_drive_hs, uint16_t &orig
 
 bool Drv8353::restore_protected_register_lock(uint16_t gate_drive_hs, uint16_t original_lock,
                                               std::error_code &ec) {
-  if (original_lock == GATE_DRIVE_UNLOCK) {
+  auto current_lock = gate_drive_hs & GATE_DRIVE_LOCK_MASK;
+  if (current_lock == original_lock) {
     ec.clear();
     return true;
   }
-  return write_register(Register::GATE_DRIVE_HS,
-                        with_gate_drive_lock(gate_drive_hs, GATE_DRIVE_LOCK), ec);
+  return write_register(Register::GATE_DRIVE_HS, with_gate_drive_lock(gate_drive_hs, original_lock),
+                        ec);
 }
 
 bool Drv8353::write_protected_register(Register reg, uint16_t data, std::error_code &ec) {
