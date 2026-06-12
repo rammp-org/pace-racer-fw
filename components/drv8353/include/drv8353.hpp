@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <system_error>
 
