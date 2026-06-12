@@ -4,8 +4,9 @@ This example demonstrates how to use the `espp::PaceRacerBoard` component to
 initialize the hardware on the [PACE RACER
 board](https://github.com/rammp-org/pace-racer-hardware) with one external
 encoder and one BLDC motor. The example initializes the board singleton,
-configures the motor, starts FOC control, and prints motor target / angle /
-speed data as CSV.
+brings up the four on-board LM75 temperature sensors, exercises the BSP
+temperature APIs, configures the motor, starts FOC control, and prints motor
+target / angle / speed data as CSV.
 
 ## How to use example
 
@@ -39,3 +40,6 @@ the form:
 time(s), motor target, motor angle (radians), motor speed (rpm)
 0.000, ...
 ```
+
+It also logs the four board temperature readings and performs an initial
+DRV8353 status read after motor bring-up.
