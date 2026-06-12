@@ -1,0 +1,24 @@
+## IDF Component Manager Manifest File
+license: "MIT"
+description: "DRV8353 three-phase gate driver component for ESP-IDF"
+url: "https://github.com/rammp-org/pace-racer-fw/tree/main/components/drv8353"
+repository: "git://github.com/rammp-org/pace-racer-fw.git"
+maintainers:
+  - William Emfinger <waemfinger@gmail.com>
+  - Swapnil Pande
+  - Alex Stephens
+  - Liyun Guo
+examples:
+  - path: example
+tags:
+  - cpp
+  - Component
+  - Motor
+  - SPI
+  - Peripheral
+  - Driver
+  - DRV8353
+dependencies:
+  idf:
+    version: ">=5.0"
+  espp/base_peripheral: ">=1.0"
