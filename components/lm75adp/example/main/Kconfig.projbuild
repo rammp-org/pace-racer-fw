@@ -1,0 +1,25 @@
+menu "LM75ADP Example Configuration"
+
+config EXAMPLE_I2C_SDA_GPIO
+  int "I2C SDA GPIO"
+  range 0 50
+  default 21
+  default 31 if IDF_TARGET_ESP32P4
+
+config EXAMPLE_I2C_SCL_GPIO
+  int "I2C SCL GPIO"
+  range 0 50
+  default 22
+  default 32 if IDF_TARGET_ESP32P4
+
+config EXAMPLE_I2C_CLOCK_SPEED_HZ
+  int "I2C Clock Speed"
+  range 100000 1000000
+  default 400000
+
+config EXAMPLE_I2C_ADDRESS
+  hex "LM75ADP I2C Address"
+  range 0x48 0x4F
+  default 0x48
+
+endmenu
