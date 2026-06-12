@@ -17,6 +17,43 @@ extern "C" void app_main(void) {
   auto &bsp = Bsp::get();
   bsp.set_log_level(espp::Logger::Verbosity::INFO);
 
+  std::error_code ec;
+  if (!bsp.init_temperature_sensors(ec)) {
+    logger.error("Failed to initialize board temperature sensors: {}", ec.message());
+    return;
+  }
+
+  if (!bsp.temperature_sensors_initialized()) {
+    logger.error("Board temperature sensors were not fully initialized");
+    return;
+  }
+
+  Bsp::TemperatureErrors startup_temperature_errors;
+  auto startup_temperatures_c = bsp.board_temperatures_c(startup_temperature_errors);
+  for (size_t i = 0; i < startup_temperatures_c.size(); i++) {
+    auto sensor = bsp.temperature_sensor(i);
+    if (!sensor) {
+      logger.error("Temperature sensor {} is not available", i);
+      return;
+    }
+
+    auto direct_temperature_c = sensor->temperature_c(ec);
+    if (ec) {
+      logger.error("Failed direct read of temperature sensor {}: {}", i, ec.message());
+      return;
+    }
+
+    if (startup_temperature_errors[i]) {
+      logger.error("Failed BSP read of temperature sensor {}: {}", i,
+                   startup_temperature_errors[i].message());
+      return;
+    }
+
+    logger.info("Board temperature sensor {} @ 0x{:02X}: direct {:.3f} C, bsp {:.3f} C", i,
+                Bsp::TEMPERATURE_SENSOR_ADDRESSES[i], direct_temperature_c,
+                startup_temperatures_c[i]);
+  }
+
   // set the configuration for the motor For simplicity, we'll copy the defaults
   // and modify them, but you can also just make a type of
   // Bsp::BldcMotor::Config
@@ -40,6 +77,23 @@ extern "C" void app_main(void) {
 
   // get the motor objects (shared pointers) for use in the script
   auto motor = bsp.motor();
+  if (!motor) {
+    logger.error("Motor not available after initialization");
+    return;
+  }
+
+  auto gate_driver = bsp.gate_driver();
+  if (!gate_driver) {
+    logger.error("Gate driver not available after motor initialization");
+    return;
+  }
+
+  auto fault_status = gate_driver->fault_status(ec);
+  if (ec) {
+    logger.error("Failed to read DRV8353 fault status: {}", ec.message());
+    return;
+  }
+  logger.info("Initial DRV8353 fault status: 0x{:03X}", fault_status.raw);
 
   static constexpr uint64_t core_update_period_us = 1'000;                  // microseconds
   static constexpr float core_update_period = core_update_period_us / 1e6f; // seconds
@@ -97,6 +151,7 @@ extern "C" void app_main(void) {
   // the current state.
   auto logging_fn = [&](std::mutex &m, std::condition_variable &cv) {
     static auto start = std::chrono::high_resolution_clock::now();
+    static auto next_temperature_log = start;
     auto now = std::chrono::high_resolution_clock::now();
     auto seconds = std::chrono::duration<float>(now - start).count();
     auto _target = target.load();
@@ -105,6 +160,26 @@ extern "C" void app_main(void) {
     auto rpm = filter(motor->get_shaft_velocity() * espp::RADS_TO_RPM);
     auto rads = motor->get_shaft_angle();
     fmt::print("{:.3f}, {:.3f}, {:.3f}, {:.3f}\n", seconds, _target, rads, rpm);
+
+    if (now >= next_temperature_log) {
+      Bsp::TemperatureErrors temperature_errors;
+      auto temperatures_c = bsp.board_temperatures_c(temperature_errors);
+      bool all_good = true;
+      for (size_t i = 0; i < temperatures_c.size(); i++) {
+        if (temperature_errors[i]) {
+          logger.error("Failed to read board temperature sensor {}: {}", i,
+                       temperature_errors[i].message());
+          all_good = false;
+          break;
+        }
+      }
+      if (all_good) {
+        logger.info("Board temperatures (C): [{:.3f}, {:.3f}, {:.3f}, {:.3f}]", temperatures_c[0],
+                    temperatures_c[1], temperatures_c[2], temperatures_c[3]);
+      }
+      next_temperature_log = now + 1s;
+    }
+
     // NOTE: sleeping in this way allows the sleep to exit early when the
     // task is being stopped / destroyed
     {

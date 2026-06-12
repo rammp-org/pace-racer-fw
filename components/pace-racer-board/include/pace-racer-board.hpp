@@ -1,6 +1,9 @@
 #pragma once
 
+#include <array>
+#include <memory>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <driver/spi_master.h>
@@ -8,10 +11,12 @@
 #include "base_component.hpp"
 #include "bldc_driver.hpp"
 #include "bldc_motor.hpp"
+#include "drv8353.hpp"
 #include "gaussian.hpp"
 #include "i2c.hpp"
 #include "interrupt.hpp"
 #include "led.hpp"
+#include "lm75adp.hpp"
 #include "mt6701.hpp"
 #include "oneshot_adc.hpp"
 #include "simple_lowpass_filter.hpp"
@@ -46,11 +51,27 @@ public:
   /// Alias for the BLDC motor type
   using BldcMotor = espp::BldcMotor<espp::BldcDriver, Encoder>;
 
+  /// Alias for the DRV8353 gate-driver control component.
+  using GateDriver = espp::Drv8353;
+
+  /// Alias for the board temperature sensors.
+  using TemperatureSensor = espp::Lm75adp;
+
   /// Alias for the velocity filter type
   using VelocityFilter = espp::SimpleLowpassFilter;
 
   /// Alias for the angle filter type
   using AngleFilter = espp::SimpleLowpassFilter;
+
+  static constexpr size_t NUM_TEMPERATURE_SENSORS = 4;
+  using TemperatureReadings = std::array<float, NUM_TEMPERATURE_SENSORS>;
+  using TemperatureErrors = std::array<std::error_code, NUM_TEMPERATURE_SENSORS>;
+  inline static constexpr std::array<uint8_t, NUM_TEMPERATURE_SENSORS> TEMPERATURE_SENSOR_ADDRESSES{
+      0x4C,
+      0x4D,
+      0x4E,
+      0x4F,
+  };
 
   /// @brief Access the singleton instance of the PaceRacerBoard class
   /// @return Reference to the singleton instance of the PaceRacerBoard class
@@ -140,6 +161,30 @@ public:
   espp::OneshotAdc &adc1();
 
   /////////////////////////////////////////////////////////////////////////////
+  // Temperature Sensors
+  /////////////////////////////////////////////////////////////////////////////
+
+  /// Initialize the four on-board LM75 temperature sensors on the internal I2C bus.
+  /// \return True if all four sensors are available and initialized.
+  bool init_temperature_sensors(std::error_code &ec);
+
+  /// Return true when all four board temperature sensors have been initialized.
+  bool temperature_sensors_initialized() const;
+
+  /// Get the shared pointers for all board temperature sensors.
+  const std::array<std::shared_ptr<TemperatureSensor>, NUM_TEMPERATURE_SENSORS> &
+  temperature_sensors() const;
+
+  /// Get one board temperature sensor by index [0, NUM_TEMPERATURE_SENSORS).
+  std::shared_ptr<TemperatureSensor> temperature_sensor(size_t index) const;
+
+  /// Read one board temperature in degrees Celsius.
+  float board_temperature_c(size_t index, std::error_code &ec) const;
+
+  /// Read all board temperatures in degrees Celsius.
+  TemperatureReadings board_temperatures_c(TemperatureErrors &errors) const;
+
+  /////////////////////////////////////////////////////////////////////////////
   // Motors
   /////////////////////////////////////////////////////////////////////////////
 
@@ -184,13 +229,17 @@ public:
 
   /// Initialize the PACE RACER's components for the BLDC motor
   /// \details This function initializes the encoder, driver, and motor. This
-  ///          consists of initializing encoder, motor_driver, and motor.
+  ///          consists of initializing encoder, DRV8353 gate-driver control,
+  ///          motor_driver, and motor.
   /// \param motor_config The motor configuration
   /// \param driver_config The driver configuration
   /// \return True if the motor was successfully initialized, false otherwise
   bool init_motor(const BldcMotor::Config &motor_config,
                   const DriverConfig &driver_config = {.power_supply_voltage = 5.0f,
                                                        .limit_voltage = 5.0f});
+
+  /// Get a shared pointer to the DRV8353 gate-driver control component.
+  std::shared_ptr<GateDriver> gate_driver();
 
   /// Get a shared pointer to the motor driver
   /// \return A shared pointer to the motor driver
@@ -248,7 +297,7 @@ protected:
   static constexpr auto I2C_SCL_PIN = GPIO_NUM_48;
 
   static constexpr auto COMM_SPI_HOST = SPI2_HOST;
-  static constexpr auto COMM_SPI_CLK_SPEED = 80 * 1000 * 1000; // max is 80 MHz
+  static constexpr size_t COMM_SPI_MAX_TRANSFER_SIZE = 1600;
   static constexpr auto COMM_CS_PIN = GPIO_NUM_10;
   static constexpr auto COMM_RESET_PIN = GPIO_NUM_21;
   static constexpr auto COMM_IRQ_PIN = GPIO_NUM_14;
@@ -304,8 +353,11 @@ protected:
                      .sda_pullup_en = GPIO_PULLUP_ENABLE,
                      .scl_pullup_en = GPIO_PULLUP_ENABLE}};
 
+  std::unique_ptr<Spi> comm_spi_;
   std::unique_ptr<Spi> encoder_spi_;
   std::shared_ptr<Spi::Device> encoder_spi_device_;
+
+  std::array<std::shared_ptr<TemperatureSensor>, NUM_TEMPERATURE_SENSORS> temperature_sensors_{};
 
   // Encoders
   Encoder::Config encoder_config_{.read = [this](uint8_t *data, size_t size) -> bool {
@@ -318,6 +370,9 @@ protected:
   // NOTE: use explicit type of nullptr to force allocation of control block, so
   // that it can be shared even if it's nullptr;
   std::shared_ptr<Encoder> encoder_{(Encoder *)(nullptr)};
+
+  // Gate-driver IC control
+  std::shared_ptr<GateDriver> gate_driver_{(GateDriver *)(nullptr)};
 
   // Drivers
   espp::BldcDriver::Config motor_driver_config_{
