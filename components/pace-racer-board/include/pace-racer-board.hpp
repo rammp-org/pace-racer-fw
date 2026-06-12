@@ -406,10 +406,9 @@ protected:
   uint64_t green_breathe_start_us = 0;
   espp::HighResolutionTimer led_timer_{
       {.name = "PACE RACER LED Timer",
-       .callback = [this]() -> bool {
+       .callback = [this]() -> void {
          led_.set_duty(led_channels_[0].channel, 100.0f * breathe(1.0f, blue_breathe_start_us));
          led_.set_duty(led_channels_[1].channel, 100.0f * breathe(1.0f, green_breathe_start_us));
-         return true;
        },
        .log_level = espp::Logger::Verbosity::WARN}};
 };
