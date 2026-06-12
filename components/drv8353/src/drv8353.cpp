@@ -44,6 +44,10 @@ Drv8353::Drv8353(const Config &config)
 
 bool Drv8353::initialize(std::error_code &ec) {
   std::lock_guard<std::recursive_mutex> lock(base_mutex_);
+  if (!config_.transfer && (!config_.write || !config_.read)) {
+    ec = std::make_error_code(std::errc::invalid_argument);
+    return false;
+  }
   if (!configure_gpios(ec)) {
     return false;
   }
