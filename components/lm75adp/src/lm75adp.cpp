@@ -7,13 +7,18 @@
 using namespace espp;
 
 namespace {
-constexpr uint8_t kOsPolarityMask = 1 << 7;
-constexpr uint8_t kShutdownMask = 1 << 6;
-constexpr uint8_t kOsModeMask = 1 << 5;
-constexpr uint8_t kFaultQueueMask = 0x3 << 3;
+// LM75A configuration register fields per datasheet:
+// B0 = shutdown, B1 = OS comparator/interrupt mode,
+// B2 = OS polarity, B[4:3] = fault queue, B[7:5] = reserved.
+constexpr uint8_t kShutdownMask = 1 << 0;
+constexpr uint8_t kOsModeMask = 1 << 1;
+constexpr uint8_t kOsPolarityMask = 1 << 2;
+constexpr uint8_t kFaultQueueShift = 3;
+constexpr uint8_t kFaultQueueMask = 0x3 << kFaultQueueShift;
 constexpr float kTemperatureLsbC = 0.125f;
-constexpr int kMinTemperatureSteps = -1024;
-constexpr int kMaxTemperatureSteps = 1023;
+// LM75A register table range: -55 C to +127 C in 0.125 C steps.
+constexpr int kMinTemperatureSteps = -440;
+constexpr int kMaxTemperatureSteps = 1016;
 } // namespace
 
 uint8_t Lm75adp::Configuration::raw() const {
@@ -21,7 +26,7 @@ uint8_t Lm75adp::Configuration::raw() const {
   value |= os_polarity == OsPolarity::ACTIVE_HIGH ? kOsPolarityMask : 0;
   value |= shutdown ? kShutdownMask : 0;
   value |= os_mode == OsMode::INTERRUPT_MODE ? kOsModeMask : 0;
-  value |= (static_cast<uint8_t>(fault_queue) & 0x03) << 3;
+  value |= (static_cast<uint8_t>(fault_queue) & 0x03) << kFaultQueueShift;
   return value;
 }
 
@@ -30,7 +35,7 @@ Lm75adp::Configuration Lm75adp::Configuration::from_raw(uint8_t raw) {
       .os_polarity = (raw & kOsPolarityMask) ? OsPolarity::ACTIVE_HIGH : OsPolarity::ACTIVE_LOW,
       .shutdown = (raw & kShutdownMask) != 0,
       .os_mode = (raw & kOsModeMask) ? OsMode::INTERRUPT_MODE : OsMode::COMPARATOR_MODE,
-      .fault_queue = static_cast<FaultQueue>((raw & kFaultQueueMask) >> 3),
+      .fault_queue = static_cast<FaultQueue>((raw & kFaultQueueMask) >> kFaultQueueShift),
   };
 }
 
