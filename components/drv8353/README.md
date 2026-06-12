@@ -11,8 +11,9 @@ OCP / CSA register access, and reading the device status registers.
 1. The DRV8353 requires **SPI mode 1**.
 2. If the board does not tie `nSLEEP` high in hardware, set `enable_gpio` so
    the component can release the driver from sleep before using SPI.
-3. Provide the `transfer` callback when using SPI so register reads can use a
-   full-duplex 16-bit transaction.
+3. Provide the `transfer` callback when using SPI so register reads can use the
+   same two-frame request/response sequence as the write/read fallback path
+   while still performing each frame as a full-duplex 16-bit SPI transfer.
 4. Gate-drive current helpers use the DRV8353 datasheet table from the SPI
    register section. The source-current register codes map to
    `50, 50, 100, 150, 300, 350, 400, 450, 550, 600, 650, 700, 850, 900, 950, 1000` mA
@@ -20,9 +21,9 @@ OCP / CSA register access, and reading the device status registers.
    `100, 100, 200, 300, 600, 700, 800, 900, 1100, 1200, 1300, 1400, 1700, 1800, 1900, 2000` mA.
    Use `Drv8353::SOURCE_CURRENT_MILLIAMPS` and `Drv8353::SINK_CURRENT_MILLIAMPS`
    when selecting values; unsupported current requests return `std::errc::invalid_argument`.
-5. The component automatically unlocks the protected SPI registers before
-   updating `GATE_DRIVE_HS`, `GATE_DRIVE_LS`, `OCP_CONTROL`, `CSA_CONTROL`,
-   or `DRIVER_CONFIGURATION`, then restores the datasheet lock state.
+5. The component automatically unlocks the protected SPI register set before
+   updating configuration registers, then restores the original datasheet lock
+   state afterward.
 6. The datasheet recommends setting all `INHx` / `INLx` inputs low before
    changing `PWM_MODE`. The helper APIs expose `set_pwm_mode(...)`, but the
    caller is still responsible for making that state transition safely.

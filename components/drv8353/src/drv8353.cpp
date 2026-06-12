@@ -131,12 +131,12 @@ bool Drv8353::clear_faults(std::error_code &ec) {
     return false;
   }
 
-  if (!write_register(Register::DRIVER_CONTROL, driver_control | DRIVER_CONTROL_CLEAR_FAULT_MASK,
-                      ec)) {
+  if (!write_protected_register(Register::DRIVER_CONTROL,
+                                driver_control | DRIVER_CONTROL_CLEAR_FAULT_MASK, ec)) {
     return false;
   }
-  return write_register(Register::DRIVER_CONTROL, driver_control & ~DRIVER_CONTROL_CLEAR_FAULT_MASK,
-                        ec);
+  return write_protected_register(Register::DRIVER_CONTROL,
+                                  driver_control & ~DRIVER_CONTROL_CLEAR_FAULT_MASK, ec);
 }
 
 bool Drv8353::clear_fault(std::error_code &ec) { return clear_faults(ec); }
@@ -234,12 +234,12 @@ bool Drv8353::set_low_side_gate_drive_current(const GateDriveCurrent &current,
 
 bool Drv8353::set_coast(bool enabled, std::error_code &ec) {
   return modify_register(Register::DRIVER_CONTROL, DRIVER_CONTROL_COAST_MASK,
-                         enabled ? DRIVER_CONTROL_COAST_MASK : 0u, ec);
+                         enabled ? DRIVER_CONTROL_COAST_MASK : 0u, ec, true);
 }
 
 bool Drv8353::set_brake(bool enabled, std::error_code &ec) {
   return modify_register(Register::DRIVER_CONTROL, DRIVER_CONTROL_BRAKE_MASK,
-                         enabled ? DRIVER_CONTROL_BRAKE_MASK : 0u, ec);
+                         enabled ? DRIVER_CONTROL_BRAKE_MASK : 0u, ec, true);
 }
 
 bool Drv8353::set_pwm_mode(PwmMode mode, std::error_code &ec) {
@@ -418,9 +418,6 @@ bool Drv8353::write_registers(const RegisterValues &values, std::error_code &ec)
   auto ocp_control = values.ocp_control & DATA_MASK;
   auto csa_control = values.csa_control & DATA_MASK;
   auto driver_configuration = values.driver_configuration & DATA_MASK;
-  auto requested_lock = (gate_drive_hs & GATE_DRIVE_LOCK_MASK) == GATE_DRIVE_UNLOCK
-                            ? GATE_DRIVE_UNLOCK
-                            : GATE_DRIVE_LOCK;
 
   if (!write_register(Register::DRIVER_CONTROL, driver_control, ec) ||
       !write_register(Register::GATE_DRIVE_HS,
@@ -436,14 +433,7 @@ bool Drv8353::write_registers(const RegisterValues &values, std::error_code &ec)
     return false;
   }
 
-  if (requested_lock != GATE_DRIVE_UNLOCK &&
-      !write_register(Register::GATE_DRIVE_HS, with_gate_drive_lock(gate_drive_hs, GATE_DRIVE_LOCK),
-                      ec)) {
-    return false;
-  }
-
-  ec.clear();
-  return true;
+  return restore_protected_register_lock(gate_drive_hs, original_lock, ec);
 }
 
 std::array<uint8_t, 2> Drv8353::to_bytes(uint16_t word) {
@@ -558,6 +548,18 @@ bool Drv8353::transfer_frame(uint16_t tx_frame, uint16_t &rx_frame, std::error_c
       ec = std::make_error_code(std::errc::io_error);
       return false;
     }
+
+    if (config_.inter_frame_delay.count() > 0) {
+      std::this_thread::sleep_for(config_.inter_frame_delay);
+    }
+
+    constexpr std::array<uint8_t, 2> dummy_tx = {0, 0};
+    if (!config_.transfer(std::span<const uint8_t>(dummy_tx.data(), dummy_tx.size()),
+                          std::span<uint8_t>(rx.data(), rx.size()))) {
+      ec = std::make_error_code(std::errc::io_error);
+      return false;
+    }
+
     rx_frame = from_bytes(rx.data());
     ec.clear();
     return true;
