@@ -10,7 +10,7 @@ env:
   FLASH_TOTAL_OVERRIDE: '4000000' # number of bytes of total flash (for percentage calculations)
 
 jobs:
-  build:
+  build-main:
 
     runs-on: ubuntu-latest
 
@@ -34,3 +34,24 @@ jobs:
         idf_version: ${{ env.IDF_VERSION }}
         idf_component_manager: ${{ env.IDF_COMPONENT_MANAGER }}
         flash_total_override: ${{ env.FLASH_TOTAL_OVERRIDE }}
+
+  build-examples:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        example_path:
+          - components/drv8353/example
+          - components/lm75adp/example
+          - components/pace-racer-board/example
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v5
+
+    - name: Build example
+      uses: espressif/esp-idf-ci-action@v1
+      with:
+        esp_idf_version: ${{ env.IDF_VERSION }}
+        path: ${{ matrix.example_path }}
+        target: ${{ env.IDF_TARGET }}
