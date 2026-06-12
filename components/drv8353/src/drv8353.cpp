@@ -4,8 +4,35 @@
 
 using namespace espp;
 
+Drv8353::BasePeripheral::write_fn Drv8353::make_write_fn(const Config &config) {
+  if (config.write) {
+    return config.write;
+  }
+  if (!config.transfer) {
+    return nullptr;
+  }
+  auto transfer = config.transfer;
+  return [transfer](const uint8_t *data, size_t length) {
+    return transfer(std::span<const uint8_t>(data, length), std::span<uint8_t>{});
+  };
+}
+
+Drv8353::BasePeripheral::read_fn Drv8353::make_read_fn(const Config &config) {
+  if (config.read) {
+    return config.read;
+  }
+  if (!config.transfer) {
+    return nullptr;
+  }
+  auto transfer = config.transfer;
+  return [transfer](uint8_t *data, size_t length) {
+    return transfer(std::span<const uint8_t>{}, std::span<uint8_t>(data, length));
+  };
+}
+
 Drv8353::Drv8353(const Config &config)
-    : BasePeripheral({.write = config.write, .read = config.read}, "Drv8353", config.log_level)
+    : BasePeripheral({.write = make_write_fn(config), .read = make_read_fn(config)}, "Drv8353",
+                     config.log_level)
     , config_(config) {
   if (config.auto_init) {
     std::error_code ec;
@@ -100,23 +127,45 @@ bool Drv8353::clear_faults(std::error_code &ec) {
     return false;
   }
 
-  if (!write_register(Register::DRIVER_CONTROL, driver_control | CLEAR_FAULT_MASK, ec)) {
+  if (!write_register(Register::DRIVER_CONTROL, driver_control | DRIVER_CONTROL_CLEAR_FAULT_MASK,
+                      ec)) {
     return false;
   }
-  return write_register(Register::DRIVER_CONTROL, driver_control & ~CLEAR_FAULT_MASK, ec);
+  return write_register(Register::DRIVER_CONTROL, driver_control & ~DRIVER_CONTROL_CLEAR_FAULT_MASK,
+                        ec);
+}
+
+bool Drv8353::clear_fault(std::error_code &ec) { return clear_faults(ec); }
+
+Drv8353::DriverControl Drv8353::read_driver_control(std::error_code &ec) {
+  return {.raw = read_register(Register::DRIVER_CONTROL, ec)};
+}
+
+bool Drv8353::write_driver_control(const DriverControl &control, std::error_code &ec) {
+  auto raw = (control.raw & DATA_MASK) & ~DRIVER_CONTROL_CLEAR_FAULT_MASK;
+  return write_protected_register(Register::DRIVER_CONTROL, raw, ec);
+}
+
+Drv8353::OcpControl Drv8353::read_ocp_control(std::error_code &ec) {
+  return {.raw = read_register(Register::OCP_CONTROL, ec)};
+}
+
+bool Drv8353::write_ocp_control(const OcpControl &control, std::error_code &ec) {
+  return write_protected_register(Register::OCP_CONTROL, control.raw & DATA_MASK, ec);
+}
+
+Drv8353::CsaControl Drv8353::read_csa_control(std::error_code &ec) {
+  return {.raw = read_register(Register::CSA_CONTROL, ec)};
+}
+
+bool Drv8353::write_csa_control(const CsaControl &control, std::error_code &ec) {
+  return write_protected_register(Register::CSA_CONTROL, control.raw & DATA_MASK, ec);
 }
 
 uint16_t Drv8353::read_register(Register reg, std::error_code &ec) {
   std::lock_guard<std::recursive_mutex> lock(base_mutex_);
-  if (!send_frame(make_read_frame(reg), ec)) {
-    return 0;
-  }
-  if (config_.inter_frame_delay.count() > 0) {
-    std::this_thread::sleep_for(config_.inter_frame_delay);
-  }
-
   uint16_t response = 0;
-  if (!receive_frame(response, ec)) {
+  if (!transfer_frame(make_read_frame(reg), response, ec)) {
     return 0;
   }
   return response & DATA_MASK;
@@ -158,7 +207,7 @@ bool Drv8353::set_high_side_gate_drive_current(const GateDriveCurrent &current,
 
   gate_drive_hs &= ~(GATE_DRIVE_SOURCE_MASK | GATE_DRIVE_SINK_MASK);
   gate_drive_hs |= *encoded;
-  return write_register(Register::GATE_DRIVE_HS, gate_drive_hs, ec);
+  return write_protected_register(Register::GATE_DRIVE_HS, gate_drive_hs, ec);
 }
 
 bool Drv8353::set_low_side_gate_drive_current(const GateDriveCurrent &current,
@@ -176,7 +225,151 @@ bool Drv8353::set_low_side_gate_drive_current(const GateDriveCurrent &current,
 
   gate_drive_ls &= ~(GATE_DRIVE_SOURCE_MASK | GATE_DRIVE_SINK_MASK);
   gate_drive_ls |= *encoded;
-  return write_register(Register::GATE_DRIVE_LS, gate_drive_ls, ec);
+  return write_protected_register(Register::GATE_DRIVE_LS, gate_drive_ls, ec);
+}
+
+bool Drv8353::set_coast(bool enabled, std::error_code &ec) {
+  return modify_register(Register::DRIVER_CONTROL, DRIVER_CONTROL_COAST_MASK,
+                         enabled ? DRIVER_CONTROL_COAST_MASK : 0u, ec);
+}
+
+bool Drv8353::set_brake(bool enabled, std::error_code &ec) {
+  return modify_register(Register::DRIVER_CONTROL, DRIVER_CONTROL_BRAKE_MASK,
+                         enabled ? DRIVER_CONTROL_BRAKE_MASK : 0u, ec);
+}
+
+bool Drv8353::set_pwm_mode(PwmMode mode, std::error_code &ec) {
+  return modify_register(Register::DRIVER_CONTROL, DRIVER_CONTROL_PWM_MODE_MASK,
+                         static_cast<uint16_t>(mode) << DRIVER_CONTROL_PWM_MODE_SHIFT, ec, true);
+}
+
+Drv8353::PeakDriveTime Drv8353::peak_drive_time(std::error_code &ec) {
+  auto gate_drive_ls = read_register(Register::GATE_DRIVE_LS, ec);
+  return static_cast<PeakDriveTime>(
+      get_field(gate_drive_ls, GATE_DRIVE_TDRIVE_MASK, GATE_DRIVE_TDRIVE_SHIFT));
+}
+
+bool Drv8353::set_peak_drive_time(PeakDriveTime peak_drive_time, std::error_code &ec) {
+  return modify_register(Register::GATE_DRIVE_LS, GATE_DRIVE_TDRIVE_MASK,
+                         static_cast<uint16_t>(peak_drive_time) << GATE_DRIVE_TDRIVE_SHIFT, ec,
+                         true);
+}
+
+bool Drv8353::cycle_by_cycle_enabled(std::error_code &ec) {
+  auto gate_drive_ls = read_register(Register::GATE_DRIVE_LS, ec);
+  return !ec && bit_is_set(gate_drive_ls, GATE_DRIVE_CBC_MASK);
+}
+
+bool Drv8353::set_cycle_by_cycle(bool enabled, std::error_code &ec) {
+  return modify_register(Register::GATE_DRIVE_LS, GATE_DRIVE_CBC_MASK,
+                         enabled ? GATE_DRIVE_CBC_MASK : 0u, ec, true);
+}
+
+Drv8353::RetryTime Drv8353::retry_time(std::error_code &ec) {
+  auto control = read_ocp_control(ec);
+  return control.retry_time();
+}
+
+bool Drv8353::set_retry_time(RetryTime retry_time, std::error_code &ec) {
+  return modify_register(Register::OCP_CONTROL, OCP_CONTROL_RETRY_MASK,
+                         static_cast<uint16_t>(retry_time) << 10, ec, true);
+}
+
+Drv8353::DeadTime Drv8353::dead_time(std::error_code &ec) {
+  auto control = read_ocp_control(ec);
+  return control.dead_time();
+}
+
+bool Drv8353::set_dead_time(DeadTime dead_time, std::error_code &ec) {
+  return modify_register(Register::OCP_CONTROL, OCP_CONTROL_DEAD_TIME_MASK,
+                         static_cast<uint16_t>(dead_time) << OCP_CONTROL_DEAD_TIME_SHIFT, ec, true);
+}
+
+Drv8353::OcpMode Drv8353::ocp_mode(std::error_code &ec) {
+  auto control = read_ocp_control(ec);
+  return control.ocp_mode();
+}
+
+bool Drv8353::set_ocp_mode(OcpMode mode, std::error_code &ec) {
+  return modify_register(Register::OCP_CONTROL, OCP_CONTROL_MODE_MASK,
+                         static_cast<uint16_t>(mode) << OCP_CONTROL_MODE_SHIFT, ec, true);
+}
+
+Drv8353::OcpDeglitch Drv8353::ocp_deglitch(std::error_code &ec) {
+  auto control = read_ocp_control(ec);
+  return control.deglitch();
+}
+
+bool Drv8353::set_ocp_deglitch(OcpDeglitch deglitch, std::error_code &ec) {
+  return modify_register(Register::OCP_CONTROL, OCP_CONTROL_DEGLITCH_MASK,
+                         static_cast<uint16_t>(deglitch) << OCP_CONTROL_DEGLITCH_SHIFT, ec, true);
+}
+
+Drv8353::VdsLevel Drv8353::vds_level(std::error_code &ec) {
+  auto control = read_ocp_control(ec);
+  return control.vds_level();
+}
+
+bool Drv8353::set_vds_level(VdsLevel level, std::error_code &ec) {
+  return modify_register(Register::OCP_CONTROL, OCP_CONTROL_VDS_LEVEL_MASK,
+                         static_cast<uint16_t>(level), ec, true);
+}
+
+Drv8353::SenseLevel Drv8353::sense_level(std::error_code &ec) {
+  auto control = read_csa_control(ec);
+  return control.sense_level();
+}
+
+bool Drv8353::set_sense_level(SenseLevel level, std::error_code &ec) {
+  return modify_register(Register::CSA_CONTROL, CSA_CONTROL_SENSE_LEVEL_MASK,
+                         static_cast<uint16_t>(level), ec, true);
+}
+
+Drv8353::CsaGain Drv8353::csa_gain(std::error_code &ec) {
+  auto control = read_csa_control(ec);
+  return control.gain();
+}
+
+bool Drv8353::set_csa_gain(CsaGain gain, std::error_code &ec) {
+  return modify_register(Register::CSA_CONTROL, CSA_CONTROL_GAIN_MASK,
+                         static_cast<uint16_t>(gain) << CSA_CONTROL_GAIN_SHIFT, ec, true);
+}
+
+bool Drv8353::set_csa_fet(bool enabled, std::error_code &ec) {
+  return modify_register(Register::CSA_CONTROL, CSA_CONTROL_FET_MASK,
+                         enabled ? CSA_CONTROL_FET_MASK : 0u, ec, true);
+}
+
+bool Drv8353::set_vref_divider_enabled(bool enabled, std::error_code &ec) {
+  return modify_register(Register::CSA_CONTROL, CSA_CONTROL_VREF_DIV_MASK,
+                         enabled ? CSA_CONTROL_VREF_DIV_MASK : 0u, ec, true);
+}
+
+bool Drv8353::set_low_side_reference_to_snx(bool enabled, std::error_code &ec) {
+  return modify_register(Register::CSA_CONTROL, CSA_CONTROL_LS_REF_MASK,
+                         enabled ? CSA_CONTROL_LS_REF_MASK : 0u, ec, true);
+}
+
+bool Drv8353::set_sense_overcurrent_enabled(bool enabled, std::error_code &ec) {
+  return modify_register(Register::CSA_CONTROL, CSA_CONTROL_DIS_SEN_MASK,
+                         enabled ? 0u : CSA_CONTROL_DIS_SEN_MASK, ec, true);
+}
+
+bool Drv8353::set_csa_calibration(bool phase_a_enabled, bool phase_b_enabled, bool phase_c_enabled,
+                                  std::error_code &ec) {
+  auto value = 0u;
+  if (phase_a_enabled) {
+    value |= CSA_CONTROL_CAL_A_MASK;
+  }
+  if (phase_b_enabled) {
+    value |= CSA_CONTROL_CAL_B_MASK;
+  }
+  if (phase_c_enabled) {
+    value |= CSA_CONTROL_CAL_C_MASK;
+  }
+  return modify_register(Register::CSA_CONTROL,
+                         CSA_CONTROL_CAL_A_MASK | CSA_CONTROL_CAL_B_MASK | CSA_CONTROL_CAL_C_MASK,
+                         value, ec, true);
 }
 
 Drv8353::RegisterValues Drv8353::read_all_registers(std::error_code &ec) {
@@ -207,12 +400,46 @@ Drv8353::RegisterValues Drv8353::read_all_registers(std::error_code &ec) {
 }
 
 bool Drv8353::write_registers(const RegisterValues &values, std::error_code &ec) {
-  return write_register(Register::DRIVER_CONTROL, values.driver_control, ec) &&
-         write_register(Register::GATE_DRIVE_HS, values.gate_drive_hs, ec) &&
-         write_register(Register::GATE_DRIVE_LS, values.gate_drive_ls, ec) &&
-         write_register(Register::OCP_CONTROL, values.ocp_control, ec) &&
-         write_register(Register::CSA_CONTROL, values.csa_control, ec) &&
-         write_register(Register::DRIVER_CONFIGURATION, values.driver_configuration, ec);
+  std::lock_guard<std::recursive_mutex> lock(base_mutex_);
+
+  uint16_t original_gate_drive_hs = 0;
+  uint16_t original_lock = GATE_DRIVE_UNLOCK;
+  if (!unlock_protected_registers(original_gate_drive_hs, original_lock, ec)) {
+    return false;
+  }
+
+  auto driver_control = (values.driver_control & DATA_MASK) & ~DRIVER_CONTROL_CLEAR_FAULT_MASK;
+  auto gate_drive_hs = values.gate_drive_hs & DATA_MASK;
+  auto gate_drive_ls = values.gate_drive_ls & DATA_MASK;
+  auto ocp_control = values.ocp_control & DATA_MASK;
+  auto csa_control = values.csa_control & DATA_MASK;
+  auto driver_configuration = values.driver_configuration & DATA_MASK;
+  auto requested_lock = (gate_drive_hs & GATE_DRIVE_LOCK_MASK) == GATE_DRIVE_UNLOCK
+                            ? GATE_DRIVE_UNLOCK
+                            : GATE_DRIVE_LOCK;
+
+  if (!write_register(Register::DRIVER_CONTROL, driver_control, ec) ||
+      !write_register(Register::GATE_DRIVE_HS,
+                      with_gate_drive_lock(gate_drive_hs, GATE_DRIVE_UNLOCK), ec) ||
+      !write_register(Register::GATE_DRIVE_LS, gate_drive_ls, ec) ||
+      !write_register(Register::OCP_CONTROL, ocp_control, ec) ||
+      !write_register(Register::CSA_CONTROL, csa_control, ec) ||
+      !write_register(Register::DRIVER_CONFIGURATION, driver_configuration, ec)) {
+    if (original_lock != GATE_DRIVE_UNLOCK) {
+      std::error_code restore_ec;
+      restore_protected_register_lock(original_gate_drive_hs, original_lock, restore_ec);
+    }
+    return false;
+  }
+
+  if (requested_lock != GATE_DRIVE_UNLOCK &&
+      !write_register(Register::GATE_DRIVE_HS, with_gate_drive_lock(gate_drive_hs, GATE_DRIVE_LOCK),
+                      ec)) {
+    return false;
+  }
+
+  ec.clear();
+  return true;
 }
 
 std::array<uint8_t, 2> Drv8353::to_bytes(uint16_t word) {
@@ -267,6 +494,24 @@ std::optional<uint16_t> Drv8353::encode_gate_drive_current(const GateDriveCurren
          static_cast<uint16_t>(*sink_code);
 }
 
+uint16_t Drv8353::with_gate_drive_lock(uint16_t value, uint16_t lock_bits) {
+  return (value & ~GATE_DRIVE_LOCK_MASK) | (lock_bits & GATE_DRIVE_LOCK_MASK);
+}
+
+bool Drv8353::bit_is_set(uint16_t value, uint16_t mask) { return (value & mask) != 0; }
+
+uint16_t Drv8353::get_field(uint16_t value, uint16_t mask, uint16_t shift) {
+  return (value & mask) >> shift;
+}
+
+uint16_t Drv8353::set_bit(uint16_t value, uint16_t mask, bool enabled) {
+  return (value & ~mask) | (enabled ? mask : 0u);
+}
+
+uint16_t Drv8353::set_field(uint16_t value, uint16_t mask, uint16_t shift, uint16_t field_value) {
+  return (value & ~mask) | ((field_value << shift) & mask);
+}
+
 bool Drv8353::configure_gpios(std::error_code &ec) {
   if (config_.enable_gpio != GPIO_NUM_NC) {
     gpio_config_t io_conf{};
@@ -300,7 +545,39 @@ bool Drv8353::configure_gpios(std::error_code &ec) {
   return true;
 }
 
+bool Drv8353::transfer_frame(uint16_t tx_frame, uint16_t &rx_frame, std::error_code &ec) {
+  if (config_.transfer) {
+    auto tx = to_bytes(tx_frame);
+    std::array<uint8_t, 2> rx = {0, 0};
+    if (!config_.transfer(std::span<const uint8_t>(tx.data(), tx.size()),
+                          std::span<uint8_t>(rx.data(), rx.size()))) {
+      ec = std::make_error_code(std::errc::io_error);
+      return false;
+    }
+    rx_frame = from_bytes(rx.data());
+    ec.clear();
+    return true;
+  }
+
+  if (!send_frame(tx_frame, ec)) {
+    return false;
+  }
+  if (config_.inter_frame_delay.count() > 0) {
+    std::this_thread::sleep_for(config_.inter_frame_delay);
+  }
+  return receive_frame(rx_frame, ec);
+}
+
 bool Drv8353::send_frame(uint16_t frame, std::error_code &ec) {
+  if (config_.transfer) {
+    auto tx = to_bytes(frame);
+    if (!config_.transfer(std::span<const uint8_t>(tx.data(), tx.size()), std::span<uint8_t>{})) {
+      ec = std::make_error_code(std::errc::io_error);
+      return false;
+    }
+    ec.clear();
+    return true;
+  }
   auto tx = to_bytes(frame);
   write(tx.data(), tx.size(), ec);
   return !ec;
@@ -314,4 +591,75 @@ bool Drv8353::receive_frame(uint16_t &frame, std::error_code &ec) {
   }
   frame = from_bytes(rx);
   return true;
+}
+
+bool Drv8353::unlock_protected_registers(uint16_t &gate_drive_hs, uint16_t &original_lock,
+                                         std::error_code &ec) {
+  gate_drive_hs = read_register(Register::GATE_DRIVE_HS, ec);
+  if (ec) {
+    return false;
+  }
+
+  original_lock = gate_drive_hs & GATE_DRIVE_LOCK_MASK;
+  if (original_lock != GATE_DRIVE_UNLOCK &&
+      !write_register(Register::GATE_DRIVE_HS,
+                      with_gate_drive_lock(gate_drive_hs, GATE_DRIVE_UNLOCK), ec)) {
+    return false;
+  }
+
+  ec.clear();
+  return true;
+}
+
+bool Drv8353::restore_protected_register_lock(uint16_t gate_drive_hs, uint16_t original_lock,
+                                              std::error_code &ec) {
+  if (original_lock == GATE_DRIVE_UNLOCK) {
+    ec.clear();
+    return true;
+  }
+  return write_register(Register::GATE_DRIVE_HS,
+                        with_gate_drive_lock(gate_drive_hs, GATE_DRIVE_LOCK), ec);
+}
+
+bool Drv8353::write_protected_register(Register reg, uint16_t data, std::error_code &ec) {
+  std::lock_guard<std::recursive_mutex> lock(base_mutex_);
+
+  uint16_t gate_drive_hs = 0;
+  uint16_t original_lock = GATE_DRIVE_UNLOCK;
+  if (!unlock_protected_registers(gate_drive_hs, original_lock, ec)) {
+    return false;
+  }
+
+  if (!write_register(reg, data & DATA_MASK, ec)) {
+    if (original_lock != GATE_DRIVE_UNLOCK) {
+      std::error_code restore_ec;
+      restore_protected_register_lock(gate_drive_hs, original_lock, restore_ec);
+    }
+    return false;
+  }
+
+  if (reg == Register::GATE_DRIVE_HS) {
+    gate_drive_hs = data & DATA_MASK;
+  }
+  return restore_protected_register_lock(gate_drive_hs, original_lock, ec);
+}
+
+bool Drv8353::modify_register(Register reg, uint16_t mask, uint16_t value, std::error_code &ec,
+                              bool requires_unlock) {
+  std::lock_guard<std::recursive_mutex> lock(base_mutex_);
+
+  auto register_value = read_register(reg, ec);
+  if (ec) {
+    return false;
+  }
+
+  register_value = (register_value & ~mask) | (value & mask);
+  if (reg == Register::DRIVER_CONTROL) {
+    register_value &= ~DRIVER_CONTROL_CLEAR_FAULT_MASK;
+  }
+
+  if (requires_unlock) {
+    return write_protected_register(reg, register_value, ec);
+  }
+  return write_register(reg, register_value, ec);
 }

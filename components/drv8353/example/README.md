@@ -1,7 +1,8 @@
 # DRV8353 Example
 
 This example shows how to use the `Drv8353` component to communicate with a
-DRV8353 gate driver over SPI and periodically read the two status registers.
+DRV8353 gate driver over SPI, configure its gate-drive / OCP / CSA registers,
+and periodically read the two status registers.
 
 ## How to use example
 

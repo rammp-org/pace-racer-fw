@@ -34,14 +34,11 @@ extern "C" void app_main(void) {
   }
 
   espp::Drv8353 drv({
-      .write = [drv_device](const uint8_t *data, size_t length) -> bool {
-        std::error_code tx_ec;
-        return drv_device->write(std::span<const uint8_t>(data, length), {}, tx_ec);
-      },
-      .read = [drv_device](uint8_t *data, size_t length) -> bool {
-        std::error_code rx_ec;
-        return drv_device->read(std::span<uint8_t>(data, length), {}, rx_ec);
-      },
+      .transfer =
+          [drv_device](std::span<const uint8_t> tx_data, std::span<uint8_t> rx_data) {
+            std::error_code transfer_ec;
+            return drv_device->transfer(tx_data, rx_data, {}, transfer_ec);
+          },
       .enable_gpio = static_cast<gpio_num_t>(CONFIG_EXAMPLE_ENABLE_GPIO),
       .fault_gpio = static_cast<gpio_num_t>(CONFIG_EXAMPLE_FAULT_GPIO),
       .high_side_gate_drive_current =
@@ -51,6 +48,15 @@ extern "C" void app_main(void) {
       .log_level = espp::Logger::Verbosity::WARN,
   });
 
+  if (!drv.set_peak_drive_time(espp::Drv8353::PeakDriveTime::NS_2000, ec) ||
+      !drv.set_dead_time(espp::Drv8353::DeadTime::NS_200, ec) ||
+      !drv.set_ocp_deglitch(espp::Drv8353::OcpDeglitch::US_4, ec) ||
+      !drv.set_csa_gain(espp::Drv8353::CsaGain::GAIN_10, ec) ||
+      !drv.set_sense_level(espp::Drv8353::SenseLevel::V_0_50, ec)) {
+    logger.error("Failed to configure DRV8353 control registers: {}", ec.message());
+    return;
+  }
+
   auto registers = drv.read_all_registers(ec);
   if (ec) {
     logger.error("Failed to read DRV8353 registers: {}", ec.message());
@@ -58,6 +64,18 @@ extern "C" void app_main(void) {
   }
 
   logger.info("DRV8353 driver control: 0x{:03X}", registers.driver_control);
+
+  auto ocp_control = drv.read_ocp_control(ec);
+  if (ec) {
+    logger.error("Failed to read OCP control: {}", ec.message());
+    return;
+  }
+
+  auto csa_control = drv.read_csa_control(ec);
+  if (ec) {
+    logger.error("Failed to read CSA control: {}", ec.message());
+    return;
+  }
 
   auto hs_gate_drive = drv.high_side_gate_drive_current(ec);
   if (ec) {
@@ -74,6 +92,9 @@ extern "C" void app_main(void) {
   logger.info("Gate drive currents: HS {}mA/{}mA, LS {}mA/{}mA", hs_gate_drive.source_milliamps,
               hs_gate_drive.sink_milliamps, ls_gate_drive.source_milliamps,
               ls_gate_drive.sink_milliamps);
+  logger.info("OCP dead time={} OCP deglitch={} CSA gain={} sense level={}",
+              static_cast<int>(ocp_control.dead_time()), static_cast<int>(ocp_control.deglitch()),
+              static_cast<int>(csa_control.gain()), static_cast<int>(csa_control.sense_level()));
 
   while (true) {
     auto fault_status = drv.fault_status(ec);

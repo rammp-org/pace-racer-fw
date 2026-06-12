@@ -16,6 +16,8 @@ tags:
   - Motor
   - SPI
   - Peripheral
+  - Driver
+  - DRV8353
 dependencies:
   idf:
     version: ">=5.0"
