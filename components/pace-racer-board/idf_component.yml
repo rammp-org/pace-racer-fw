@@ -22,10 +22,14 @@ dependencies:
   espp/base_component: '>=1.0'
   espp/bldc_driver: '>=1.0'
   espp/bldc_motor: '>=1.0'
+  drv8353:
+    path: ../drv8353
   espp/filters: '>=1.0'
   espp/i2c: '>=1.0'
   espp/interrupt: '>=1.0'
   espp/led: '>=1.0'
+  lm75adp:
+    path: ../lm75adp
   espp/math: '>=1.0'
   espp/mt6701: '>=1.0'
   espp/pid: '>=1.0'
