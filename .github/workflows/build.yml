@@ -1,15 +1,13 @@
 name: Build
 
-# TODO: update if you want to allow from forked repositories
 on: [pull_request]
 
 env:
-  # TODO: Update the below variables for your project
-  APP_NAME: "Template"
-  IDF_TARGET: 'esp32'
-  IDF_VERSION: 'v5.5.1'
+  APP_NAME: "Pace Racer FW"
+  IDF_TARGET: 'esp32s3'
+  IDF_VERSION: 'v6.0'
   IDF_COMPONENT_MANAGER: "1" # whether to enable the component manager or not
-  FLASH_TOTAL_OVERRIDE: '1500000' # number of bytes of total flash (for percentage calculations)
+  FLASH_TOTAL_OVERRIDE: '4000000' # number of bytes of total flash (for percentage calculations)
 
 jobs:
   build:
@@ -19,7 +17,6 @@ jobs:
     steps:
     - name: Checkout repo
       uses: actions/checkout@v5
-      # TODO: update this if you have submodules
 
     - name: Build main
       uses: espressif/esp-idf-ci-action@v1

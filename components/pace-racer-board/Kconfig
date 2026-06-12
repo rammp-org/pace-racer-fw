@@ -1,0 +1,10 @@
+menu "PACE RACER Configuration"
+
+config PACE_RACER_INTERRUPT_STACK_SIZE
+  int "Interrupt stack size"
+  default 4096
+  help
+    Size of the stack used for the interrupt handler. Used by the motor fault
+    handler. May also be used by the hall effect sensors if configured.
+
+endmenu

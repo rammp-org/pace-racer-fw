@@ -1,0 +1,35 @@
+## IDF Component Manager Manifest File
+license: "MIT"
+description: "PACE Racer Board component for ESP-C++ (ESP-PP) framework."
+url: "https://github.com/rammp-org/pace-racer-fw/tree/main/components/pace-racer-board"
+repository: "git://github.com/rammp-org/pace-racer-fw.git"
+maintainers:
+  - William Emfinger <waemfinger@gmail.com>
+  - Swapnil Pande
+  - Alex Stephens
+  - Liyun Guo
+examples:
+  - path: example
+tags:
+  - cpp
+  - Component
+  - PACE
+  - RAMMP
+dependencies:
+  idf:
+    version: '>=5.0'
+  espp/adc: '>=1.0'
+  espp/base_component: '>=1.0'
+  espp/bldc_driver: '>=1.0'
+  espp/bldc_motor: '>=1.0'
+  espp/filters: '>=1.0'
+  espp/i2c: '>=1.0'
+  espp/interrupt: '>=1.0'
+  espp/led: '>=1.0'
+  espp/math: '>=1.0'
+  espp/mt6701: '>=1.0'
+  espp/pid: '>=1.0'
+  espp/spi: '>=1.0'
+  espp/timer: '>=1.0'
+targets:
+  - esp32s3
