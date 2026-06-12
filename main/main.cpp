@@ -34,10 +34,17 @@ extern "C" void app_main(void) {
   motor_config.angle_pid_config.kd = 0.000f;
 
   // now initialize the motor
-  bsp.init_motor(motor_config);
+  if (!bsp.init_motor(motor_config)) {
+    logger.error("Failed to initialize motor");
+    return;
+  }
 
   // get the motor objects (shared pointers) for use in the script
   auto motor = bsp.motor();
+  if (!motor) {
+    logger.error("Motor not available after initialization");
+    return;
+  }
 
   // static auto motion_control_type = espp::detail::MotionControlType::VELOCITY;
   static auto motion_control_type = espp::detail::MotionControlType::ANGLE;
