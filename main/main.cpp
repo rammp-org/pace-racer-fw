@@ -72,17 +72,12 @@ extern "C" void app_main(void) {
 
   std::atomic<float> target = motor->get_shaft_angle();
   std::atomic<bool> target_is_angle = true;
+  std::atomic<float> requested_target = target.load();
+  std::atomic<bool> requested_target_is_angle = target_is_angle.load();
+  std::atomic<espp::detail::MotionControlType> requested_control_type{
+      espp::detail::MotionControlType::ANGLE};
+  std::atomic<bool> phase_update_pending{false};
   const float home_angle = motor->get_shaft_angle();
-
-  auto motor_fn = [&]() -> bool {
-    motor->loop_foc();
-    motor->move(target.load());
-    return false;
-  };
-
-  auto motor_timer = espp::HighResolutionTimer(
-      {.name = "Motor Timer", .callback = motor_fn, .log_level = espp::Logger::Verbosity::WARN});
-  motor_timer.periodic(core_update_period_us);
 
   struct ControlPhase {
     espp::detail::MotionControlType control_type;
@@ -131,12 +126,14 @@ extern "C" void app_main(void) {
     const auto &phase = phases[index];
     const bool angle_mode = phase.control_type == espp::detail::MotionControlType::ANGLE ||
                             phase.control_type == espp::detail::MotionControlType::ANGLE_OPENLOOP;
-    target_is_angle = angle_mode;
-    motor->set_motion_control_type(phase.control_type);
-    target = phase.relative_to_home ? (home_angle + phase.command) : phase.command;
+    const float next_target = phase.relative_to_home ? (home_angle + phase.command) : phase.command;
+    requested_control_type = phase.control_type;
+    requested_target_is_angle = angle_mode;
+    requested_target = next_target;
+    phase_update_pending = true;
 
     if (angle_mode) {
-      logger.info("Starting {} test: target angle {:.3f} rad", phase.name, target.load());
+      logger.info("Starting {} test: target angle {:.3f} rad", phase.name, next_target);
     } else {
       logger.info("Starting {} test: target velocity {:.1f} rpm", phase.name,
                   phase.command * espp::RADS_TO_RPM);
@@ -144,6 +141,21 @@ extern "C" void app_main(void) {
   };
 
   apply_phase(active_phase_index.load());
+
+  auto motor_fn = [&]() -> bool {
+    if (phase_update_pending.exchange(false)) {
+      target = requested_target.load();
+      target_is_angle = requested_target_is_angle.load();
+      motor->set_motion_control_type(requested_control_type.load());
+    }
+    motor->loop_foc();
+    motor->move(target.load());
+    return false;
+  };
+
+  auto motor_timer = espp::HighResolutionTimer(
+      {.name = "Motor Timer", .callback = motor_fn, .log_level = espp::Logger::Verbosity::WARN});
+  motor_timer.periodic(core_update_period_us);
 
   static constexpr float sample_freq_hz = 20.0f;
   static constexpr float filter_cutoff_freq_hz = 2.0f;
@@ -214,14 +226,21 @@ extern "C" void app_main(void) {
                                       .log_level = espp::Logger::Verbosity::WARN});
   diagnostics_task.start();
 
-  auto phase_task_fn = [&](std::mutex &m, std::condition_variable &cv) {
+  auto phase_task_fn = [&](std::mutex &m, std::condition_variable &cv, bool &notified) {
     const auto phase_index = active_phase_index.load();
     const auto delay = phases[phase_index].duration;
     const auto deadline = std::chrono::steady_clock::now() + delay;
-    {
-      std::unique_lock<std::mutex> lk(m);
-      cv.wait_until(lk, deadline);
+    std::unique_lock<std::mutex> lk(m);
+    while (!notified) {
+      if (cv.wait_until(lk, deadline) == std::cv_status::timeout) {
+        break;
+      }
     }
+    if (notified) {
+      notified = false;
+      return true;
+    }
+    lk.unlock();
 
     const size_t next_phase = (phase_index + 1) % phases.size();
     active_phase_index = next_phase;
