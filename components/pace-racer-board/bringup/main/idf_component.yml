@@ -1,0 +1,8 @@
+## IDF Component Manager Manifest File
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=5.0'
+  espp/csv: '>=1.0'
+  espp/format: '>=1.0'
+  espp/tabulate: '>=1.0'

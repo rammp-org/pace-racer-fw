@@ -109,6 +109,16 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.1.1
+  espp/csv:
+    component_hash: 6f56a8727df59ec3d0369ff1562f85c7639db64defced67c4422abf95042dd33
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.1
   espp/filters:
     component_hash: f32189ff46426dacc5ec3bdcf5901e73e8d1004fcbfc16f4997a385a8c5e2302
     dependencies:
@@ -138,7 +148,7 @@ dependencies:
       require: private
       version: '>=5.0'
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 1.1.1
   espp/i2c:
@@ -277,6 +287,16 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 1.1.1
+  espp/tabulate:
+    component_hash: 862cc531ac29c0dea7c1d16ebf4731cdbcf07bfa1e0c1489d33594f4e0ae8796
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.1
   espp/task:
     component_hash: 6ae353cd01bf89c9236a06f043ba40ee707ae71d09591c3dbbdf1bd1ae48f550
     dependencies:
@@ -336,7 +356,9 @@ direct_dependencies:
 - espp/base_peripheral
 - espp/bldc_driver
 - espp/bldc_motor
+- espp/csv
 - espp/filters
+- espp/format
 - espp/i2c
 - espp/interrupt
 - espp/led
@@ -344,9 +366,10 @@ direct_dependencies:
 - espp/mt6701
 - espp/pid
 - espp/spi
+- espp/tabulate
 - espp/timer
 - idf
 - lm75adp
-manifest_hash: bbbdbe938096f1a41f404005569fc6ec8a909d0b20e54b39640b16196f26f778
+manifest_hash: 4e694d09d893986abb0e2ca8b70965da1915bdd2455d562c230be5653fc73bc6
 target: esp32s3
 version: 2.0.0

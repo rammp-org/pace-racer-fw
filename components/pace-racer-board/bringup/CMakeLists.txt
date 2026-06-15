@@ -11,7 +11,7 @@ set(EXTRA_COMPONENT_DIRS
 
 set(
   COMPONENTS
-  "main esptool_py pace-racer-board"
+  "main esptool_py pace-racer-board csv format tabulate"
   CACHE STRING
   "List of components to include"
   )

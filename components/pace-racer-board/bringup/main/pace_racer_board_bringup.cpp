@@ -1,12 +1,16 @@
 #include <chrono>
 #include <cmath>
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
 
+#include "csv.hpp"
 #include "format.hpp"
 #include "pace-racer-board.hpp"
+#include "tabulate.hpp"
 
 using namespace std::chrono_literals;
 
@@ -73,20 +77,6 @@ std::string join_strings(const std::vector<std::string> &items, std::string_view
     joined += items[i];
   }
   return joined;
-}
-
-std::string csv_quote(std::string_view value) {
-  std::string escaped;
-  escaped.reserve(value.size() + 2);
-  escaped.push_back('"');
-  for (char c : value) {
-    if (c == '"') {
-      escaped.push_back('"');
-    }
-    escaped.push_back(c);
-  }
-  escaped.push_back('"');
-  return escaped;
 }
 } // namespace
 
@@ -333,21 +323,29 @@ extern "C" void app_main(void) {
   logger.info("Bringup complete: {} pass, {} warn, {} fail, {} skip", pass_count, warn_count,
               fail_count, skip_count);
 
-  fmt::print("\nPACE RACER bringup summary\n");
-  fmt::print("{:<12} {:<24} {:<6} {}\n", "Subsystem", "Check", "Status", "Details");
-  fmt::print("{:-<12} {:-<24} {:-<6} {:-<1}\n", "", "", "", "");
+  using namespace tabulate;
+  Table summary;
+  summary.add_row({"Subsystem", "Check", "Status", "Details"});
   for (const auto &result : results) {
-    fmt::print("{:<12} {:<24} {:<6} {}\n", result.subsystem, result.check, to_string(result.status),
-               result.details);
+    summary.add_row({result.subsystem, result.check, to_string(result.status), result.details});
   }
+  summary.format().border_top(" ").border_bottom(" ").border_left(" ").border_right(" ").corner(
+      " ");
+  summary[0].format().font_style({FontStyle::bold}).font_align(FontAlign::center);
+  summary.column(2).format().font_align(FontAlign::center);
 
-  fmt::print("\nbringup_csv_begin\n");
-  fmt::print("subsystem,check,status,details\n");
+  std::cout << "\nPACE RACER bringup summary\n" << summary << std::endl;
+
+  std::ostringstream csv_stream("");
+  csv2::Writer<csv2::delimiter<','>, std::ostringstream> writer(csv_stream);
+  std::vector<std::vector<std::string>> rows = {
+      {"subsystem", "check", "status", "details"},
+  };
   for (const auto &result : results) {
-    fmt::print("{},{},{},{}\n", csv_quote(result.subsystem), csv_quote(result.check),
-               csv_quote(to_string(result.status)), csv_quote(result.details));
+    rows.push_back({result.subsystem, result.check, to_string(result.status), result.details});
   }
-  fmt::print("bringup_csv_end\n");
+  writer.write_rows(rows);
+  fmt::print("\nbringup_csv_begin\n{}bringup_csv_end\n", csv_stream.str());
 
   while (true) {
     std::this_thread::sleep_for(1s);
