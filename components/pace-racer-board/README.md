@@ -91,9 +91,19 @@ auto temperatures_c = bsp.board_temperatures_c(errors);
    implementation (`CURRENT_SENSE_MV_TO_A`), so current readings should be
    treated accordingly until that calibration is finalized.
 
-## Example
+## Examples
 
-See the [example](./example) for a complete project that:
+See the [bringup](./bringup) project for a conservative board-check executable
+that:
+
+1. Exercises LED control
+2. Samples the current-sense ADC channels
+3. Probes and reads the four LM75ADP temperature sensors
+4. Initializes the motor subsystem without enabling motion
+5. Reads DRV8353 and encoder status
+6. Prints a pass / warn / fail summary as CSV
+
+See the [example](./example) project for a more active motor-control demo that:
 
 1. Gets the board singleton
 2. Copies and adjusts `default_motor_config`

@@ -44,6 +44,7 @@ jobs:
           - components/drv8353/example
           - components/lm75adp/example
           - components/pace-racer-board/example
+          - components/pace-racer-board/bringup
 
     steps:
     - name: Checkout repo
