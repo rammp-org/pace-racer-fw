@@ -291,6 +291,10 @@ public:
   /// \return The current sense value for phase C in amps
   float motor_current_c_amps();
 
+  /// Get the conversion factor used by `motor_current_*_amps()`.
+  /// \return Current-sense conversion factor in amps per millivolt.
+  static constexpr float motor_current_sense_mv_to_a() { return CURRENT_SENSE_MV_TO_A; }
+
 protected:
   static constexpr auto I2C_PORT = I2C_NUM_0;
   static constexpr auto I2C_SDA_PIN = GPIO_NUM_45;

@@ -126,27 +126,36 @@ extern "C" void app_main(void) {
          "Issued blue, green, and off commands; visual confirmation recommended");
 
   const float current_sense_vref_mv = bsp.motor_current_sense_vref();
-  const float phase_a_raw = bsp.motor_current_a_amps();
-  const float phase_b_raw = bsp.motor_current_b_amps();
-  const float phase_c_raw = bsp.motor_current_c_amps();
+  const float current_sense_mv_to_a = Bsp::motor_current_sense_mv_to_a();
+  const bool current_scale_valid = current_sense_mv_to_a > 0.0f;
+  const float phase_a_mv =
+      current_scale_valid ? (bsp.motor_current_a_amps() / current_sense_mv_to_a) : NAN;
+  const float phase_b_mv =
+      current_scale_valid ? (bsp.motor_current_b_amps() / current_sense_mv_to_a) : NAN;
+  const float phase_c_mv =
+      current_scale_valid ? (bsp.motor_current_c_amps() / current_sense_mv_to_a) : NAN;
   const bool adc_values_finite = std::isfinite(current_sense_vref_mv) &&
-                                 std::isfinite(phase_a_raw) && std::isfinite(phase_b_raw) &&
-                                 std::isfinite(phase_c_raw);
+                                 std::isfinite(phase_a_mv) && std::isfinite(phase_b_mv) &&
+                                 std::isfinite(phase_c_mv);
   const bool adc_values_in_range =
-      current_sense_vref_mv >= 0.0f && current_sense_vref_mv <= 3300.0f && phase_a_raw >= 0.0f &&
-      phase_a_raw <= 3300.0f && phase_b_raw >= 0.0f && phase_b_raw <= 3300.0f &&
-      phase_c_raw >= 0.0f && phase_c_raw <= 3300.0f;
-  if (!adc_values_finite || !adc_values_in_range) {
+      current_sense_vref_mv >= 0.0f && current_sense_vref_mv <= 3300.0f && phase_a_mv >= 0.0f &&
+      phase_a_mv <= 3300.0f && phase_b_mv >= 0.0f && phase_b_mv <= 3300.0f && phase_c_mv >= 0.0f &&
+      phase_c_mv <= 3300.0f;
+  if (!current_scale_valid) {
     record("adc", "current-sense-baseline", CheckStatus::FAIL,
-           fmt::format("Unexpected current-sense readings: vref_mv={:.3f}, phase_a_raw={:.3f}, "
-                       "phase_b_raw={:.3f}, phase_c_raw={:.3f}",
-                       current_sense_vref_mv, phase_a_raw, phase_b_raw, phase_c_raw));
+           "Invalid current-sense calibration: CURRENT_SENSE_MV_TO_A must be > 0");
+  } else if (!adc_values_finite || !adc_values_in_range) {
+    record("adc", "current-sense-baseline", CheckStatus::FAIL,
+           fmt::format("Unexpected current-sense readings: vref_mv={:.3f}, phase_a_mv={:.3f}, "
+                       "phase_b_mv={:.3f}, phase_c_mv={:.3f}, scale_mv_to_a={:.6f}",
+                       current_sense_vref_mv, phase_a_mv, phase_b_mv, phase_c_mv,
+                       current_sense_mv_to_a));
   } else {
-    record(
-        "adc", "current-sense-baseline", CheckStatus::PASS,
-        fmt::format("vref_mv={:.3f}, phase_a_raw={:.3f}, phase_b_raw={:.3f}, phase_c_raw={:.3f}; "
-                    "phase values use placeholder CURRENT_SENSE_MV_TO_A scaling",
-                    current_sense_vref_mv, phase_a_raw, phase_b_raw, phase_c_raw));
+    record("adc", "current-sense-baseline", CheckStatus::PASS,
+           fmt::format("vref_mv={:.3f}, phase_a_mv={:.3f}, phase_b_mv={:.3f}, phase_c_mv={:.3f}, "
+                       "scale_mv_to_a={:.6f}",
+                       current_sense_vref_mv, phase_a_mv, phase_b_mv, phase_c_mv,
+                       current_sense_mv_to_a));
   }
 
   std::error_code ec;
