@@ -341,9 +341,11 @@ extern "C" void app_main(void) {
   std::vector<std::vector<std::string>> rows = {
       {"subsystem", "check", "status", "details"},
   };
-  for (const auto &result : results) {
-    rows.push_back({result.subsystem, result.check, to_string(result.status), result.details});
-  }
+  std::transform(results.begin(), results.end(), std::back_inserter(rows),
+                 [](const CheckResult &result) {
+                   return std::vector<std::string>{result.subsystem, result.check,
+                                                   to_string(result.status), result.details};
+                 });
   writer.write_rows(rows);
   fmt::print("\nbringup_csv_begin\n{}bringup_csv_end\n", csv_stream.str());
 
