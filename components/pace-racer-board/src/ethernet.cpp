@@ -189,8 +189,10 @@ bool PaceRacerBoard::init_ethernet(const PaceRacerBoard::EthernetConfig &config,
       return fail("Invalid static IP configuration", ESP_ERR_INVALID_ARG,
                   std::errc::invalid_argument);
     }
-    if (!config.gateway.empty()) {
-      esp_netif_str_to_ip4(config.gateway.c_str(), &ip_info.gw);
+    if (!config.gateway.empty() &&
+        esp_netif_str_to_ip4(config.gateway.c_str(), &ip_info.gw) != ESP_OK) {
+      return fail("Invalid static gateway configuration", ESP_ERR_INVALID_ARG,
+                  std::errc::invalid_argument);
     }
     err = esp_netif_set_ip_info(eth_netif_, &ip_info);
     if (err != ESP_OK) {
