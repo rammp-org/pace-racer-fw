@@ -16,6 +16,8 @@ sense ADC channels, on-board temperature sensing, and BLDC motor bring-up.
 6. DRV8353 gate-driver control exposure for motor-driver configuration
 7. BLDC motor driver and motor initialization through `init_motor(...)`
 8. Motor current-sense ADC helpers for phases A/B/C and the reference channel
+9. WIZnet W5500 Ethernet bring-up over the SPI expansion header through
+   `init_ethernet(...)`, with link / IP status helpers
 
 ## Hardware overview
 
@@ -29,6 +31,9 @@ The BSP is written for the PACE RACER board described in
 5. One DRV8353 gate driver on SPI2
 6. One BLDC motor stage driven through the board's motor-control circuitry
 7. Board-connected current-sense signals on ADC1
+8. One WIZnet W5500 Ethernet breakout on the SPI expansion header, sharing the
+   SPI2 communications bus with the DRV8353 (CS on IO10, reset on IO21, and
+   interrupt on IO14)
 
 ## Usage
 
@@ -75,6 +80,24 @@ Bsp::TemperatureErrors errors;
 auto temperatures_c = bsp.board_temperatures_c(errors);
 ```
 
+Ethernet bring-up (WIZnet W5500 over the SPI expansion header) looks like:
+
+```cpp
+std::error_code ec;
+if (!bsp.init_ethernet(ec)) { // DHCP by default
+  return;
+}
+
+// wait for a cable / link and a DHCP-assigned address
+while (!bsp.ethernet_has_ip()) {
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+}
+auto ip = bsp.ethernet_ip_address();
+```
+
+Pass an `EthernetConfig` to `init_ethernet(...)` to set a hostname, supply a
+specific MAC address, or use a static IP instead of DHCP.
+
 ## Notes
 
 1. The component requires `esp32s3`, as declared in `CMakeLists.txt` and
@@ -90,6 +113,14 @@ auto temperatures_c = bsp.board_temperatures_c(errors);
 6. The current-sense conversion factor is still a placeholder in the
    implementation (`CURRENT_SENSE_MV_TO_A`), so current readings should be
    treated accordingly until that calibration is finalized.
+7. `init_ethernet(...)` installs the ESP-IDF `esp_eth` W5500 driver on the
+   shared SPI2 communications bus. Because the W5500 has no factory-burned MAC,
+   a locally-administered address is derived from the ESP32-S3 eFuse unless one
+   is supplied in `EthernetConfig`. Link and address availability are reported
+   asynchronously via `ethernet_link_up()`, `ethernet_has_ip()`, and
+   `ethernet_ip_address()`. The W5500 SPI clock and default hostname are
+   configurable through Kconfig (`PACE_RACER_ETH_SPI_CLOCK_MHZ`,
+   `PACE_RACER_ETH_HOSTNAME`).
 
 ## Examples
 
@@ -110,3 +141,11 @@ See the [example](./example) project for a more active motor-control demo that:
 3. Calls `init_motor(...)`
 4. Runs FOC control in a periodic timer
 5. Streams target, angle, and speed values as CSV over the serial console
+
+See the [ethernet](./ethernet) project for a focused Ethernet demo that:
+
+1. Gets the board singleton
+2. Calls `init_ethernet(...)` to bring up the W5500 interface
+3. Prints the interface MAC address
+4. Waits for link and a DHCP-assigned IP address
+5. Periodically reports link and address status

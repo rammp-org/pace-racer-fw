@@ -297,6 +297,49 @@ extern "C" void app_main(void) {
                        to_string(tracking_status)));
   }
 
+  {
+    std::error_code eth_ec;
+    Bsp::EthernetConfig eth_config; // DHCP by default
+    if (!bsp.init_ethernet(eth_config, eth_ec)) {
+      record("ethernet", "w5500-init", CheckStatus::FAIL,
+             fmt::format("Failed to initialize W5500 Ethernet: {}", eth_ec.message()));
+    } else {
+      Bsp::MacAddress mac{};
+      std::string mac_str = "unknown";
+      if (bsp.ethernet_mac_address(mac, eth_ec)) {
+        mac_str = fmt::format("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", mac[0], mac[1], mac[2],
+                              mac[3], mac[4], mac[5]);
+      }
+
+      // Wait briefly for the PHY to report link (i.e. a cable is connected).
+      const auto link_deadline = std::chrono::steady_clock::now() + 3s;
+      while (!bsp.ethernet_link_up() && std::chrono::steady_clock::now() < link_deadline) {
+        std::this_thread::sleep_for(50ms);
+      }
+
+      if (!bsp.ethernet_link_up()) {
+        // No link is expected when no cable is attached during bench bringup, so
+        // this is a warning rather than a hard failure.
+        record("ethernet", "w5500-init", CheckStatus::WARN,
+               fmt::format("W5500 driver initialized (MAC {}); no link detected (check cable)",
+                           mac_str));
+      } else {
+        // Link is up; wait briefly for a DHCP-assigned address.
+        const auto ip_deadline = std::chrono::steady_clock::now() + 5s;
+        while (!bsp.ethernet_has_ip() && std::chrono::steady_clock::now() < ip_deadline) {
+          std::this_thread::sleep_for(50ms);
+        }
+        if (bsp.ethernet_has_ip()) {
+          record("ethernet", "w5500-init", CheckStatus::PASS,
+                 fmt::format("Link up, MAC {}, IP {}", mac_str, bsp.ethernet_ip_address()));
+        } else {
+          record("ethernet", "w5500-init", CheckStatus::WARN,
+                 fmt::format("Link up, MAC {}, but no IP assigned (no DHCP server?)", mac_str));
+        }
+      }
+    }
+  }
+
   size_t pass_count = 0;
   size_t warn_count = 0;
   size_t fail_count = 0;
