@@ -66,8 +66,8 @@ bool PaceRacerBoard::init_ethernet(const PaceRacerBoard::EthernetConfig &config,
     logger_.error("{}: {}", message, esp_err_to_name(err));
     if (handlers_registered) {
       esp_event_handler_unregister(ETH_EVENT, ESP_EVENT_ANY_ID, &PaceRacerBoard::eth_event_handler);
-      esp_event_handler_unregister(IP_EVENT, IP_EVENT_ETH_GOT_IP,
-                                   &PaceRacerBoard::eth_got_ip_handler);
+      esp_event_handler_unregister(IP_EVENT, ESP_EVENT_ANY_ID,
+                                   &PaceRacerBoard::eth_ip_event_handler);
     }
     if (eth_glue_) {
       esp_eth_del_netif_glue(eth_glue_);
@@ -162,8 +162,8 @@ bool PaceRacerBoard::init_ethernet(const PaceRacerBoard::EthernetConfig &config,
   if (err != ESP_OK) {
     return fail("Failed to register Ethernet event handler", err, std::errc::io_error);
   }
-  err = esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP,
-                                   &PaceRacerBoard::eth_got_ip_handler, this);
+  err = esp_event_handler_register(IP_EVENT, ESP_EVENT_ANY_ID,
+                                   &PaceRacerBoard::eth_ip_event_handler, this);
   if (err != ESP_OK) {
     esp_event_handler_unregister(ETH_EVENT, ESP_EVENT_ANY_ID, &PaceRacerBoard::eth_event_handler);
     return fail("Failed to register Ethernet IP event handler", err, std::errc::io_error);
@@ -198,8 +198,19 @@ bool PaceRacerBoard::init_ethernet(const PaceRacerBoard::EthernetConfig &config,
     }
   }
 
+  // Store the application callbacks before starting the driver so that link and
+  // IP events raised by esp_eth_start() invoke them.
+  eth_on_link_up_ = config.on_link_up;
+  eth_on_link_down_ = config.on_link_down;
+  eth_on_got_ip_ = config.on_got_ip;
+  eth_on_ip_lost_ = config.on_ip_lost;
+
   err = esp_eth_start(eth_handle_);
   if (err != ESP_OK) {
+    eth_on_link_up_ = nullptr;
+    eth_on_link_down_ = nullptr;
+    eth_on_got_ip_ = nullptr;
+    eth_on_ip_lost_ = nullptr;
     return fail("Failed to start Ethernet", err, std::errc::io_error);
   }
 
@@ -221,12 +232,18 @@ void PaceRacerBoard::eth_event_handler(void *arg, esp_event_base_t /*event_base*
   case ETHERNET_EVENT_CONNECTED:
     self->eth_link_up_.store(true);
     self->logger_.info("Ethernet link up");
+    if (self->eth_on_link_up_) {
+      self->eth_on_link_up_();
+    }
     break;
   case ETHERNET_EVENT_DISCONNECTED:
     self->eth_link_up_.store(false);
     self->eth_has_ip_.store(false);
     self->eth_ip_addr_.store(0);
     self->logger_.warn("Ethernet link down");
+    if (self->eth_on_link_down_) {
+      self->eth_on_link_down_();
+    }
     break;
   case ETHERNET_EVENT_START:
     self->logger_.info("Ethernet started");
@@ -242,18 +259,39 @@ void PaceRacerBoard::eth_event_handler(void *arg, esp_event_base_t /*event_base*
   }
 }
 
-void PaceRacerBoard::eth_got_ip_handler(void *arg, esp_event_base_t /*event_base*/,
-                                        int32_t /*event_id*/, void *event_data) {
+void PaceRacerBoard::eth_ip_event_handler(void *arg, esp_event_base_t /*event_base*/,
+                                          int32_t event_id, void *event_data) {
   auto *self = static_cast<PaceRacerBoard *>(arg);
-  auto *event = static_cast<ip_event_got_ip_t *>(event_data);
-  if (!self || !event) {
+  if (!self) {
     return;
   }
-  self->eth_ip_addr_.store(event->ip_info.ip.addr);
-  self->eth_has_ip_.store(true);
-  char ip_str[16] = {0};
-  esp_ip4addr_ntoa(&event->ip_info.ip, ip_str, sizeof(ip_str));
-  self->logger_.info("Ethernet got IP address: {}", ip_str);
+  switch (event_id) {
+  case IP_EVENT_ETH_GOT_IP: {
+    auto *event = static_cast<ip_event_got_ip_t *>(event_data);
+    if (!event) {
+      return;
+    }
+    self->eth_ip_addr_.store(event->ip_info.ip.addr);
+    self->eth_has_ip_.store(true);
+    char ip_str[16] = {0};
+    esp_ip4addr_ntoa(&event->ip_info.ip, ip_str, sizeof(ip_str));
+    self->logger_.info("Ethernet got IP address: {}", ip_str);
+    if (self->eth_on_got_ip_) {
+      self->eth_on_got_ip_(std::string(ip_str));
+    }
+    break;
+  }
+  case IP_EVENT_ETH_LOST_IP:
+    self->eth_has_ip_.store(false);
+    self->eth_ip_addr_.store(0);
+    self->logger_.warn("Ethernet lost IP address");
+    if (self->eth_on_ip_lost_) {
+      self->eth_on_ip_lost_();
+    }
+    break;
+  default:
+    break;
+  }
 }
 
 bool PaceRacerBoard::ethernet_initialized() const { return eth_initialized_.load(); }

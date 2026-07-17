@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -307,6 +308,17 @@ public:
   /// Alias for a 6-byte Ethernet MAC address.
   using MacAddress = std::array<uint8_t, 6>;
 
+  /// Callback invoked when the Ethernet link state changes (comes up or goes
+  /// down). \note The callback runs in the ESP-IDF event-loop task context, so
+  ///       it must return quickly and must not block.
+  using EthernetLinkCallback = std::function<void()>;
+
+  /// Callback invoked when the interface obtains an IPv4 address. The
+  /// dotted-quad address string is passed as the argument. \note The callback
+  ///       runs in the ESP-IDF event-loop task context, so it must return
+  ///       quickly and must not block.
+  using EthernetIpCallback = std::function<void(const std::string &ip_address)>;
+
   /// Configuration for the on-board WIZnet W5500 Ethernet interface.
   /// \details The W5500 breakout is connected to the PACE RACER SPI expansion
   ///          header, which shares the high-speed communications SPI bus
@@ -335,6 +347,20 @@ public:
 
     /// Static IPv4 gateway (dotted-quad) used when `use_dhcp` is false.
     std::string gateway{};
+
+    /// Optional callback invoked when the Ethernet link comes up.
+    EthernetLinkCallback on_link_up{};
+
+    /// Optional callback invoked when the Ethernet link goes down.
+    EthernetLinkCallback on_link_down{};
+
+    /// Optional callback invoked when the interface obtains an IPv4 address.
+    /// The dotted-quad address string is passed as the argument.
+    EthernetIpCallback on_got_ip{};
+
+    /// Optional callback invoked when the interface loses its IPv4 address
+    /// (e.g. link down or DHCP lease loss; the address is reset to 0.0.0.0).
+    EthernetLinkCallback on_ip_lost{};
   };
 
   /// Initialize the on-board WIZnet W5500 Ethernet interface.
@@ -452,8 +478,8 @@ protected:
                                 void *event_data);
 
   /// ESP-IDF IP event handler (got / lost IPv4 address).
-  static void eth_got_ip_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
-                                 void *event_data);
+  static void eth_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                                   void *event_data);
 
   float breathe(float breathing_period, uint64_t start_us, bool restart = false);
 
@@ -478,6 +504,14 @@ protected:
   std::atomic<bool> eth_link_up_{false};
   std::atomic<bool> eth_has_ip_{false};
   std::atomic<uint32_t> eth_ip_addr_{0}; // IPv4 address in network byte order
+
+  // Application callbacks. These are assigned once during init_ethernet(),
+  // before the driver is started, and are only read afterwards from the event
+  // task, so they do not require additional synchronization.
+  EthernetLinkCallback eth_on_link_up_{};
+  EthernetLinkCallback eth_on_link_down_{};
+  EthernetIpCallback eth_on_got_ip_{};
+  EthernetLinkCallback eth_on_ip_lost_{};
 
   std::array<std::shared_ptr<TemperatureSensor>, NUM_TEMPERATURE_SENSORS> temperature_sensors_{};
 

@@ -98,6 +98,22 @@ auto ip = bsp.ethernet_ip_address();
 Pass an `EthernetConfig` to `init_ethernet(...)` to set a hostname, supply a
 specific MAC address, or use a static IP instead of DHCP.
 
+To react to link and address changes without polling, provide callbacks in the
+`EthernetConfig`:
+
+```cpp
+Bsp::EthernetConfig eth_config;
+eth_config.on_link_up = []() { /* link came up */ };
+eth_config.on_link_down = []() { /* link went down */ };
+eth_config.on_got_ip = [](const std::string &ip) { /* start network services */ };
+eth_config.on_ip_lost = []() { /* pause network services */ };
+bsp.init_ethernet(eth_config, ec);
+```
+
+The callbacks run in the ESP-IDF event-loop task context, so they must return
+quickly and must not block; use them to set a flag, notify a task, or post to a
+queue.
+
 ## Notes
 
 1. The component requires `esp32s3`, as declared in `CMakeLists.txt` and
@@ -118,7 +134,9 @@ specific MAC address, or use a static IP instead of DHCP.
    a locally-administered address is derived from the ESP32-S3 eFuse unless one
    is supplied in `EthernetConfig`. Link and address availability are reported
    asynchronously via `ethernet_link_up()`, `ethernet_has_ip()`, and
-   `ethernet_ip_address()`. The W5500 SPI clock and default hostname are
+   `ethernet_ip_address()`, or via the optional `on_link_up` / `on_link_down` /
+   `on_got_ip` / `on_ip_lost` callbacks in `EthernetConfig` so the application
+   can react without polling. The W5500 SPI clock and default hostname are
    configurable through Kconfig (`PACE_RACER_ETH_SPI_CLOCK_MHZ`,
    `PACE_RACER_ETH_HOSTNAME`).
 

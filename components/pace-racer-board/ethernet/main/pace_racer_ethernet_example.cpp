@@ -25,6 +25,23 @@ extern "C" void app_main(void) {
   // eth_config.netmask = "255.255.255.0";
   // eth_config.gateway = "192.168.1.1";
 
+  // Register application callbacks so other parts of the system can react to
+  // link and IP changes without polling. These run in the ESP-IDF event-loop
+  // task context, so keep them short and non-blocking (e.g. set a flag, notify
+  // a task, or post to a queue).
+  eth_config.on_link_up = [&logger]() { logger.info("[callback] Ethernet link is up"); };
+  eth_config.on_link_down = [&logger]() { logger.warn("[callback] Ethernet link is down"); };
+  eth_config.on_got_ip = [&logger](const std::string &ip) {
+    logger.info("[callback] Ethernet ready with IP address: {}", ip);
+    // This is where an application would start network services (e.g. bring up
+    // a socket, connect to a broker, start telemetry) now that the link is up.
+  };
+  eth_config.on_ip_lost = [&logger]() {
+    logger.warn("[callback] Ethernet lost its IP address");
+    // This is where an application would tear down / pause network services
+    // until connectivity is restored.
+  };
+
   std::error_code ec;
   if (!bsp.init_ethernet(eth_config, ec)) {
     logger.error("Failed to initialize Ethernet: {}", ec.message());
@@ -37,24 +54,12 @@ extern "C" void app_main(void) {
                 mac[3], mac[4], mac[5]);
   }
 
-  // Wait for the physical link to come up (i.e. a cable to be connected).
-  logger.info("Waiting for Ethernet link...");
-  while (!bsp.ethernet_link_up()) {
-    std::this_thread::sleep_for(200ms);
-  }
-  logger.info("Ethernet link is up");
-
-  // Wait for an IP address to be assigned (via DHCP, or immediately for static).
-  logger.info("Waiting for IP address...");
-  while (!bsp.ethernet_has_ip()) {
-    std::this_thread::sleep_for(200ms);
-  }
-  logger.info("Ethernet ready with IP address: {}", bsp.ethernet_ip_address());
-
-  // Periodically report link and address status.
+  // Nothing else to do here: the callbacks above drive the application's
+  // reaction to link and IP events, so there is no need to poll. The status
+  // accessors (ethernet_link_up(), ethernet_has_ip(), ethernet_ip_address())
+  // remain available if a snapshot is needed.
+  logger.info("Ethernet initialized; waiting for link/IP events via callbacks");
   while (true) {
-    logger.info("link_up={}, has_ip={}, ip={}", bsp.ethernet_link_up(), bsp.ethernet_has_ip(),
-                bsp.ethernet_ip_address());
     std::this_thread::sleep_for(5s);
   }
   //! [pace-racer-ethernet example]

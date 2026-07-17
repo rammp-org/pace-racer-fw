@@ -21,12 +21,19 @@ signals:
 ## What it does
 
 1. Gets the board singleton.
-2. Calls `init_ethernet(...)` to install and start the W5500 driver.
-3. Prints the assigned MAC address (derived from the ESP32-S3 eFuse if not
+2. Registers `on_link_up` / `on_link_down` / `on_got_ip` / `on_ip_lost`
+   callbacks so the application reacts to connectivity changes without polling.
+3. Calls `init_ethernet(...)` to install and start the W5500 driver.
+4. Prints the assigned MAC address (derived from the ESP32-S3 eFuse if not
    explicitly configured, since the W5500 has no factory-burned MAC).
-4. Waits for the physical link to come up (a cable to be connected).
-5. Waits for an IPv4 address (via DHCP by default).
-6. Periodically reports link and address status.
+5. Idles; the callbacks log link and IP changes as they happen.
+
+The callbacks run in the ESP-IDF event-loop task context, so they must return
+quickly and must not block. Use them to set a flag, notify a task, or post to a
+queue rather than doing heavy work inline.
+
+If you prefer to poll instead, the `ethernet_link_up()`, `ethernet_has_ip()`,
+and `ethernet_ip_address()` accessors remain available.
 
 ## Static IP
 
