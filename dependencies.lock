@@ -6,7 +6,7 @@ dependencies:
     - name: espp/base_peripheral
       version: '>=1.0'
     source:
-      path: C:\Users\waemf\data\pace-racer-fw\components\drv8353
+      path: components/drv8353
       type: local
     version: '*'
   espp/adc:
@@ -28,7 +28,7 @@ dependencies:
       type: service
     version: 1.1.0
   espp/base_component:
-    component_hash: 753dd0037b7dcccb859480dda36eaf7ca83a3f30c466da7c60b957ac10356c8e
+    component_hash: 044472522a07bb4f03f50885ad0f3684d26254ef7cb0ea73f21d11241cfe4fdd
     dependencies:
     - name: espp/logger
       registry_url: https://components.espressif.com
@@ -40,9 +40,9 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espp/base_peripheral:
-    component_hash: a6fc75fd03e90382a54cb87e45e720032fed440468111975fe596eb549f05eb9
+    component_hash: f1b5be84a6f1e3150d1b3d4a6ca5c81be0da06d3be391cc869b795ac4d5b7b92
     dependencies:
     - name: espp/base_component
       registry_url: https://components.espressif.com
@@ -54,7 +54,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espp/bldc_driver:
     component_hash: 4d1355652c8c50b6f41cba767fe8350567ce2edc752af543c8c7de341a1f5919
     dependencies:
@@ -96,7 +96,7 @@ dependencies:
       type: service
     version: 1.1.0
   espp/cli:
-    component_hash: 129d81da026d387a5bade014e44184549c9d1af553f9042d74aca68b8a60f79a
+    component_hash: 28e6b5cd1413606c4dac270c1723db8db8e4f2456b4ca9e2cab708a49928c5e5
     dependencies:
     - name: espp/logger
       registry_url: https://components.espressif.com
@@ -108,7 +108,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espp/filters:
     component_hash: a4998a9256ce289c1999ea086a4fa1c52bdce4ff292712757b9e6627a6b0fc55
     dependencies:
@@ -132,7 +132,7 @@ dependencies:
       type: service
     version: 1.1.0
   espp/format:
-    component_hash: 306438454fb4391109c50ddb43695b8405bbd339c6e219b83694d29e67e41a04
+    component_hash: 997bc557fbb73549999699407f27856ad3c3cd9207e2e5f4af523e8dfc9ae659
     dependencies:
     - name: idf
       require: private
@@ -140,7 +140,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espp/i2c:
     component_hash: 8321acc00b838b74b750d50f5a6b35eb617cb7caeb578b77539f4c7f25472e4a
     dependencies:
@@ -200,7 +200,7 @@ dependencies:
       type: service
     version: 1.1.0
   espp/logger:
-    component_hash: 3708fb36c62257ad7f81350e70e86c50ce9f42e40b9b707c6b7e21b55b73daa5
+    component_hash: 2a636c84d987a20b98cabbdcc65b92d9b6725d1c12cf2b3487d6ba60e452ef13
     dependencies:
     - name: espp/format
       registry_url: https://components.espressif.com
@@ -212,9 +212,9 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espp/math:
-    component_hash: 6ebde5c1ed8d311a9d4a1fa1c56f77dec02b7e4c958481106cb70ec8cba371f6
+    component_hash: 1b0697f00fd48606069cfe2923d9404509f7e73bb4901320a9704a358fe2750d
     dependencies:
     - name: espp/format
       registry_url: https://components.espressif.com
@@ -226,7 +226,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espp/mt6701:
     component_hash: d4344403f05a2902f0e6433459b4cbf273a85cd021ddd24c0e6d708ef891fb34
     dependencies:
@@ -246,7 +246,7 @@ dependencies:
       type: service
     version: 1.1.0
   espp/pid:
-    component_hash: 580c430918a15f582c839a3e41873a14a341a3f7cd4e17f7e8953b9fbd3e8359
+    component_hash: d69ed71dbe862d937933a1a2cb25e5b2c2c4a88524e03c05c77c840053d29c7b
     dependencies:
     - name: espp/base_component
       registry_url: https://components.espressif.com
@@ -258,7 +258,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espp/spi:
     component_hash: 0d14e18b8fadce14dfd5c901c58b4f7fcdfd4af017dd5b7ad0e436f5dafe5d72
     dependencies:
@@ -278,7 +278,7 @@ dependencies:
       type: service
     version: 1.1.0
   espp/task:
-    component_hash: 6ae353cd01bf89c9236a06f043ba40ee707ae71d09591c3dbbdf1bd1ae48f550
+    component_hash: f297d7227371c41d6a2188c7a90705829006154937192a41064b5103288308cd
     dependencies:
     - name: espp/base_component
       registry_url: https://components.espressif.com
@@ -290,9 +290,9 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espp/timer:
-    component_hash: 02c6ad69458874ff34c457fce62999a564230ad7cc47f7e882ca726a74573b99
+    component_hash: e5bdbd8870288a3c632be53240a7cd7fb32a48f49c56d6dcf6e46b75e6068a23
     dependencies:
     - name: espp/task
       registry_url: https://components.espressif.com
@@ -304,7 +304,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.1.1
+    version: 1.1.3
   espressif/esp-dsp:
     component_hash: ed9ac175b14e0414399a2b33c525579414b5bad19a2a67b12ea212def96f9a98
     dependencies:
@@ -318,7 +318,7 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.2
+    version: 6.0.0
   lm75adp:
     dependencies:
     - name: idf
@@ -326,7 +326,7 @@ dependencies:
     - name: espp/base_peripheral
       version: '>=1.0'
     source:
-      path: C:\Users\waemf\data\pace-racer-fw\components\lm75adp
+      path: components/lm75adp
       type: local
     version: '*'
 direct_dependencies:
@@ -348,6 +348,6 @@ direct_dependencies:
 - espp/timer
 - idf
 - lm75adp
-manifest_hash: f5a4d029071a5b5be6b36728bc38dbee48508a727d5ada38be5389115d9d7f92
+manifest_hash: f11a6d84d39f35d1aa1209a195fb6bfcf8ab84999924bd7a31c49248886b6d6a
 target: esp32s3
-version: 2.0.0
+version: 3.0.0

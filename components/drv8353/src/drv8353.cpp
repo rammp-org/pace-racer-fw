@@ -541,20 +541,14 @@ bool Drv8353::configure_gpios(std::error_code &ec) {
 
 bool Drv8353::transfer_frame(uint16_t tx_frame, uint16_t &rx_frame, std::error_code &ec) {
   if (config_.transfer) {
+    // The DRV8353 answers in the SAME 16-bit frame as the command: data bits
+    // shift out on SDO while the command shifts in. A second "dummy" frame is
+    // wrong — the chip decodes 0x0000 as an access to register 0 and reports
+    // FAULT_STATUS_1, so every read would return fault bits instead of the
+    // requested register.
     auto tx = to_bytes(tx_frame);
     std::array<uint8_t, 2> rx = {0, 0};
     if (!config_.transfer(std::span<const uint8_t>(tx.data(), tx.size()),
-                          std::span<uint8_t>(rx.data(), rx.size()))) {
-      ec = std::make_error_code(std::errc::io_error);
-      return false;
-    }
-
-    if (config_.inter_frame_delay.count() > 0) {
-      std::this_thread::sleep_for(config_.inter_frame_delay);
-    }
-
-    constexpr std::array<uint8_t, 2> dummy_tx = {0, 0};
-    if (!config_.transfer(std::span<const uint8_t>(dummy_tx.data(), dummy_tx.size()),
                           std::span<uint8_t>(rx.data(), rx.size()))) {
       ec = std::make_error_code(std::errc::io_error);
       return false;

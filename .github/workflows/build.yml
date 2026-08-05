@@ -45,6 +45,7 @@ jobs:
           - components/lm75adp/example
           - components/pace-racer-board/example
           - components/pace-racer-board/bringup
+          - components/pace-racer-board/halls-sensorless
 
     steps:
     - name: Checkout repo

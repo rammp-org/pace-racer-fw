@@ -34,3 +34,12 @@ build/
 sdkconfig
 sdkconfig.old
 managed_components/
+
+# clangd index and Python bytecode — regenerated, and the clangd cache is
+# hundreds of files per example app
+.cache/
+__pycache__/
+
+# Session recordings written by the halls-sensorless monitor (raw.log, data.csv,
+# report.md per run)
+logs/

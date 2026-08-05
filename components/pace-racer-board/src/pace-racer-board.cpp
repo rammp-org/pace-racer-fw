@@ -239,20 +239,30 @@ PaceRacerBoard::VelocityFilter &PaceRacerBoard::motor_velocity_filter() {
 
 PaceRacerBoard::AngleFilter &PaceRacerBoard::motor_angle_filter() { return motor_angle_filter_; }
 
+// Oversample to average out switching transients from asynchronous ADC reads.
+// Proper fix is MCPWM-triggered center-aligned sampling; this is the pragmatic alternative.
+static constexpr int kCurrentOversample = 8;
+
+static float read_avg(espp::OneshotAdc &adc, const espp::AdcConfig &ch) {
+  float sum = 0;
+  for (int i = 0; i < kCurrentOversample; i++) sum += adc.read_mv(ch).value();
+  return sum / kCurrentOversample;
+}
+
 float PaceRacerBoard::motor_current_a_amps() {
-  return adc_1.read_mv(current_sense_m_a_).value() * CURRENT_SENSE_MV_TO_A;
+  return (read_avg(adc_1, current_sense_m_a_) - motor_current_sense_vref()) * CURRENT_SENSE_MV_TO_A;
 }
 
 float PaceRacerBoard::motor_current_b_amps() {
-  return adc_1.read_mv(current_sense_m_b_).value() * CURRENT_SENSE_MV_TO_A;
+  return (read_avg(adc_1, current_sense_m_b_) - motor_current_sense_vref()) * CURRENT_SENSE_MV_TO_A;
 }
 
 float PaceRacerBoard::motor_current_c_amps() {
-  return adc_1.read_mv(current_sense_m_c_).value() * CURRENT_SENSE_MV_TO_A;
+  return (read_avg(adc_1, current_sense_m_c_) - motor_current_sense_vref()) * CURRENT_SENSE_MV_TO_A;
 }
 
 float PaceRacerBoard::motor_current_sense_vref() {
-  return adc_1.read_mv(current_sense_vref_).value();
+  return read_avg(adc_1, current_sense_vref_);
 }
 
 void PaceRacerBoard::always_init() {
