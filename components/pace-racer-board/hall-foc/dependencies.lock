@@ -1,0 +1,370 @@
+dependencies:
+  drv8353:
+    dependencies:
+    - name: idf
+      version: '>=5.0'
+    - name: espp/base_peripheral
+      version: '>=1.0'
+    source:
+      path: ../../drv8353
+      type: local
+    version: '*'
+  espp/adc:
+    component_hash: eb2f9cce7445f9bbd08cdd9b66670d72d3b33f950909ea3ec1ef11be097825f9
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/task
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/base_component:
+    component_hash: 2385ba0096f7a12affef3f4c934fabc9a433fd20b69c9b03cfd5ea50195633db
+    dependencies:
+    - name: espp/logger
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/base_peripheral:
+    component_hash: af57d6158b62ffd6cb1294aa5b2c88be714360b7a2b96a223c1377e45c629433
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/bldc_driver:
+    component_hash: 4467f288c9e4fa490bb81c5831f7961bc61246adf842f5ed31564968f84648ab
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/bldc_motor:
+    component_hash: 16b5028c4ca7694ebc763990df6a79b4f072119a7b8b74dd9cce4008e8b1d195
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/bldc_types
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/math
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/pid
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/task
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/bldc_types:
+    component_hash: 45bf687be8a7e32a1e8afcc03fddf793f89240c9caa1daa593a9865953b8d282
+    dependencies:
+    - name: espp/format
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.4
+  espp/cli:
+    component_hash: b4f0435e4f5783924b1d27515ba380da5e833ee0e101c68567815280a0068b5a
+    dependencies:
+    - name: espp/logger
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.4
+  espp/filters:
+    component_hash: 81dd6e58470de9322bfa0a45864e6cd961930c5e8369da9f026e2b7aa1acc882
+    dependencies:
+    - name: espp/format
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/math
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espressif/esp-dsp
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.6.4'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/format:
+    component_hash: 345ec7e663bb12db94448d9916e64daf7f562694bc9d66553d99c2ebafeca12d
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.4
+  espp/i2c:
+    component_hash: 5df7da1e3669211ef1508f39a7e7812c1cd9d36f029185370252a8de6b473d2d
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/cli
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/task
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/interrupt:
+    component_hash: ca42a683c564d2795eaf26bb648bb7e0e8f3c2c81ccded031d33edec4762a1e8
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/task
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/led:
+    component_hash: 8a4263bcf77e14cc6a77787fff0e494a7ffb74c749f7b19c2a6351ae618fa14d
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/task
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/logger:
+    component_hash: de1cfab29f985c5774c5da8f74b938fc016e71b21609a459bc757835c94e4709
+    dependencies:
+    - name: espp/format
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.4
+  espp/math:
+    component_hash: a9536ec19e4e591b83d16e683f2ae813bdd80f5414267052ec11ad63a8c2c399
+    dependencies:
+    - name: espp/format
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/mt6701:
+    component_hash: 9437464c793f798d21c0252d707406da1e6bfffdeceee75d9143288a96d8c7eb
+    dependencies:
+    - name: espp/base_peripheral
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/timer
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/pid:
+    component_hash: 040b3a72834a2f39923e8f079cf9b4e4e3238b08a73c5204f8b8b00d6830fa17
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/spi:
+    component_hash: 661ce4fd9866adfc4a129b6d3040b9be71b80303b26fbf126594647535bea924
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espp/task
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espp/task:
+    component_hash: fd9ca9ce46887136051c9234a2ded8c7f2ef95d0430226791dbfd0f33acf9a1a
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.4
+  espp/timer:
+    component_hash: ee0c6a71abfa16b5503f673d5ca386de8ff6faf1d6f3fb09de38057f9c2e3647
+    dependencies:
+    - name: espp/task
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.1.4
+  espressif/esp-dsp:
+    component_hash: ed9ac175b14e0414399a2b33c525579414b5bad19a2a67b12ea212def96f9a98
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.8.2
+  idf:
+    source:
+      type: idf
+    version: 6.0.0
+  lm75adp:
+    dependencies:
+    - name: idf
+      version: '>=5.0'
+    - name: espp/base_peripheral
+      version: '>=1.0'
+    source:
+      path: ../../lm75adp
+      type: local
+    version: '*'
+direct_dependencies:
+- drv8353
+- espp/adc
+- espp/base_component
+- espp/base_peripheral
+- espp/bldc_driver
+- espp/bldc_motor
+- espp/filters
+- espp/i2c
+- espp/interrupt
+- espp/led
+- espp/math
+- espp/mt6701
+- espp/pid
+- espp/spi
+- espp/timer
+- idf
+- lm75adp
+manifest_hash: 52c02bff6dad65d6ca694c0b0acba6bd7aa68364f1d5c5cb52ebd6993363b813
+target: esp32s3
+version: 3.0.0

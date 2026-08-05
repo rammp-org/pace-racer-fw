@@ -43,6 +43,13 @@
 //   r            dump DRV8353 registers
 //   f            outputs off
 //
+// Ethernet/FOC coexistence test (see net_load.hpp for the rationale):
+//   eth          bring up the W5500 + UDP sink. NOT done at boot, so an 's'
+//                taken before the first 'eth' is a true no-ethernet baseline
+//   etx <hz> <n> publish <n>-byte UDP datagrams at <hz> (a stand-in DDS writer);
+//                'etx 0' stops. Needs the host to have sent us a packet first
+//   nstat        print and reset link/IP and rx/tx packet+byte counters
+//
 // Streams CSV at 25 Hz:
 //   %time(s), dc0, u_v, ia, ib, ic, ialpha, ibeta, foc_khz, coalesce, isr_us
 
@@ -66,6 +73,8 @@
 #include "foc_observer.hpp"
 #include "foc_sampler.hpp"
 #include "hall_drive.hpp"
+#include "net_load.hpp"
+#include "rtps_telem.hpp"
 
 using namespace std::chrono_literals;
 
@@ -259,6 +268,10 @@ struct FocState {
     return s;
   }
 };
+
+// Latest board temperatures, refreshed at 2 Hz by the stream task. File-scope so
+// the RTPS telemetry publisher can emit the same values the CSV stream prints.
+std::array<float, 4> g_temps = {NAN, NAN, NAN, NAN};
 
 sensorless::FocSampler g_sampler;
 sensorless::FluxObserver g_observer;
@@ -868,7 +881,9 @@ extern "C" void app_main(void) {
   auto stream_fn = [&](std::mutex &m, std::condition_variable &cv) {
     static auto start = std::chrono::steady_clock::now();
     static int tick = 0;
-    static std::array<float, 4> temps = {NAN, NAN, NAN, NAN};
+    // File-scope so the RTPS publisher emits the same values as the CSV stream —
+    // the two transports must carry an identical sample to be comparable.
+    auto &temps = g_temps;
     ++tick;
 
     // Board temperatures every 5th tick (2 Hz — LM75 conversion is ~100 ms and
@@ -1249,6 +1264,142 @@ extern "C" void app_main(void) {
       g_obs_pll_ki.store(ki);
       g_reset_obs.store(true);
       fmt::print("#obs flux_gain={:.4g} pll_kp={:.4g} pll_ki={:.4g}\n", fg, kp, ki);
+    } else if (strncmp(line, "rtpstat", 7) == 0) {
+      const uint32_t n = rtpstelem::g_pub_us_n.load();
+      const uint32_t umin = rtpstelem::g_pub_us_min.load();
+      fmt::print("#rtpstat up={:d} hz={} w={} r={} pub_ok={} pub_fail={} overrun={} "
+                 "pub_us={}/{}/{} rx={}smp/{}B parts={} eps={}\n",
+                 rtpstelem::g_started.load() ? 1 : 0, rtpstelem::g_rate_hz.load(),
+                 rtpstelem::g_num_writers.load(), rtpstelem::g_num_readers.load(),
+                 rtpstelem::g_pub_ok.load(), rtpstelem::g_pub_fail.load(),
+                 rtpstelem::g_pub_overrun.load(), n ? umin : 0,
+                 n ? (uint32_t)(rtpstelem::g_pub_us_sum.load() / n) : 0,
+                 rtpstelem::g_pub_us_max.load(), rtpstelem::g_rx_samples.load(),
+                 rtpstelem::g_rx_bytes.load(), rtpstelem::g_participants.load(),
+                 rtpstelem::g_endpoints.load());
+      rtpstelem::reset_counters();
+    } else if (strncmp(line, "rtpshz", 6) == 0) {
+      // Sweep the publish rate to find where RTPS stops keeping up. 10 Hz is the
+      // current CSV stream rate — the level this has to match.
+      int hz = 10;
+      sscanf(line, "rtpshz %d", &hz);
+      if (hz < 0) hz = 0;
+      if (hz > 2000) hz = 2000;
+      rtpstelem::g_rate_hz.store((uint32_t)hz);
+      fmt::print("#rtpshz {}\n", hz);
+    } else if (strncmp(line, "rtps", 4) == 0) {
+      if (!bsp.ethernet_has_ip()) {
+        fmt::print("! rtps needs ethernet — run 'eth' first\n");
+      } else {
+        // Same values the CSV stream prints, so the two transports carry an
+        // identical sample and can be compared like for like.
+        auto sample_fn = []() {
+          rtpstelem::Sample s;
+          s.seconds = (float)esp_timer_get_time() / 1e6f;
+          auto sn = g_foc.read();
+          float aerr = sn.th_est_deg - sn.th_drive_deg;
+          aerr -= 360.0f * floorf(aerr / 360.0f + 0.5f);
+          s.state = (uint8_t)sn.state;
+          s.id = sn.id;
+          s.iq = sn.iq;
+          s.iqref = sn.iqref;
+          s.vd = sn.vd;
+          s.vq = sn.vq;
+          s.aerr = aerr;
+          s.rpm_drive = sn.rpm_drive;
+          s.rpm_est = sn.rpm_est;
+          s.rpm_hall = g_hall_drive.rpm_filtered();
+          s.flux = sn.flux_mag;
+          for (int i = 0; i < 4; i++) s.temps[i] = g_temps[i];
+          return s;
+        };
+        // rtps [writers] [readers] — extra endpoints measure how per-endpoint
+        // cost scales. Readers subscribe to the board's own multicast topics.
+        int nw = 1, nr = 0;
+        sscanf(line, "rtps %d %d", &nw, &nr);
+        if (rtpstelem::start(bsp.ethernet_ip_address(), sample_fn, logger, (uint32_t)nw,
+                             (uint32_t)nr)) {
+          fmt::print("#rtps up ip={} writers={} readers={} hz={}\n", bsp.ethernet_ip_address(),
+                     rtpstelem::g_num_writers.load(), rtpstelem::g_num_readers.load(),
+                     rtpstelem::g_rate_hz.load());
+        } else {
+          fmt::print("! rtps start failed\n");
+        }
+      }
+    } else if (strncmp(line, "eth", 3) == 0) {
+      // Bring up the W5500 and start the UDP sink. Deliberately not done at boot
+      // so that a run before the first 'eth' is a true no-ethernet baseline.
+      if (netload::start(bsp, logger)) {
+        fmt::print("#eth up ip={} — 's' now measures the loop WITH ethernet installed\n",
+                   bsp.ethernet_ip_address());
+      } else {
+        fmt::print("! eth init failed\n");
+      }
+    } else if (strncmp(line, "etx", 3) == 0) {
+      // etx <hz> <bytes> — publish UDP datagrams at a fixed rate, standing in for
+      // a DDS writer streaming telemetry. 'etx 0' stops. 'etx max <bytes>' sends
+      // flat out to find the transmit ceiling rather than hold a set rate.
+      int blen = 256;
+      if (strncmp(line, "etx max", 7) == 0) {
+        // 'etx max <secs> <bytes>' — flat out for a BOUNDED time, then the TX
+        // task stops itself and prints the achieved rate. It must be bounded:
+        // while flooding it starves the console that would otherwise stop it.
+        int secs = 5;
+        sscanf(line, "etx max %d %d", &secs, &blen);
+        if (secs < 1) secs = 1;
+        if (secs > 15) secs = 15;
+        if (blen < 1) blen = 1;
+        if (blen > 1400) blen = 1400;
+        netload::g_tx_len.store((uint32_t)blen);
+        netload::g_burst_secs.store((uint32_t)secs);
+        fmt::print("#etx burst {}s len={}{}\n", secs, blen,
+                   netload::g_have_peer.load() ? "" : " — no peer yet, send us a packet first");
+      } else {
+        int h = 0;
+        sscanf(line, "etx %d %d", &h, &blen);
+        if (blen < 1) blen = 1;
+        if (blen > 1400) blen = 1400;
+        netload::g_tx_len.store((uint32_t)blen);
+        netload::g_tx_hz.store((uint32_t)(h < 0 ? 0 : h));
+        fmt::print("#etx hz={} len={} ({} kB/s nominal){}\n", h, blen, h * blen / 1000,
+                   netload::g_have_peer.load() ? "" : " — no peer yet, send us a packet first");
+      }
+    } else if (strncmp(line, "usbtx", 5) == 0) {
+      // usbtx <secs> <bytes> — flood the USB console to measure what the existing
+      // telemetry transport can actually carry, as the comparison point for the
+      // ethernet ceiling. Writes block once the host stops draining, so this
+      // measures the end-to-end path, not just how fast we can call fwrite().
+      int secs = 5, blen = 64;
+      sscanf(line, "usbtx %d %d", &secs, &blen);
+      if (blen < 16) blen = 16;
+      if (blen > 512) blen = 512;
+      if (secs < 1) secs = 1;
+      if (secs > 20) secs = 20;
+      static char pad[513];
+      memset(pad, '.', sizeof(pad));
+      pad[blen - 1] = '\n';
+      pad[blen] = '\0';
+      fmt::print("#usbtx begin secs={} len={}\n", secs, blen);
+      fflush(stdout);
+      const int64_t t0 = esp_timer_get_time();
+      const int64_t tend = t0 + (int64_t)secs * 1000000;
+      uint32_t nlines = 0;
+      while (esp_timer_get_time() < tend) {
+        fwrite(pad, 1, blen, stdout);
+        nlines++;
+      }
+      fflush(stdout);
+      const double dt = (double)(esp_timer_get_time() - t0) / 1e6;
+      fmt::print("\n#usbtx done lines={} bytes={} in {:.3f}s -> {:.0f} lines/s {:.1f} kB/s\n",
+                 nlines, (uint64_t)nlines * (uint64_t)blen, dt, nlines / dt,
+                 (double)nlines * blen / 1024.0 / dt);
+    } else if (strncmp(line, "nstat", 5) == 0) {
+      fmt::print("#nstat link={:d} ip={} rx={}pkt/{}B tx={}pkt/{}B txerr={}\n",
+                 bsp.ethernet_link_up() ? 1 : 0, bsp.ethernet_ip_address(),
+                 netload::g_rx_pkts.load(), netload::g_rx_bytes.load(),
+                 netload::g_tx_pkts.load(), netload::g_tx_bytes.load(),
+                 netload::g_tx_errs.load());
+      netload::reset_counters();
     } else if (sscanf(line, "e %d", &x) == 1) {
       uncoast();
       g_sampler.disable();
