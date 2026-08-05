@@ -29,7 +29,9 @@ This firmware provides the following functionality:
 - Field-oriented control (FOC) for BLDC motors, allowing for efficient and precise
   control of motor speed and torque.
 - I2C Board temperature sensor (x4) reading and reporting.
-- Ethernet communication for receiving commands and sending telemetry data.
+- Ethernet communication (WIZnet W5500 breakout on the SPI expansion header,
+  sharing the SPI2 bus with the motor gate driver) for receiving commands and
+  sending telemetry data.
 - SPI driver for controlling the motor driver IC
 - High-resolution low-side per-phase current sensing for accurate current
   control and monitoring.

@@ -13,7 +13,9 @@ The bringup sequence:
 4. Probes and reads the four on-board LM75 temperature sensors
 5. Initializes the motor subsystem without enabling motor motion
 6. Reads DRV8353 fault / VGS status and MT6701 encoder state
-7. Prints a human-readable summary plus a CSV block containing all checks
+7. Initializes the WIZnet W5500 Ethernet interface and reports its MAC, link,
+   and (if a cable and DHCP server are present) IP address
+8. Prints a human-readable summary plus a CSV block containing all checks
 
 ## How to use bringup
 
@@ -25,6 +27,8 @@ This bringup app expects:
 2. A compatible external MT6701 encoder connected to the board's encoder SPI
    interface
 3. Optional motor power if you want the DRV8353 UVLO / GDUV checks to clear
+4. An optional Ethernet cable on the W5500 breakout if you want the Ethernet
+   link / IP check to pass rather than warn
 
 ### Build and Flash
 

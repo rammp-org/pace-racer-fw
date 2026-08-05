@@ -46,6 +46,7 @@ jobs:
           - components/pace-racer-board/example
           - components/pace-racer-board/bringup
           - components/pace-racer-board/halls-sensorless
+          - components/pace-racer-board/ethernet
 
     steps:
     - name: Checkout repo

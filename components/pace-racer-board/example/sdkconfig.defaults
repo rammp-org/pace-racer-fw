@@ -18,6 +18,10 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 # Set esp-timer task stack size to 6KB
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=6144
 
+# Ethernet (WIZnet W5500 on the SPI expansion header)
+#
+CONFIG_ETH_ENABLED=y
+
 # set the functions into IRAM
 CONFIG_SPI_MASTER_IN_IRAM=y
 CONFIG_MCPWM_ISR_IRAM_SAFE=y
