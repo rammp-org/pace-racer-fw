@@ -21,7 +21,9 @@ dependencies:
     version: '>=5.0'
   espp/adc: '>=1.0'
   espp/base_component: '>=1.0'
-  espp/bldc_driver: '>=1.0'
+  # 1.1.8 is the first release carrying BldcDriver::Config::intr_priority
+  # (esp-cpp/espp#695), which DriverConfig::intr_priority forwards to.
+  espp/bldc_driver: '>=1.1.8'
   espp/bldc_motor: '>=1.0'
   drv8353:
     path: ../drv8353

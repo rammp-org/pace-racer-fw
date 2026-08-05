@@ -206,6 +206,10 @@ bool PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_c
 
   motor_driver_config_.power_supply_voltage = driver_config.power_supply_voltage;
   motor_driver_config_.limit_voltage = driver_config.limit_voltage;
+  // The MCPWM timer is created inside BldcDriver, so its interrupt priority can
+  // only be set here — an application that samples from that timer's callback
+  // has no other way to reach it.
+  motor_driver_config_.intr_priority = driver_config.intr_priority;
   motor_driver_ = std::make_shared<BldcDriver>(motor_driver_config_);
 
   auto configured_motor = motor_config;
