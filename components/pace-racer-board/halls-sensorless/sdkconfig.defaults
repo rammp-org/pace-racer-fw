@@ -11,6 +11,12 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=6144
 
+# Ethernet (WIZnet W5500 on the SPI expansion header), brought up at runtime by
+# the 'eth' console command. The BSP drives it through espp::Ethernet, whose
+# W5500 support is compiled in only when this option is set.
+CONFIG_ETH_ENABLED=y
+CONFIG_ESPP_ETHERNET_W5500=y
+
 CONFIG_SPI_MASTER_IN_IRAM=y
 CONFIG_MCPWM_CTRL_FUNC_IN_IRAM=y
 

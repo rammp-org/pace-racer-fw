@@ -1342,23 +1342,25 @@ extern "C" void app_main(void) {
       const uint32_t n = rtpstelem::g_pub_us_n.load();
       const uint32_t umin = rtpstelem::g_pub_us_min.load();
       fmt::print("#rtpstat up={:d} hz={} w={} r={} pub_ok={} pub_fail={} overrun={} "
-                 "pub_us={}/{}/{} rx={}smp/{}B parts={} eps={}\n",
+                 "pub_us={}/{}/{} rx={}smp/{}B wmatch={} rmatch={}\n",
                  rtpstelem::g_started.load() ? 1 : 0, rtpstelem::g_rate_hz.load(),
                  rtpstelem::g_num_writers.load(), rtpstelem::g_num_readers.load(),
                  rtpstelem::g_pub_ok.load(), rtpstelem::g_pub_fail.load(),
                  rtpstelem::g_pub_overrun.load(), n ? umin : 0,
                  n ? (uint32_t)(rtpstelem::g_pub_us_sum.load() / n) : 0,
                  rtpstelem::g_pub_us_max.load(), rtpstelem::g_rx_samples.load(),
-                 rtpstelem::g_rx_bytes.load(), rtpstelem::g_participants.load(),
-                 rtpstelem::g_endpoints.load());
+                 rtpstelem::g_rx_bytes.load(), rtpstelem::g_pub_matched.load(),
+                 rtpstelem::g_sub_matched.load());
       rtpstelem::reset_counters();
     } else if (strncmp(line, "rtpshz", 6) == 0) {
       // Sweep the publish rate to find where RTPS stops keeping up. 10 Hz is the
       // current CSV stream rate — the level this has to match.
       int hz = 10;
       sscanf(line, "rtpshz %d", &hz);
-      if (hz < 0) hz = 0;
-      if (hz > 2000) hz = 2000;
+      if (hz < 0)
+        hz = 0;
+      if (hz > 2000)
+        hz = 2000;
       rtpstelem::g_rate_hz.store((uint32_t)hz);
       fmt::print("#rtpshz {}\n", hz);
     } else if (strncmp(line, "rtps", 4) == 0) {
@@ -1384,11 +1386,14 @@ extern "C" void app_main(void) {
           s.rpm_est = sn.rpm_est;
           s.rpm_hall = g_hall_drive.rpm_filtered();
           s.flux = sn.flux_mag;
-          for (int i = 0; i < 4; i++) s.temps[i] = g_temps[i];
+          for (int i = 0; i < 4; i++)
+            s.temps[i] = g_temps[i];
           return s;
         };
         // rtps [writers] [readers] — extra endpoints measure how per-endpoint
-        // cost scales. Readers subscribe to the board's own multicast topics.
+        // cost scales. NOTE (espp v1.2.0): user data is unicast to matched
+        // remote readers, so local readers no longer see the board's own
+        // publications — the rx counters need an external writer to move.
         int nw = 1, nr = 0;
         sscanf(line, "rtps %d %d", &nw, &nr);
         if (rtpstelem::start(bsp.ethernet_ip_address(), sample_fn, logger, (uint32_t)nw,
@@ -1420,10 +1425,14 @@ extern "C" void app_main(void) {
         // while flooding it starves the console that would otherwise stop it.
         int secs = 5;
         sscanf(line, "etx max %d %d", &secs, &blen);
-        if (secs < 1) secs = 1;
-        if (secs > 15) secs = 15;
-        if (blen < 1) blen = 1;
-        if (blen > 1400) blen = 1400;
+        if (secs < 1)
+          secs = 1;
+        if (secs > 15)
+          secs = 15;
+        if (blen < 1)
+          blen = 1;
+        if (blen > 1400)
+          blen = 1400;
         netload::g_tx_len.store((uint32_t)blen);
         netload::g_burst_secs.store((uint32_t)secs);
         fmt::print("#etx burst {}s len={}{}\n", secs, blen,
@@ -1431,8 +1440,10 @@ extern "C" void app_main(void) {
       } else {
         int h = 0;
         sscanf(line, "etx %d %d", &h, &blen);
-        if (blen < 1) blen = 1;
-        if (blen > 1400) blen = 1400;
+        if (blen < 1)
+          blen = 1;
+        if (blen > 1400)
+          blen = 1400;
         netload::g_tx_len.store((uint32_t)blen);
         netload::g_tx_hz.store((uint32_t)(h < 0 ? 0 : h));
         fmt::print("#etx hz={} len={} ({} kB/s nominal){}\n", h, blen, h * blen / 1000,
@@ -1445,10 +1456,14 @@ extern "C" void app_main(void) {
       // measures the end-to-end path, not just how fast we can call fwrite().
       int secs = 5, blen = 64;
       sscanf(line, "usbtx %d %d", &secs, &blen);
-      if (blen < 16) blen = 16;
-      if (blen > 512) blen = 512;
-      if (secs < 1) secs = 1;
-      if (secs > 20) secs = 20;
+      if (blen < 16)
+        blen = 16;
+      if (blen > 512)
+        blen = 512;
+      if (secs < 1)
+        secs = 1;
+      if (secs > 20)
+        secs = 20;
       static char pad[513];
       memset(pad, '.', sizeof(pad));
       pad[blen - 1] = '\n';
@@ -1470,9 +1485,8 @@ extern "C" void app_main(void) {
     } else if (strncmp(line, "nstat", 5) == 0) {
       fmt::print("#nstat link={:d} ip={} rx={}pkt/{}B tx={}pkt/{}B txerr={}\n",
                  bsp.ethernet_link_up() ? 1 : 0, bsp.ethernet_ip_address(),
-                 netload::g_rx_pkts.load(), netload::g_rx_bytes.load(),
-                 netload::g_tx_pkts.load(), netload::g_tx_bytes.load(),
-                 netload::g_tx_errs.load());
+                 netload::g_rx_pkts.load(), netload::g_rx_bytes.load(), netload::g_tx_pkts.load(),
+                 netload::g_tx_bytes.load(), netload::g_tx_errs.load());
       netload::reset_counters();
     } else if (sscanf(line, "e %d", &x) == 1) {
       uncoast();

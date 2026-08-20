@@ -49,26 +49,27 @@ def parse_data_payload(pkt):
 def decode(cdr):
     """Decode the telemetry sample.
 
-    Layout: 4-byte CDR encapsulation, float seconds, uint8 state, 3 bytes pad
-    (CDR aligns the next float to 4), then 11 floats and 4 temperatures.
+    Layout (espp v1.2.0 typed publisher, XCDR1, field order = the Sample struct
+    in main/rtps_telem.hpp): 4-byte CDR encapsulation, then 15 floats (seconds,
+    id, iq, iqref, vd, vq, aerr, rpm_drive, rpm_est, rpm_hall, flux, temps[4])
+    and a trailing uint8 state.
     """
-    if len(cdr) < 8:
+    if len(cdr) < 4 + 15 * 4 + 1:
         return None
     body = cdr[4:]
     try:
-        (seconds,) = struct.unpack_from("<f", body, 0)
-        state = body[4]
-        vals = struct.unpack_from("<15f", body, 8)
+        vals = struct.unpack_from("<15f", body, 0)
+        state = body[60]
         return {
-            "seconds": seconds,
+            "seconds": vals[0],
             "state": chr(state),
-            "id": vals[0], "iq": vals[1], "iqref": vals[2],
-            "vd": vals[3], "vq": vals[4], "aerr": vals[5],
-            "rpm_drive": vals[6], "rpm_est": vals[7], "rpm_hall": vals[8],
-            "flux": vals[9],
-            "temps": vals[10:14],
+            "id": vals[1], "iq": vals[2], "iqref": vals[3],
+            "vd": vals[4], "vq": vals[5], "aerr": vals[6],
+            "rpm_drive": vals[7], "rpm_est": vals[8], "rpm_hall": vals[9],
+            "flux": vals[10],
+            "temps": vals[11:15],
         }
-    except struct.error:
+    except (struct.error, IndexError):
         return None
 
 
