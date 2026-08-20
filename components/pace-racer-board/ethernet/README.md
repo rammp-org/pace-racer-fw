@@ -5,9 +5,10 @@ interface on the PACE RACER board and waiting for a network connection.
 
 The W5500 breakout is connected to the PACE RACER SPI expansion header, which
 shares the high-speed communications SPI bus (SPI2) with the DRV8353 gate
-driver. The board support package (`espp::PaceRacerBoard`) installs the
-ESP-IDF `esp_eth` W5500 driver on that shared bus, using the following board
-signals:
+driver. The board support package (`espp::PaceRacerBoard`) brings up the W5500
+on that shared bus via the
+[espp::Ethernet](https://github.com/esp-cpp/espp/tree/main/components/ethernet)
+component, using the following board signals:
 
 | Function      | ESP32-S3 GPIO |
 | ------------- | ------------- |

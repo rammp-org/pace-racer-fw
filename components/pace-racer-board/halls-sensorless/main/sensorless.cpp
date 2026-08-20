@@ -53,12 +53,14 @@
 // Streams CSV at 25 Hz:
 //   %time(s), dc0, u_v, ia, ib, ic, ialpha, ibeta, foc_khz, coalesce, isr_us
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <thread>
+#include <type_traits>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -125,7 +127,7 @@ static constexpr float kTempLimitC = 80.0f;
 // jumps ~5-10x mid-blend and the acceleration burst slipped the rotor.
 static constexpr float kHoEngageRpm = 60.0f;
 static constexpr float kHoRevertRpm = 45.0f;
-static constexpr float kHoDecayAps = 1.0f;    // iq decay rate during CONVERGE
+static constexpr float kHoDecayAps = 1.0f; // iq decay rate during CONVERGE
 // Absolute CONVERGE floor. A FRACTIONAL floor (25% of run amps) made
 // convergence impossible at high run amps on the dyno: the load angle only
 // reaches 90° when iq decays to ~the machine's actual drag current (sinγ =
@@ -133,11 +135,11 @@ static constexpr float kHoDecayAps = 1.0f;    // iq decay rate during CONVERGE
 // 2.5 A floor parked aerr at ~90° until the stuck-abort fired, forever. 0.5 A
 // matches the unloaded converge current observed on this rig.
 static constexpr float kIqFloorAmps = 0.5f;
-static constexpr float kConvergeDeg = 15.0f;  // frames agree inside this cone
-static constexpr uint32_t kEngageTicks = 1000;    // 50 ms sustained above engage rpm
-static constexpr uint32_t kConvergeTicks = 400;   // 20 ms inside the cone -> switch
+static constexpr float kConvergeDeg = 15.0f;       // frames agree inside this cone
+static constexpr uint32_t kEngageTicks = 1000;     // 50 ms sustained above engage rpm
+static constexpr uint32_t kConvergeTicks = 400;    // 20 ms inside the cone -> switch
 static constexpr uint32_t kConvStuckTicks = 10000; // 500 ms at floor unconverged -> abort
-static constexpr uint32_t kCooldownTicks = 10000; // 500 ms after revert/abort: no chatter
+static constexpr uint32_t kCooldownTicks = 10000;  // 500 ms after revert/abort: no chatter
 // Outer speed loop, active only in CLOSED: rpm setpoint (ramped at the run's
 // ramp rate) -> iq command, clamped to ±run amps (amps = torque ceiling).
 // Few-Hz loop around a 400 rad/s current loop — decades of separation.
@@ -158,7 +160,7 @@ static constexpr uint32_t kStopUnloadTicks = 2000; // ~100 ms at 20 kHz
 // leaves no null window. SVPWM centers duties at 0.5.
 static constexpr float kMinDuty = 0.03f;
 static constexpr float kMaxDuty = 0.97f;
-static constexpr float kCenterDuty = 0.5f; // SVPWM idle: all phases at 0.5 = no current
+static constexpr float kCenterDuty = 0.5f;   // SVPWM idle: all phases at 0.5 = no current
 static constexpr float kPwmPeriodUs = 50.0f; // espp BldcDriver is fixed at 20 kHz
 
 // dq current-loop voltage limit. The loop output is a voltage; this caps it so a
@@ -239,32 +241,46 @@ struct FocSnapshot {
 // seqlock: writer bumps the sequence odd before the store and even after; the
 // reader retries while it saw an odd or changed sequence. Single writer (FOC
 // task, CPU1), single reader (stream, CPU0); acquire/release order the payload.
+//
+// The payload itself is stored word-by-word through relaxed atomics, not as a
+// plain struct copy: a concurrent plain copy is a data race the compiler may
+// tear or reorder regardless of the fences (Boehm, "Can seqlocks get along
+// with programming language memory models?"). With atomic words a torn read
+// can still be OBSERVED mid-write, but it is then discarded by the sequence
+// check instead of being undefined behavior.
 struct FocState {
+  static_assert(std::is_trivially_copyable_v<FocSnapshot>);
+  static constexpr size_t kSnapWords = (sizeof(FocSnapshot) + 3) / 4;
+
   std::atomic<uint32_t> seq{0};
-  FocSnapshot snap{};
+  std::array<std::atomic<uint32_t>, kSnapWords> snap_words{};
 
   std::atomic<uint32_t> task_runs{0};     // FOC-task wakeups
   std::atomic<uint32_t> notifications{0}; // sum of ulTaskNotifyTake() returns
   std::atomic<uint32_t> compute_cyc_max{0};
 
   void publish(const FocSnapshot &s) {
+    uint32_t w[kSnapWords] = {};
+    std::memcpy(w, &s, sizeof(s));
     const uint32_t v = seq.load(std::memory_order_relaxed);
     seq.store(v + 1, std::memory_order_relaxed); // odd: write in progress
     std::atomic_thread_fence(std::memory_order_release);
-    snap = s;
-    std::atomic_thread_fence(std::memory_order_release);
+    for (size_t i = 0; i < kSnapWords; i++)
+      snap_words[i].store(w[i], std::memory_order_relaxed);
     seq.store(v + 2, std::memory_order_release); // even: stable
   }
   FocSnapshot read() const {
-    FocSnapshot s;
+    uint32_t w[kSnapWords];
     uint32_t before, after;
     do {
       before = seq.load(std::memory_order_acquire);
+      for (size_t i = 0; i < kSnapWords; i++)
+        w[i] = snap_words[i].load(std::memory_order_relaxed);
       std::atomic_thread_fence(std::memory_order_acquire);
-      s = snap;
-      std::atomic_thread_fence(std::memory_order_acquire);
-      after = seq.load(std::memory_order_acquire);
+      after = seq.load(std::memory_order_relaxed);
     } while ((before & 1u) || before != after);
+    FocSnapshot s;
+    std::memcpy(&s, w, sizeof(s));
     return s;
   }
 };
@@ -320,17 +336,21 @@ std::atomic<int> g_mode{HOLD};
 // Hall-drive sub-mode and parameters ('hrun', 'sine', 'hiq').
 enum HallSub { HALL_SPEED = 0, HALL_SINE = 1, HALL_TORQUE = 2 };
 std::atomic<int> g_hall_sub{HALL_SPEED};
-std::atomic<float> g_hall_amps{0.0f};     // iq clamp = torque ceiling in HALL
-std::atomic<float> g_hall_rpm{0.0f};      // hrun setpoint (mech rpm)
-std::atomic<float> g_hall_ramp{50.0f};    // setpoint ramp, rpm/s
-std::atomic<float> g_sine_amp{0.0f};      // sine sweep amplitude, mech rpm
-std::atomic<float> g_sine_period{8.0f};   // sine period, s
-std::atomic<float> g_hall_iq{0.0f};       // hiq torque command
+std::atomic<float> g_hall_amps{0.0f};   // iq clamp = torque ceiling in HALL
+std::atomic<float> g_hall_rpm{0.0f};    // hrun setpoint (mech rpm)
+std::atomic<float> g_hall_ramp{50.0f};  // setpoint ramp, rpm/s
+std::atomic<float> g_sine_amp{0.0f};    // sine sweep amplitude, mech rpm
+std::atomic<float> g_sine_period{8.0f}; // sine period, s
+std::atomic<float> g_hall_iq{0.0f};     // hiq torque command
 // hcal handshake: console arms N ticks PER DIRECTION, FOC task accumulates
 // while I/f drives (both directions required — the load-angle bias cancels in
 // the two-direction mean), stream task reports the table (FOC can't print).
 std::atomic<uint32_t> g_hcal_ticks{0};
 std::atomic<int> g_hcal_result{0}; // 0 idle, 1 ok -> report, -1 failed -> report
+// 'hofs' trim (deg), accumulated by the console and applied from the FOC task —
+// the hall table is read every control tick on CPU1, so the console must not
+// rewrite it directly.
+std::atomic<float> g_hofs_pending{0.0f};
 // Speed-loop error clamp in HALL mode: one garbage rpm sample (hall edge
 // bounce) must produce a bounded nudge, not an iq slam to the rail.
 static constexpr float kHallErrClampRpm = 30.0f;
@@ -346,10 +366,10 @@ std::atomic<float> g_max_target{kMaxTargetAmps};
 std::atomic<float> g_vlim{kVoltageLimit};
 std::atomic<float> g_temp_limit{kTempLimitC};
 // FOC task -> stream/console handshakes (SPI can't run on the control task).
-std::atomic<bool> g_request_coast{false}; // apply DRV8353 Hi-Z coast
-std::atomic<bool> g_failsafe_msg{false};  // observer fail-safe fired, report it
-std::atomic<bool> g_ceiling_msg{false};   // speed collapsed with iq pinned at the clamp
-std::atomic<bool> g_coasting{false};      // outputs are Hi-Z; drive cmds must clear
+std::atomic<bool> g_request_coast{false};     // apply DRV8353 Hi-Z coast
+std::atomic<bool> g_failsafe_msg{false};      // observer fail-safe fired, report it
+std::atomic<bool> g_ceiling_msg{false};       // speed collapsed with iq pinned at the clamp
+std::atomic<bool> g_coasting{false};          // outputs are Hi-Z; drive cmds must clear
 std::atomic<float> g_spin_amps{0.0f};         // Id during align, Iq during ramp
 std::atomic<float> g_spin_omega_target{0.0f}; // electrical rad/s
 std::atomic<float> g_spin_ramp_rate{0.0f};    // electrical rad/s^2
@@ -396,7 +416,8 @@ IRAM_ATTR void foc_task_fn(void *) {
 
     const uint32_t c0 = esp_cpu_get_cycle_count();
     float dt = have_last ? (float)(c0 - last_cyc) / 240.0e6f : 50.0e-6f;
-    if (dt <= 0.0f || dt > 0.01f) dt = 50.0e-6f; // guard the first tick / long gaps
+    if (dt <= 0.0f || dt > 0.01f)
+      dt = 50.0e-6f; // guard the first tick / long gaps
     last_cyc = c0;
     have_last = true;
 
@@ -407,7 +428,8 @@ IRAM_ATTR void foc_task_fn(void *) {
       pi_d.reset();
       pi_q.reset();
     }
-    if (g_reset_obs.exchange(false)) g_observer.reset();
+    if (g_reset_obs.exchange(false))
+      g_observer.reset();
 
     // Measured phase currents -> Clarke -> Park (rotor frame).
     const int px = g_sampler.phase_x();
@@ -443,19 +465,35 @@ IRAM_ATTR void foc_task_fn(void *) {
     static uint32_t flux_bad = 0, engage_ok = 0, conv_ok = 0, conv_stuck = 0, cooldown = 0;
     static float sp_theta = 0.0f, sp_omega = 0.0f, last_th = 0.0f;
     static uint32_t sp_align_left = 0, stop_ticks = 0;
+    static bool stop_requested = false;
     static float h_set = 0.0f, h_integ = 0.0f, h_time = 0.0f; // HALL-mode speed loop
     const int mode = g_mode.load(std::memory_order_relaxed);
+
+    // The duration budgets below (kEngageTicks, kStopUnloadTicks, ...) are
+    // written in 20 kHz control ticks. Decimation ('n <N>') divides the control
+    // rate, so scale them here — otherwise the documented 100 ms unload becomes
+    // N x 100 ms at 'n N'.
+    const uint32_t dec = std::max<uint32_t>(1, g_sampler.decimation());
+    auto in_ticks = [dec](uint32_t ticks_at_20khz) {
+      return std::max<uint32_t>(1, ticks_at_20khz / dec);
+    };
 
     // Hall commutation state advances every tick regardless of mode, so the
     // angle/speed are already live when HALL engages and `hs` always reports.
     if (g_hall_ready.load(std::memory_order_relaxed)) {
+      // Console 'hofs' trims land here: this task reads the hall table every
+      // tick, so the console queues the trim instead of rewriting the table
+      // concurrently.
+      const float hofs = g_hofs_pending.exchange(0.0f, std::memory_order_relaxed);
+      if (hofs != 0.0f)
+        g_hall_drive.add_offset_deg(hofs);
       g_hall_poller.poll(dt);
       g_hall_drive.update(g_hall_poller, dt);
     }
     if (mode == SPIN && prev_mode != SPIN) { // entering spin: reset the ramp
       sp_theta = 0.0f;
       sp_omega = 0.0f;
-      sp_align_left = g_spin_align_ticks.load(std::memory_order_relaxed);
+      sp_align_left = in_ticks(g_spin_align_ticks.load(std::memory_order_relaxed));
       iq_cmd = g_spin_amps.load(std::memory_order_relaxed); // full current from the start
       ho = IF_DRIVE;
       flux_bad = engage_ok = conv_ok = conv_stuck = cooldown = 0;
@@ -466,6 +504,7 @@ IRAM_ATTR void foc_task_fn(void *) {
     if (mode == STOPPING && prev_mode != STOPPING) {
       sp_theta = last_th; // frame continuity with whatever was being applied
       stop_ticks = 0;     // sp_omega carries over (0 if we were in HOLD)
+      stop_requested = false;
     }
     if (mode == HALL && prev_mode != HALL) {
       h_set = g_hall_drive.rpm_filtered(); // bumpless: setpoint = actual speed
@@ -494,7 +533,8 @@ IRAM_ATTR void foc_task_fn(void *) {
         const bool flux_ok = flux > kFluxFailLo * lam && flux < kFluxFailHi * lam;
         const float revert = g_ho_revert.load(std::memory_order_relaxed);
         idref = 0.0f;
-        if (cooldown) cooldown--;
+        if (cooldown)
+          cooldown--;
         static float spd_set = 0.0f, spd_integ = 0.0f; // speed loop state
         if (ho == CLOSED) { // observer drives; synthetic state shadows it for revert
           th = th_est;
@@ -504,16 +544,14 @@ IRAM_ATTR void foc_task_fn(void *) {
           // the run's ramp rate, PI to an iq command bounded by ±amps. Seeded
           // at the CONVERGE exit (setpoint = actual rpm, integrator = decayed
           // iq), so the transfer is bumpless.
-          const float rpm_t =
-              g_spin_omega_target.load(std::memory_order_relaxed) / kRpmToOmegaE;
-          const float step =
-              g_spin_ramp_rate.load(std::memory_order_relaxed) / kRpmToOmegaE * dt;
+          const float rpm_t = g_spin_omega_target.load(std::memory_order_relaxed) / kRpmToOmegaE;
+          const float step = g_spin_ramp_rate.load(std::memory_order_relaxed) / kRpmToOmegaE * dt;
           spd_set += std::clamp(rpm_t - spd_set, -step, step);
           const float serr = spd_set - rpm_est;
-          spd_integ = std::clamp(
-              spd_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt, -amps, amps);
-          iq_cmd = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + spd_integ,
-                              -amps, amps);
+          spd_integ = std::clamp(spd_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt,
+                                 -amps, amps);
+          iq_cmd =
+              std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + spd_integ, -amps, amps);
           iqref = iq_cmd;
           mstate = 'C';
           if (rpm_est < revert) {
@@ -530,7 +568,7 @@ IRAM_ATTR void foc_task_fn(void *) {
               ho = IF_DRIVE;
             } else {
               ho = IF_DRIVE; // continuity: sp_theta/sp_omega already track the observer
-              cooldown = kCooldownTicks;
+              cooldown = in_ticks(kCooldownTicks);
             }
           }
         } else { // synthetic I/f ramp keeps running under IF_DRIVE and CONVERGE
@@ -556,7 +594,7 @@ IRAM_ATTR void foc_task_fn(void *) {
             const bool ok =
                 !cooldown && flux_ok && rpm_est >= g_ho_engage.load(std::memory_order_relaxed);
             engage_ok = ok ? engage_ok + 1 : 0;
-            if (engage_ok >= kEngageTicks) {
+            if (engage_ok >= in_ticks(kEngageTicks)) {
               ho = CONVERGE;
               iq_cmd = amps;
               engage_ok = conv_ok = conv_stuck = 0;
@@ -570,17 +608,18 @@ IRAM_ATTR void foc_task_fn(void *) {
             e -= kTwoPi * floorf(e / kTwoPi + 0.5f);
             constexpr float kConvergeRad = kConvergeDeg * 3.14159265f / 180.0f;
             conv_ok = (e < kConvergeRad && e > -kConvergeRad) ? conv_ok + 1 : 0;
-            if (iq_cmd <= floor_a) conv_stuck++;
-            if (conv_ok >= kConvergeTicks) { // frames agree: switching is a near-no-op
+            if (iq_cmd <= floor_a)
+              conv_stuck++;
+            if (conv_ok >= in_ticks(kConvergeTicks)) { // frames agree: switching is a near-no-op
               ho = CLOSED;
               th = th_est;
               sp_theta = th_est;
               sp_omega = g_observer.omega();
-              spd_set = rpm_est;    // bumpless speed-loop entry: zero error,
-              spd_integ = iq_cmd;   // integrator holds the converged torque
-            } else if (rpm_est < revert || conv_stuck >= kConvStuckTicks) {
+              spd_set = rpm_est;  // bumpless speed-loop entry: zero error,
+              spd_integ = iq_cmd; // integrator holds the converged torque
+            } else if (rpm_est < revert || conv_stuck >= in_ticks(kConvStuckTicks)) {
               ho = IF_DRIVE; // didn't converge / estimate collapsed: back to stiff I/f
-              cooldown = kCooldownTicks;
+              cooldown = in_ticks(kCooldownTicks);
             }
           }
         }
@@ -589,7 +628,7 @@ IRAM_ATTR void foc_task_fn(void *) {
         // fight a bad angle with real current.
         if (ho != IF_DRIVE) {
           flux_bad = flux_ok ? 0 : flux_bad + 1;
-          if (flux_bad >= kFluxFailTicks) {
+          if (flux_bad >= in_ticks(kFluxFailTicks)) {
             // Same gentle exit as 'stop': closed-loop unload, then Hi-Z. A
             // hard cut here was itself a violent event (bemf brake bang that
             // could fire the hardware OCP and muddy the diagnosis).
@@ -630,12 +669,11 @@ IRAM_ATTR void foc_task_fn(void *) {
           h_set += std::clamp(target - h_set, -step, step);
           mstate = 'L';
         }
-        const float serr = std::clamp(h_set - g_hall_drive.rpm_filtered(),
-                                      -kHallErrClampRpm, kHallErrClampRpm);
-        h_integ = std::clamp(
-            h_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt, -amps, amps);
-        iqref = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + h_integ,
-                           -amps, amps);
+        const float serr =
+            std::clamp(h_set - g_hall_drive.rpm_filtered(), -kHallErrClampRpm, kHallErrClampRpm);
+        h_integ =
+            std::clamp(h_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt, -amps, amps);
+        iqref = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + h_integ, -amps, amps);
       }
       // Frame continuity for STOPPING (trip/'stop'/thermal all exit through it).
       sp_theta = th;
@@ -647,7 +685,10 @@ IRAM_ATTR void foc_task_fn(void *) {
       idref = 0.0f;
       iqref = 0.0f;
       mstate = 'X';
-      if (++stop_ticks == kStopUnloadTicks) g_request_coast.store(true);
+      if (!stop_requested && ++stop_ticks >= in_ticks(kStopUnloadTicks)) {
+        stop_requested = true;
+        g_request_coast.store(true);
+      }
     } else { // HOLD
       th = g_theta.load(std::memory_order_relaxed);
       th -= kTwoPi * floorf(th / kTwoPi);
@@ -665,7 +706,7 @@ IRAM_ATTR void foc_task_fn(void *) {
     if (cal_arm_ticks > 0 && mode == SPIN && mstate == 'S' && sp_align_left == 0 &&
         g_hall_ready.load(std::memory_order_relaxed)) {
       if (!cal_active) {
-        g_hall_drive.cal_arm(cal_arm_ticks);
+        g_hall_drive.cal_arm(in_ticks(cal_arm_ticks));
         cal_active = true;
       }
       // Accumulate ONLY while the rotor actually rotates (a hall transition
@@ -763,7 +804,8 @@ extern "C" void app_main(void) {
     std::error_code ec;
     // ESP32 reboot does NOT power-cycle the DRV8353 — clear any latched faults.
     bsp.gate_driver()->clear_faults(ec);
-    if (ec) logger.error("Failed to clear DRV8353 faults: {}", ec.message());
+    if (ec)
+      logger.error("Failed to clear DRV8353 faults: {}", ec.message());
   }
 
   // Hardware protection + known-good driver state. Force-write DRIVER_CONTROL
@@ -813,9 +855,9 @@ extern "C" void app_main(void) {
         dcv = gd->read_driver_control(rec);
         if (ok && !rec && !dcv.coast() && !dcv.brake() &&
             ocp.ocp_mode() == GD::OcpMode::LATCHED_SHUTDOWN &&
-            ocp.deglitch() == GD::OcpDeglitch::US_4 &&
-            ocp.vds_level() == GD::VdsLevel::V_0_06 && !csa.sense_overcurrent_disabled() &&
-            csa.sense_level() == GD::SenseLevel::V_0_25 && csa.gain() == GD::CsaGain::GAIN_20) {
+            ocp.deglitch() == GD::OcpDeglitch::US_4 && ocp.vds_level() == GD::VdsLevel::V_0_06 &&
+            !csa.sense_overcurrent_disabled() && csa.sense_level() == GD::SenseLevel::V_0_25 &&
+            csa.gain() == GD::CsaGain::GAIN_20) {
           fmt::print("#DRV8353 recovered — continuing boot\n");
           break;
         }
@@ -848,7 +890,8 @@ extern "C" void app_main(void) {
   }
   driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
 
-  if (!g_sampler.set_edge(true /*TEP*/, logger)) return;
+  if (!g_sampler.set_edge(true /*TEP*/, logger))
+    return;
   driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
   // Enabling the sampler starts the FOC task's control loop. With Id*=Iq*=0 the
   // loop commands 0 V -> centered duties -> no current, so this is safe.
@@ -898,12 +941,13 @@ extern "C" void app_main(void) {
       const float tl = g_temp_limit.load(std::memory_order_relaxed);
       for (size_t i = 0; i < temps.size(); i++) {
         temps[i] = terrs[i] ? NAN : tr[i];
-        if (!terrs[i] && tr[i] > tl) hot = (int)i;
+        if (!terrs[i] && tr[i] > tl)
+          hot = (int)i;
       }
       const int md = g_mode.load(std::memory_order_relaxed);
       const bool driving =
-          g_sampler.is_enabled() && (md == SPIN || md == HALL || g_id_target.load() != 0.0f ||
-                                     g_iq_target.load() != 0.0f);
+          g_sampler.is_enabled() &&
+          (md == SPIN || md == HALL || g_id_target.load() != 0.0f || g_iq_target.load() != 0.0f);
       if (hot >= 0 && driving) {
         g_id_target.store(0);
         g_iq_target.store(0);
@@ -921,27 +965,41 @@ extern "C" void app_main(void) {
       // (closed-loop unload -> Hi-Z coast). No brake, no disarm, no frame jump.
       // Everything needed to call glitch-vs-real: which limit fired, filtered
       // vs raw at the trip tick, and the filter counters since arm.
-      fmt::print("! soft trip >{:.0f}A on {}{} — unloading to 0 A, then Hi-Z coast "
-                 "(any drive command re-engages)\n"
-                 "!  filtered A={:+.1f} B={:+.1f} C={:+.1f}  raw {}={:+.1f}\n"
-                 "!  since arm: imp={}/{}/{} rej={}/{}/{} esc={}/{}/{} max|A|={:.0f}/{:.0f}/{:.0f}\n",
-                 g_sampler.trip_amps(), "ABC"[ti.trip_phase],
-                 ti.trip_phase == ti.recon ? " (recon)" : "",
-                 ti.amps[0], ti.amps[1], ti.amps[2], "ABC"[ti.raw_phase], ti.raw_amps, st.imp[0],
-                 st.imp[1], st.imp[2], st.rej[0], st.rej[1], st.rej[2], st.esc[0], st.esc[1],
-                 st.esc[2], st.max_amps[0], st.max_amps[1], st.max_amps[2]);
+      fmt::print(
+          "! soft trip >{:.0f}A on {}{} — unloading to 0 A, then Hi-Z coast "
+          "(any drive command re-engages)\n"
+          "!  filtered A={:+.1f} B={:+.1f} C={:+.1f}  raw {}={:+.1f}\n"
+          "!  since arm: imp={}/{}/{} rej={}/{}/{} esc={}/{}/{} max|A|={:.0f}/{:.0f}/{:.0f}\n",
+          g_sampler.trip_amps(), "ABC"[ti.trip_phase], ti.trip_phase == ti.recon ? " (recon)" : "",
+          ti.amps[0], ti.amps[1], ti.amps[2], "ABC"[ti.raw_phase], ti.raw_amps, st.imp[0],
+          st.imp[1], st.imp[2], st.rej[0], st.rej[1], st.rej[2], st.esc[0], st.esc[1], st.esc[2],
+          st.max_amps[0], st.max_amps[1], st.max_amps[2]);
       g_sampler.dump_summary();
     }
     if (g_sampler.take_overran()) {
-      fmt::print("! sampler ISR exceeded budget — disabled. 'e 1' to re-enable\n");
+      // Persistent lateness/overrun disabled the sampler, which stops the
+      // control task — the bridge would otherwise hold its last duties
+      // indefinitely. Force a defined state: zero targets, center the duties
+      // (no differential voltage), and request Hi-Z coast below.
+      g_mode.store(HOLD);
+      g_id_target.store(0);
+      g_iq_target.store(0);
+      g_reset_pi.store(true);
+      driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+      g_request_coast.store(true);
+      fmt::print("! sampler persistently late / over budget — disabled; duties centered, "
+                 "coasting. 'e 1' to re-arm once the cause is fixed\n");
     }
     // Coast handshake: the FOC task can't touch SPI, so it requests Hi-Z here
-    // (end of a gentle stop, or the observer fail-safe).
+    // (end of a gentle stop, the observer fail-safe, or the late/overrun path).
     if (g_request_coast.exchange(false)) {
       std::error_code cec;
       bsp.gate_driver()->set_coast(true, cec);
       if (cec) {
-        fmt::print("! coast SPI write failed: {} — outputs still live\n", cec.message());
+        // A transient SPI failure must not consume the safety request: requeue
+        // it so the next stream tick (100 ms) retries until the coast lands.
+        g_request_coast.store(true);
+        fmt::print("! coast SPI write failed: {} — outputs still live, retrying\n", cec.message());
       } else {
         g_coasting.store(true);
         g_mode.store(HOLD);
@@ -960,11 +1018,13 @@ extern "C" void app_main(void) {
     if (int hc = g_hcal_result.exchange(0)) {
       if (hc > 0) {
         fmt::print("#hcal OK — sector centers (deg):");
-        for (int sc = 0; sc < 6; sc++) fmt::print(" {}={:.1f}", sc, g_hall_drive.center_deg(sc));
+        for (int sc = 0; sc < 6; sc++)
+          fmt::print(" {}={:.1f}", sc, g_hall_drive.center_deg(sc));
         fmt::print("  (hall modes unlocked; trim with 'hofs <deg>')\n");
       } else {
         fmt::print("! hcal FAILED — not every sector seen enough (counts:");
-        for (int sc = 0; sc < 6; sc++) fmt::print(" {}", g_hall_drive.cal_count(sc));
+        for (int sc = 0; sc < 6; sc++)
+          fmt::print(" {}", g_hall_drive.cal_count(sc));
         fmt::print("). Longer/steadier I/f spin, check hall wiring ('hs')\n");
       }
     }
@@ -1036,10 +1096,12 @@ extern "C" void app_main(void) {
       continue;
     }
     if (ch != '\n' && ch != '\r') {
-      if (len < sizeof(line) - 1) line[len++] = (char)ch;
+      if (len < sizeof(line) - 1)
+        line[len++] = (char)ch;
       continue;
     }
-    if (len == 0) continue;
+    if (len == 0)
+      continue;
     line[len] = '\0';
     len = 0;
 
@@ -1048,7 +1110,8 @@ extern "C" void app_main(void) {
       if (g_coasting.exchange(false)) {
         std::error_code cec;
         bsp.gate_driver()->set_coast(false, cec);
-        if (cec) fmt::print("! uncoast SPI write failed: {}\n", cec.message());
+        if (cec)
+          fmt::print("! uncoast SPI write failed: {}\n", cec.message());
         g_reset_pi.store(true);
       }
     };
@@ -1060,11 +1123,12 @@ extern "C" void app_main(void) {
       float amps = kSpinAmps, rpm = kSpinRpm, ramp = kSpinRampS;
       sscanf(line, "run %f %f %f", &amps, &rpm, &ramp);
       amps = std::clamp(amps, 0.0f, g_max_target.load());
-      if (ramp < 0.1f) ramp = 0.1f;
+      if (ramp < 0.1f)
+        ramp = 0.1f;
       const float wt = rpm * kRpmToOmegaE;
       g_spin_amps.store(amps);
       g_spin_omega_target.store(wt);
-      g_spin_ramp_rate.store(std::fabs(wt) / ramp); // rate positive; wt carries direction
+      g_spin_ramp_rate.store(std::fabs(wt) / ramp);           // rate positive; wt carries direction
       g_spin_align_ticks.store((uint32_t)(kAlignMs * 20.0f)); // 50 us ticks
       if (!g_sampler.is_enabled()) {
         fmt::print("! sampler disabled — 'e 1' first\n");
@@ -1102,7 +1166,8 @@ extern "C" void app_main(void) {
         float amps = 3.0f, rpm = 30.0f, ramp = 3.0f;
         sscanf(line, "hrun %f %f %f", &amps, &rpm, &ramp);
         amps = std::clamp(amps, 0.0f, g_max_target.load());
-        if (ramp < 0.1f) ramp = 0.1f;
+        if (ramp < 0.1f)
+          ramp = 0.1f;
         g_hall_amps.store(amps);
         g_hall_rpm.store(std::clamp(rpm, -400.0f, 400.0f));
         g_hall_ramp.store(std::fabs(rpm) / ramp);
@@ -1150,8 +1215,8 @@ extern "C" void app_main(void) {
                  "run 3 -30 5); result prints when both fill ('hs' shows calleft)\n",
                  secs);
     } else if (sscanf(line, "hofs %f", &a) == 1) {
-      g_hall_drive.add_offset_deg(a);
-      fmt::print("#hall offset trimmed {:+.1f} deg\n", a);
+      g_hofs_pending.fetch_add(a, std::memory_order_relaxed);
+      fmt::print("#hall offset trim {:+.1f} deg queued (applied within one control tick)\n", a);
     } else if (strcmp(line, "hs") == 0) {
       // A=bit2 B=bit1 C=bit0. Stuck 0b000/0b111 = dead line or no power;
       // a healthy standstill shows one of the six legal states.
@@ -1165,22 +1230,30 @@ extern "C" void app_main(void) {
                  g_hall_poller.illegals(), g_hall_poller.bounces(),
                  g_hall_poller.interval_s() * 1e3f, g_hall_drive.cal_fwd_left(),
                  g_hall_drive.cal_rev_left());
-      for (int sc = 0; sc < 6; sc++) fmt::print(" {}={:.1f}", sc, g_hall_drive.center_deg(sc));
+      for (int sc = 0; sc < 6; sc++)
+        fmt::print(" {}={:.1f}", sc, g_hall_drive.center_deg(sc));
       fmt::print("\n");
     } else if (sscanf(line, "id %f", &a) == 1) {
-      if (!g_sampler.is_enabled())
+      // Reject outright with the sampler down: no control updates can run, so
+      // uncoasting and accepting the target would leave the bridge live with
+      // an unregulated command.
+      if (!g_sampler.is_enabled()) {
         fmt::print("! sampler disabled — 'e 1' to enable before commanding current\n");
-      uncoast();
-      g_mode.store(HOLD);
-      g_id_target.store(std::clamp(a, -g_max_target.load(), g_max_target.load()));
-      fmt::print("#id* {:.3f} A\n", g_id_target.load());
+      } else {
+        uncoast();
+        g_mode.store(HOLD);
+        g_id_target.store(std::clamp(a, -g_max_target.load(), g_max_target.load()));
+        fmt::print("#id* {:.3f} A\n", g_id_target.load());
+      }
     } else if (sscanf(line, "iq %f", &a) == 1) {
-      if (!g_sampler.is_enabled())
+      if (!g_sampler.is_enabled()) {
         fmt::print("! sampler disabled — 'e 1' to enable before commanding current\n");
-      uncoast();
-      g_mode.store(HOLD);
-      g_iq_target.store(std::clamp(a, -g_max_target.load(), g_max_target.load()));
-      fmt::print("#iq* {:.3f} A\n", g_iq_target.load());
+      } else {
+        uncoast();
+        g_mode.store(HOLD);
+        g_iq_target.store(std::clamp(a, -g_max_target.load(), g_max_target.load()));
+        fmt::print("#iq* {:.3f} A\n", g_iq_target.load());
+      }
     } else if (sscanf(line, "th %f", &a) == 1) {
       uncoast();
       g_mode.store(HOLD);
@@ -1208,8 +1281,9 @@ extern "C" void app_main(void) {
       b = std::clamp(b, a + 2.0f, kHardMaxTripAmps);
       g_max_target.store(a);
       g_sampler.set_trip_amps(b);
-      fmt::print("#lim target={:.1f}A trip={:.1f}A plausible={:.1f}A (hard ceilings {:.0f}/{:.0f})\n",
-                 a, b, b + 3.0f, kHardMaxTargetAmps, kHardMaxTripAmps);
+      fmt::print(
+          "#lim target={:.1f}A trip={:.1f}A plausible={:.1f}A (hard ceilings {:.0f}/{:.0f})\n", a,
+          b, b + 3.0f, kHardMaxTargetAmps, kHardMaxTripAmps);
     } else if (sscanf(line, "vl %f", &a) == 1) {
       // vl <volts> — current-loop voltage clamp. Under load vq ~ iq*R + w*lam:
       // at 20 A the iR term alone is ~6.5 V, so the 8 V boot default saturates
@@ -1229,7 +1303,6 @@ extern "C" void app_main(void) {
       // is past the ADC rail and the FETs' sane region — not offered. Rdson
       // rises ~1.5-2x with junction temp, so the amp threshold DERATES as the
       // FETs heat: late-run OCP trips at lower current are expected physics.
-      static constexpr const char *kVdsEstAmps[5] = {"17-22", "20-26", "23-30", "26-33", "29-37"};
       std::error_code vec;
       auto gd = bsp.gate_driver();
       gd->set_vds_level(static_cast<Bsp::GateDriver::VdsLevel>(x), vec);
@@ -1238,6 +1311,7 @@ extern "C" void app_main(void) {
         fmt::print("! vds write failed (ocp=0x{:04x}{}{})\n", ocp.raw, vec ? ", " : "",
                    vec ? vec.message() : "");
       } else {
+        static constexpr const char *kVdsEstAmps[5] = {"17-22", "20-26", "23-30", "26-33", "29-37"};
         fmt::print("#vds {:.2f}V (~{} A cold, derates hot)\n", 0.06f + 0.01f * (float)x,
                    kVdsEstAmps[x]);
       }
@@ -1440,16 +1514,23 @@ extern "C" void app_main(void) {
       g_id_target.store(0);
       g_iq_target.store(0);
       g_reset_pi.store(true);
-      g_sampler.zero_calibrate(logger);
+      if (!g_sampler.zero_calibrate(logger)) {
+        // The previous offsets were kept and everything was left disabled
+        // (outputs off, sampler down) — nothing resumes on a failed zero.
+        fmt::print("! zero calibration FAILED — previous offsets kept, outputs off, sampler "
+                   "disabled ('e 1' re-arms after the sense path is fixed)\n");
+      }
     } else if (line[0] == 'a') {
       const bool was_enabled = g_sampler.is_enabled();
       g_sampler.disable();
       std::this_thread::sleep_for(2ms);
       float amps[3];
       for (int p = 0; p < 3; p++)
-        amps[p] = (g_sampler.read_raw_async(p) - g_sampler.raw_zero(p)) * g_sampler.amps_per_count();
+        amps[p] =
+            (g_sampler.read_raw_async(p) - g_sampler.raw_zero(p)) * g_sampler.amps_per_count();
       g_sampler.prime();
-      if (was_enabled) g_sampler.enable();
+      if (was_enabled)
+        g_sampler.enable();
       fmt::print("#async ia={:.3f} ib={:.3f} ic={:.3f} A\n", amps[0], amps[1], amps[2]);
     } else if (line[0] == 's') {
       auto st = g_sampler.stats();

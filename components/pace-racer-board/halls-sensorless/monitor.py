@@ -38,10 +38,11 @@ import re
 import sys
 import time
 from collections import deque
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from telemetry import VBUS, Row, parse
 
 import serial
 from textual import work
@@ -60,8 +61,7 @@ for _i, _a in enumerate(sys.argv):
     if _a == "--torque-port" and _i + 1 < len(sys.argv):
         TORQUE_PORT = sys.argv[_i + 1]
 
-VBUS = 48.0  # must match kBusVoltage in sensorless.cpp
-NCOLS = 16  # keep in lockstep with the CSV header in sensorless.cpp
+# VBUS / NCOLS / Row / parse live in telemetry.py (stdlib-only, testable).
 HIST = 300  # fast plots: 10 Hz -> 30 s window
 TEMP_HIST = 1800  # temp plot: 3 min window
 DTDT_WINDOW_S = 10.0  # dT/dt measured across this span
@@ -75,52 +75,6 @@ STATS_POLL_S = 10.0  # periodic `s` so filter-health counters land in events.log
 DRIVING_MODES = {"S", "V", "C", "L", "W", "Q"}
 MODE_NAMES = {"H": "HOLD", "S": "I/f", "V": "CONVERGE", "C": "CLOSED", "X": "STOPPING",
               "L": "HALL-SPEED", "W": "HALL-SINE", "Q": "HALL-IQ"}
-
-
-@dataclass
-class Row:
-    t: float
-    mode: str
-    id_a: float
-    iq: float
-    iqref: float
-    vd: float
-    vq: float
-    aerr: float
-    rpm_drive: float
-    rpm_est: float
-    rpm_hall: float
-    flux: float
-    temps: tuple  # (t0, t1, t2, t3)
-
-    @property
-    def p_w(self) -> float:
-        return 1.5 * (self.vd * self.id_a + self.vq * self.iq)
-
-    @property
-    def ibus(self) -> float:
-        return self.p_w / VBUS
-
-    @property
-    def vmag(self) -> float:
-        return math.hypot(self.vd, self.vq)
-
-
-def parse(line: str) -> Optional[Row]:
-    s = line.strip()
-    if not s or s.startswith("%") or s.startswith("#") or s.startswith("!"):
-        return None
-    parts = s.split(",")
-    if len(parts) != NCOLS:
-        return None
-    mode = parts[1].strip()
-    if len(mode) != 1:
-        return None
-    try:
-        f = [float(p) for p in parts[:1] + parts[2:]]
-    except ValueError:
-        return None
-    return Row(f[0], mode, *f[1:11], tuple(f[11:15]))
 
 
 class TorqueSource:

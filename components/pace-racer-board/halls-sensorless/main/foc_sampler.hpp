@@ -65,16 +65,18 @@ namespace sensorless {
 
 using PwmComparators = std::array<mcpwm_cmpr_handle_t, 3>;
 
-mcpwm_timer_handle_t borrow_pwm_timer(espp::BldcDriver &driver);
-const PwmComparators &borrow_pwm_comparators(espp::BldcDriver &driver);
+mcpwm_timer_handle_t borrow_pwm_timer(const espp::BldcDriver &driver);
+const PwmComparators &borrow_pwm_comparators(const espp::BldcDriver &driver);
 
 template <auto Member> struct PwmTimerBorrower {
-  friend mcpwm_timer_handle_t borrow_pwm_timer(espp::BldcDriver &driver) { return driver.*Member; }
+  friend mcpwm_timer_handle_t borrow_pwm_timer(const espp::BldcDriver &driver) {
+    return driver.*Member;
+  }
 };
 template struct PwmTimerBorrower<&espp::BldcDriver::timer_>;
 
 template <auto Member> struct PwmComparatorBorrower {
-  friend const PwmComparators &borrow_pwm_comparators(espp::BldcDriver &driver) {
+  friend const PwmComparators &borrow_pwm_comparators(const espp::BldcDriver &driver) {
     return driver.*Member;
   }
 };
@@ -88,8 +90,8 @@ public:
     espp::PaceRacerBoard *bsp;
     std::shared_ptr<espp::BldcDriver> driver;
     std::array<adc_channel_t, 3> phase_channels;
-    float mv_to_a;      ///< amps per millivolt at the configured CSA gain
-    float trip_amps;    ///< software overcurrent trip (per phase)
+    float mv_to_a;                     ///< amps per millivolt at the configured CSA gain
+    float trip_amps;                   ///< software overcurrent trip (per phase)
     gpio_num_t scope_pin{GPIO_NUM_NC}; ///< toggled around the in-ISR conversions
   };
 
@@ -146,7 +148,8 @@ public:
         .disable_dac_output = false,
     };
     adc_oneshot_hal_init(&hal_, &hal_cfg);
-    adc_oneshot_hal_chan_cfg_t chan_cfg = {.atten = ADC_ATTEN_DB_6, .bitwidth = ADC_BITWIDTH_DEFAULT};
+    adc_oneshot_hal_chan_cfg_t chan_cfg = {.atten = ADC_ATTEN_DB_6,
+                                           .bitwidth = ADC_BITWIDTH_DEFAULT};
     for (auto ch : cfg_.phase_channels) {
       adc_oneshot_hal_channel_config(&hal_, &chan_cfg, ch);
     }
@@ -196,7 +199,8 @@ public:
 
   void enable() {
     have_last_entry_ = false; // the gap across a disable is meaningless
-    clear_filter_counters();  // trip reports read "since arm"
+    late_run_ = 0;
+    clear_filter_counters(); // trip reports read "since arm"
     enabled_.store(true, std::memory_order_release);
   }
   void disable() { enabled_.store(false, std::memory_order_release); }
@@ -209,11 +213,14 @@ public:
   /// the narrow-window highest-duty phase we would rather not chase.
   void select_lowest_two(float da, float db, float dc) {
     int hi = 0; // index of the largest duty -> the one to reconstruct
-    if (db > da) hi = 1;
-    if (dc > (hi == 0 ? da : db)) hi = 2;
+    if (db > da)
+      hi = 1;
+    if (dc > (hi == 0 ? da : db))
+      hi = 2;
     int x = (hi == 0) ? 1 : 0;
     int y = (hi == 2) ? 1 : 2;
-    if (x > y) std::swap(x, y);
+    if (x > y)
+      std::swap(x, y);
     phase_x_.store(x, std::memory_order_relaxed);
     phase_y_.store(y, std::memory_order_relaxed);
   }
@@ -228,14 +235,17 @@ public:
   void set_double_sample(bool on) { dbl_.store(on, std::memory_order_relaxed); }
   bool double_sample() const { return dbl_.load(std::memory_order_relaxed); }
   struct DblStats {
-    uint32_t pairs, dis;  // pairs taken, pairs disagreeing >3 A
-    uint32_t spike_agree; // both twins >12 A and agreeing: the pin really moved
+    uint32_t pairs, dis;                // pairs taken, pairs disagreeing >3 A
+    uint32_t spike_agree;               // both twins >12 A and agreeing: the pin really moved
     uint32_t spike_first, spike_second; // refuted spike by slot (mechanism clue)
     float max_delta_amps;
   };
   DblStats dbl_stats() const {
-    return {dbl_n_.load(),           dbl_dis_.load(),          dbl_spike_agree_.load(),
-            dbl_spike_first_.load(), dbl_spike_second_.load(),
+    return {dbl_n_.load(),
+            dbl_dis_.load(),
+            dbl_spike_agree_.load(),
+            dbl_spike_first_.load(),
+            dbl_spike_second_.load(),
             (float)dbl_max_delta_.load() * amps_per_count_};
   }
 
@@ -254,7 +264,7 @@ public:
   float amps_x() const { return (float)(raw_x() - raw_zero_[phase_x()]) * amps_per_count_; }
   float amps_y() const { return (float)(raw_y() - raw_zero_[phase_y()]) * amps_per_count_; }
 
-  bool take_tripped() { return tripped_.exchange(false); }   // stream: report it
+  bool take_tripped() { return tripped_.exchange(false); }     // stream: report it
   bool take_soft_trip() { return soft_trip_.exchange(false); } // FOC task: unload
   bool take_overran() { return overran_.exchange(false); }
 
@@ -311,16 +321,19 @@ public:
       float med[kWin][3];
       auto amps_at = [&](uint32_t k) { // k-th oldest sample -> (phase, amps)
         const auto &c = cap_[(head - n + k) % kCapN];
-        return std::pair<int, float>(
-            c.phase, (float)((int)c.raw - raw_zero_[c.phase]) * amps_per_count_);
+        return std::pair<int, float>(c.phase,
+                                     (float)((int)c.raw - raw_zero_[c.phase]) * amps_per_count_);
       };
       fmt::print("#trend n={} ({} samples/win, {:.2f} ms/sample) med amps per phase:\n"
-                 "#  ms_before_trip", n, wlen, ms_per);
+                 "#  ms_before_trip",
+                 n, wlen, ms_per);
       // Column header: only phases actually present (the measured pair).
       bool present[3] = {false, false, false};
-      for (uint32_t k = 0; k < n; k++) present[amps_at(k).first] = true;
+      for (uint32_t k = 0; k < n; k++)
+        present[amps_at(k).first] = true;
       for (int p = 0; p < 3; p++)
-        if (present[p]) fmt::print("  {}_med", "ABC"[p]);
+        if (present[p])
+          fmt::print("  {}_med", "ABC"[p]);
       fmt::print("\n");
       for (int w = 0; w < kWin; w++) {
         float buf[3][kCapN / (2 * kWin) + 2]; // per-phase slice of one window
@@ -328,7 +341,8 @@ public:
         const uint32_t k0 = (uint32_t)w * wlen, k1 = std::min(n, k0 + wlen);
         for (uint32_t k = k0; k < k1; k++) {
           auto [p, a] = amps_at(k);
-          if (cnt[p] < (int)(sizeof(buf[0]) / sizeof(float))) buf[p][cnt[p]++] = a;
+          if (cnt[p] < (int)(sizeof(buf[0]) / sizeof(float)))
+            buf[p][cnt[p]++] = a;
         }
         for (int p = 0; p < 3; p++) {
           if (cnt[p]) {
@@ -340,7 +354,8 @@ public:
         }
         fmt::print("#  {:6.1f}", -(float)(n - k0) * ms_per);
         for (int p = 0; p < 3; p++)
-          if (present[p]) fmt::print("  {:+6.2f}", med[w][p]);
+          if (present[p])
+            fmt::print("  {:+6.2f}", med[w][p]);
         fmt::print("\n");
       }
       int anom = 0;
@@ -348,7 +363,8 @@ public:
         auto [p, a] = amps_at(k);
         const float d = a - med[std::min<uint32_t>(k / wlen, kWin - 1)][p];
         if (d > kAnomAmps || d < -kAnomAmps) {
-          if (anom == 0) fmt::print("#anom |amps-med|>{:.0f}A: i,ph,amps,isr_us\n", kAnomAmps);
+          if (anom == 0)
+            fmt::print("#anom |amps-med|>{:.0f}A: i,ph,amps,isr_us\n", kAnomAmps);
           if (anom < kAnomMax) {
             const auto &c = cap_[(head - n + k) % kCapN];
             fmt::print("#  {},{},{:+.1f},{:.2f}\n", k, "ABC"[p], a, (float)c.cyc / 240.0f);
@@ -356,7 +372,8 @@ public:
           anom++;
         }
       }
-      if (anom > kAnomMax) fmt::print("#  (+{} more)\n", anom - kAnomMax);
+      if (anom > kAnomMax)
+        fmt::print("#  (+{} more)\n", anom - kAnomMax);
       fmt::print("#anom total={} ('c' before next arm for the full ring)\n", anom);
     }
     cap_head_.store(0, std::memory_order_relaxed);
@@ -443,17 +460,21 @@ public:
   /// a diagnostic (its shorted-input offset differs from the connected offset by
   /// ~0.5 A on phase C on this board). Prints a #zero line; returns false if any
   /// channel is noisy or railed. Suspends the ISR for the duration.
+  /// On failure NOTHING is committed or resumed: the previous offsets are kept
+  /// and both the driver outputs and the sampler are left disabled — a noisy or
+  /// railed measurement must never become the zero the trip and the loop run on.
   bool zero_calibrate(espp::Logger &logger) {
     const bool was_enabled = enabled_.exchange(false);
     cfg_.driver->disable();
     std::this_thread::sleep_for(5ms);
 
-    float cal_mean[3] = {}, cal_sdev[3] = {};
+    float cal_mean[3] = {};
     std::error_code ec;
     cfg_.bsp->gate_driver()->set_csa_calibration(true, true, true, ec);
     if (ec) {
       fmt::print("! CSA CAL mode failed ({}) — diagnostic skipped\n", ec.message());
     } else {
+      float cal_sdev[3] = {};
       std::this_thread::sleep_for(10ms);
       measure_raw(32, cal_mean, cal_sdev);
       cfg_.bsp->gate_driver()->set_csa_calibration(false, false, false, ec);
@@ -464,20 +485,35 @@ public:
     float mean[3] = {}, sdev[3] = {};
     measure_raw(64, mean, sdev);
 
+    // Validate into candidates first; commit only when every channel passes.
     bool ok = true;
+    int cand[3];
     float cal_delta[3], noise[3];
     for (int p = 0; p < 3; p++) {
-      raw_zero_[p] = (int)(mean[p] + 0.5f);
-      median_hist_[p][0] = median_hist_[p][1] = median_hist_[p][2] = raw_zero_[p];
-      reject_run_[p] = 0;
+      cand[p] = (int)(mean[p] + 0.5f);
       cal_delta[p] = (mean[p] - cal_mean[p]) * amps_per_count_;
       noise[p] = sdev[p] * amps_per_count_;
-      if (noise[p] > kMaxZeroNoiseAmps || mean[p] < 50.0f || mean[p] > 4045.0f) ok = false;
+      if (noise[p] > kMaxZeroNoiseAmps || mean[p] < 50.0f || mean[p] > 4045.0f)
+        ok = false;
     }
     fmt::print("#zero raw=[{},{},{}] cal_delta=[{:+.3f},{:+.3f},{:+.3f}]A "
                "noise=[{:.3f},{:.3f},{:.3f}]A {}\n",
-               raw_zero_[0], raw_zero_[1], raw_zero_[2], cal_delta[0], cal_delta[1], cal_delta[2],
-               noise[0], noise[1], noise[2], ok ? "OK" : "BAD");
+               cand[0], cand[1], cand[2], cal_delta[0], cal_delta[1], cal_delta[2], noise[0],
+               noise[1], noise[2], ok ? "OK" : "BAD");
+    (void)logger;
+
+    prime(); // the reads above went through the BSP driver
+    if (!ok) {
+      // Keep the previous offsets; leave the outputs and the sampler down. The
+      // caller decides how to report — nothing resumes on a failed zero.
+      return false;
+    }
+
+    for (int p = 0; p < 3; p++) {
+      raw_zero_[p] = cand[p];
+      median_hist_[p][0] = median_hist_[p][1] = median_hist_[p][2] = raw_zero_[p];
+      reject_run_[p] = 0;
+    }
     // Measurable ceiling at this gain: the ADC rails around the zero point bound
     // how much current the soft trip can ever SEE. The worst phase/polarity is
     // the real limit — 'lim' escalations must keep trip + margin below it.
@@ -491,18 +527,21 @@ public:
                  "(soft trip must stay below the smaller side)\n",
                  pos, neg);
     }
-    (void)logger;
 
     cfg_.driver->enable();
-    prime(); // the reads above went through the BSP driver
     enabled_.store(was_enabled);
-    return ok;
+    return true;
   }
 
 private:
-  static constexpr float kIsrBudgetUs = 20.0f;
-  static constexpr uint32_t kIsrBudgetCycles = (uint32_t)(kIsrBudgetUs * 240.0f);
-  static constexpr int kOverrunStrikes = 3; // ignore a cold-cache first call
+  // Consecutive late samples before the sampler declares itself faulted and
+  // disables (the stream task then forces a defined output state). Isolated
+  // lates are normal — the I2C temperature reads and DRV fault polls each hold
+  // the ISR off for a handful of consecutive periods — but a persistent run
+  // means the control loop is effectively dead while the bridge holds its last
+  // duties, which must not stand indefinitely. 40 ticks is well past any
+  // bus-traffic burst and still bounds the condition to a few ms at 20 kHz.
+  static constexpr int kLateStormStrikes = 40;
   static constexpr int kTripConsecutive = 3;
   static constexpr float kMaxZeroNoiseAmps = 0.5f;
   // A closed current loop moves real current ~0.1 A/period; a jump past this is a
@@ -552,26 +591,33 @@ private:
   int dbl_pick(int phase, int a, int b) {
     dbl_n_.fetch_add(1, std::memory_order_relaxed);
     int d = a - b;
-    if (d < 0) d = -d;
+    if (d < 0)
+      d = -d;
     if (d > dbl_max_delta_.load(std::memory_order_relaxed))
       dbl_max_delta_.store(d, std::memory_order_relaxed);
     int da = a - raw_zero_[phase];
-    if (da < 0) da = -da;
+    if (da < 0)
+      da = -da;
     int db = b - raw_zero_[phase];
-    if (db < 0) db = -db;
+    if (db < 0)
+      db = -db;
     if (d <= dbl_dis_counts_) {
       if (da > max_plausible_counts_ && db > max_plausible_counts_)
         dbl_spike_agree_.fetch_add(1, std::memory_order_relaxed);
       return (a + b) >> 1;
     }
     dbl_dis_.fetch_add(1, std::memory_order_relaxed);
-    if (da > max_plausible_counts_) dbl_spike_first_.fetch_add(1, std::memory_order_relaxed);
-    if (db > max_plausible_counts_) dbl_spike_second_.fetch_add(1, std::memory_order_relaxed);
+    if (da > max_plausible_counts_)
+      dbl_spike_first_.fetch_add(1, std::memory_order_relaxed);
+    if (db > max_plausible_counts_)
+      dbl_spike_second_.fetch_add(1, std::memory_order_relaxed);
     const int ref = median_hist_[phase][2];
     int ea = a - ref;
-    if (ea < 0) ea = -ea;
+    if (ea < 0)
+      ea = -ea;
     int eb = b - ref;
-    if (eb < 0) eb = -eb;
+    if (eb < 0)
+      eb = -eb;
     return ea <= eb ? a : b;
   }
 
@@ -608,11 +654,13 @@ private:
   int median_filter(int phase, int raw) {
     int *h = median_hist_[phase];
     int dev = raw - raw_zero_[phase];
-    if (dev < 0) dev = -dev;
+    if (dev < 0)
+      dev = -dev;
     if (dev > max_dev_[phase].load(std::memory_order_relaxed))
       max_dev_[phase].store(dev, std::memory_order_relaxed);
     int jump = raw - h[2];
-    if (jump < 0) jump = -jump;
+    if (jump < 0)
+      jump = -jump;
     if (dev > max_plausible_counts_) {
       imp_count_[phase].fetch_add(1, std::memory_order_relaxed);
       raw = h[2]; // non-physical amplitude -> hold, no escape credit
@@ -668,8 +716,10 @@ private:
   }
 
   bool on_sample() {
-    if (!enabled_.load(std::memory_order_relaxed)) return false;
-    if (++skip_ < decimation_.load(std::memory_order_relaxed)) return false;
+    if (!enabled_.load(std::memory_order_relaxed))
+      return false;
+    if (++skip_ < decimation_.load(std::memory_order_relaxed))
+      return false;
     skip_ = 0;
 
     // ISR entry time, before anything, for the late-sample check below. TEP
@@ -682,7 +732,8 @@ private:
     last_entry_ = t_entry;
     have_last_entry_ = true;
 
-    if (cfg_.scope_pin != GPIO_NUM_NC) gpio_set_level(cfg_.scope_pin, 1);
+    if (cfg_.scope_pin != GPIO_NUM_NC)
+      gpio_set_level(cfg_.scope_pin, 1);
     const uint32_t t0 = t_entry;
 
     const int px = phase_x_.load(std::memory_order_relaxed);
@@ -690,25 +741,22 @@ private:
 
     // Read the raw conversion(s) into locals; do NOT commit to raw_x_/raw_y_ yet
     // — the timing check below decides whether this sample is trustworthy.
-    uint32_t t1 = t0, t2 = t0, t3 = t0, t4 = t0;
-    int raw = 0, cap_raw = 0, cap_ph = px;
+    uint32_t t_done;
+    int raw = 0, cap_raw = 0, cap_ph;
     int new_x = 0, new_y = 0;
     bool upd_x = false, upd_y = false;
     int dbl_raw2 = 0;
     bool took_pair = false;
     if (samples_per_isr_.load(std::memory_order_relaxed) >= 2) {
       adc_fast_select_channel(ADC_UNIT_1, cfg_.phase_channels[px]);
-      t1 = esp_cpu_get_cycle_count();
       adc_oneshot_hal_convert(&hal_, &raw);
       new_x = raw;
       upd_x = true;
-      t2 = esp_cpu_get_cycle_count();
       adc_fast_select_channel(ADC_UNIT_1, cfg_.phase_channels[py]);
-      t3 = esp_cpu_get_cycle_count();
       adc_oneshot_hal_convert(&hal_, &raw);
       new_y = raw;
       upd_y = true;
-      t4 = esp_cpu_get_cycle_count();
+      t_done = esp_cpu_get_cycle_count();
       cap_raw = raw;
       cap_ph = py;
     } else {
@@ -719,8 +767,8 @@ private:
       // the corrupted one (1322/1322 refuted spikes in the post-hop slot, 0 in
       // the settled slot; 37% of post-hop conversions off by >3 A at idle).
       int ph = pending_ph_;
-      if (ph != px && ph != py) ph = px; // phases reassigned since the pre-select
-      t1 = esp_cpu_get_cycle_count();
+      if (ph != px && ph != py)
+        ph = px; // phases reassigned since the pre-select
       adc_oneshot_hal_convert(&hal_, &raw);
       if (ph == py) {
         new_y = raw;
@@ -729,7 +777,7 @@ private:
         new_x = raw;
         upd_x = true;
       }
-      t2 = t3 = t4 = esp_cpu_get_cycle_count();
+      t_done = esp_cpu_get_cycle_count();
       cap_raw = raw;
       cap_ph = ph;
       // Verification pair (dbl 1): re-convert the same settled channel. With
@@ -741,10 +789,12 @@ private:
       if (dbl_.load(std::memory_order_relaxed) && had_last &&
           gap <= decimation_.load(std::memory_order_relaxed) * kPeriodCycles + kDblTightCycles) {
         adc_oneshot_hal_convert(&hal_, &dbl_raw2);
-        t4 = esp_cpu_get_cycle_count();
+        t_done = esp_cpu_get_cycle_count();
         const int chosen = dbl_pick(ph, raw, dbl_raw2);
-        if (ph == py) new_y = chosen;
-        else new_x = chosen;
+        if (ph == py)
+          new_y = chosen;
+        else
+          new_x = chosen;
         took_pair = true;
       }
       // Pre-select the next tick's channel so it settles for a full period.
@@ -753,8 +803,9 @@ private:
       pending_ph_ = nxt;
     }
 
-    const uint32_t elapsed = t4 - t0;
-    if (cfg_.scope_pin != GPIO_NUM_NC) gpio_set_level(cfg_.scope_pin, 0);
+    const uint32_t elapsed = t_done - t0;
+    if (cfg_.scope_pin != GPIO_NUM_NC)
+      gpio_set_level(cfg_.scope_pin, 0);
 
     // Diagnostic ring of the pre-median conversion + how long the ISR took, so a
     // glitched sample can be correlated with a late (preempted) ISR. Frozen on
@@ -765,15 +816,17 @@ private:
       cap_[h++ % kCapN] = {(uint16_t)cap_raw, us, (uint8_t)cap_ph};
       // In double-sample mode the twin lands as the next ring entry (same
       // phase back-to-back), so a dump shows the pairs adjacently.
-      if (took_pair) cap_[h++ % kCapN] = {(uint16_t)dbl_raw2, us, (uint8_t)cap_ph};
+      if (took_pair)
+        cap_[h++ % kCapN] = {(uint16_t)dbl_raw2, us, (uint8_t)cap_ph};
       cap_head_.store(h, std::memory_order_relaxed);
     }
 
     n_.fetch_add(1, std::memory_order_relaxed);
     cyc_sum_.fetch_add(elapsed, std::memory_order_relaxed);
-    (void)t1, (void)t3; // setup/conv split was stage-0 instrumentation
-    if (elapsed < cyc_min_.load(std::memory_order_relaxed)) cyc_min_.store(elapsed);
-    if (elapsed > cyc_max_.load(std::memory_order_relaxed)) cyc_max_.store(elapsed);
+    if (elapsed < cyc_min_.load(std::memory_order_relaxed))
+      cyc_min_.store(elapsed);
+    if (elapsed > cyc_max_.load(std::memory_order_relaxed))
+      cyc_max_.store(elapsed);
 
     // Late-sample rejection. Two ways a sample lands outside the null window:
     //  - late ENTRY: the ISR fired late (gap since the previous entry exceeds the
@@ -786,32 +839,34 @@ private:
     // bad channels (see the capture dump: glitches coincide with long gap/elapsed).
     const uint32_t expected_gap = decimation_.load(std::memory_order_relaxed) * kPeriodCycles;
     const uint32_t code_budget = kLateCodeCycles + (took_pair ? kDblExtraCycles : 0);
-    const bool late = (had_last && gap > expected_gap + kLateGapMarginCycles) ||
-                      (elapsed > code_budget);
+    const bool late =
+        (had_last && gap > expected_gap + kLateGapMarginCycles) || (elapsed > code_budget);
     if (late) {
       late_count_.fetch_add(1, std::memory_order_relaxed);
-      // Do NOT notify the control task: running the current loop on a held,
-      // stale current sample is wrong once the frame is rotating (the sample
-      // belongs to an earlier electrical angle). Skip this tick — the task keeps
-      // the last duties until a fresh sample arrives, and its dt accounts for the
-      // gap. In stage 2a (parked) this was harmless; while spinning it matters.
+      // A SUSTAINED run of late samples means the control loop is effectively
+      // dead while the bridge holds its last duties — that must not stand.
+      // Declare a fault: disable and signal the stream task, which forces the
+      // outputs to a defined state (centered duties + Hi-Z coast).
+      if (++late_run_ >= kLateStormStrikes) {
+        late_run_ = 0;
+        enabled_.store(false, std::memory_order_relaxed);
+        overran_.store(true, std::memory_order_relaxed);
+        return false;
+      }
+      // An ISOLATED late sample is discarded: do NOT notify the control task —
+      // running the current loop on a held, stale current sample is wrong once
+      // the frame is rotating (the sample belongs to an earlier electrical
+      // angle). Skip this tick — the task keeps the last duties until a fresh
+      // sample arrives, and its dt accounts for the gap. In stage 2a (parked)
+      // this was harmless; while spinning it matters.
       return false;
     }
+    late_run_ = 0;
 
-    if (upd_x) raw_x_.store(median_filter(px, new_x), std::memory_order_relaxed);
-    if (upd_y) raw_y_.store(median_filter(py, new_y), std::memory_order_relaxed);
-
-    // Budget guard: a sample this late cannot be in the null window and would
-    // eventually starve the system. Shut down, report, don't notify. The pair
-    // mode's second conversion gets the same allowance as in the late check.
-    overrun_count_ =
-        elapsed > kIsrBudgetCycles + (took_pair ? kDblExtraCycles : 0) ? overrun_count_ + 1 : 0;
-    if (overrun_count_ >= kOverrunStrikes) {
-      overrun_count_ = 0;
-      enabled_.store(false, std::memory_order_relaxed);
-      overran_.store(true, std::memory_order_relaxed);
-      return false;
-    }
+    if (upd_x)
+      raw_x_.store(median_filter(px, new_x), std::memory_order_relaxed);
+    if (upd_y)
+      raw_y_.store(median_filter(py, new_y), std::memory_order_relaxed);
 
     // Integer overcurrent trip. Consecutive samples only — a lone over-limit
     // sample is far more likely a conversion outside the window than a real fault.
@@ -822,8 +877,7 @@ private:
     // the reconstructed one, and the measured pair alone would miss it.
     const int dz = -(dx + dy);
     const int lim = trip_counts_;
-    const bool over =
-        dx > lim || dx < -lim || dy > lim || dy < -lim || dz > lim || dz < -lim;
+    const bool over = dx > lim || dx < -lim || dy > lim || dy < -lim || dz > lim || dz < -lim;
     over_count_ = over ? over_count_ + 1 : 0;
     if (over_count_ >= kTripConsecutive) {
       over_count_ = 0;
@@ -841,8 +895,10 @@ private:
       // Which limit fired (the reconstructed phase is a common culprit), and
       // this tick's pre-filter conversion for a filtered-vs-raw comparison.
       int tp = 3 - px - py;
-      if (dx > lim || dx < -lim) tp = px;
-      else if (dy > lim || dy < -lim) tp = py;
+      if (dx > lim || dx < -lim)
+        tp = px;
+      else if (dy > lim || dy < -lim)
+        tp = py;
       trip_ph_.store(tp, std::memory_order_relaxed);
       trip_raw_.store(cap_raw - raw_zero_[cap_ph], std::memory_order_relaxed);
       trip_raw_ph_.store(cap_ph, std::memory_order_relaxed);
@@ -853,7 +909,8 @@ private:
 
     // Hand the fresh sample to the FOC task for the float math.
     BaseType_t hpw = pdFALSE;
-    if (notify_task_) vTaskNotifyGiveFromISR(notify_task_, &hpw);
+    if (notify_task_)
+      vTaskNotifyGiveFromISR(notify_task_, &hpw);
     return hpw == pdTRUE;
   }
 
@@ -872,9 +929,9 @@ private:
   // accepted sample.
   int median_hist_[3][3] = {};
   int reject_run_[3] = {0, 0, 0}; // consecutive slew-limit rejections per phase
-  int max_jump_counts_{0};      // slew-limit threshold in raw counts
-  int max_plausible_counts_{0}; // plausibility threshold in raw counts (vs zero)
-  int dbl_dis_counts_{0};       // pair-disagreement threshold in raw counts
+  int max_jump_counts_{0};        // slew-limit threshold in raw counts
+  int max_plausible_counts_{0};   // plausibility threshold in raw counts (vs zero)
+  int dbl_dis_counts_{0};         // pair-disagreement threshold in raw counts
 
   std::atomic<bool> dbl_{false}; // verification pair mode ('dbl 1'); normal op
                                  // is a single settled conversion (~8 us ISR)
@@ -902,10 +959,11 @@ private:
   std::atomic<int> trip_raw_ph_{0}; // phase of that conversion
 
   // ISR-only scratch (single writer, no atomics needed; pending_ph_ is also
-  // written by init/prime, but only while the sampler is disabled).
+  // written by init/prime, but only while the sampler is disabled; late_run_
+  // is also reset by enable(), only while disabled).
   uint32_t skip_{0};
   int pending_ph_{0}; // phase whose channel is currently selected (settled)
-  int overrun_count_{0};
+  int late_run_{0};   // consecutive late samples -> kLateStormStrikes fault
   int over_count_{0};
   uint32_t last_entry_{0};
   bool have_last_entry_{false};

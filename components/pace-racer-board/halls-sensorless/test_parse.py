@@ -1,8 +1,9 @@
 """Smoke test: CSV parse() stays in lockstep with sensorless.cpp's 16 columns,
-and the derived quantities behave."""
+and the derived quantities behave. Imports telemetry.py (stdlib-only), not
+monitor.py, so it runs without the TUI deps (pyserial/textual) installed."""
 import math
 
-from monitor import Row, parse
+from telemetry import parse
 
 good = ("12.30, C, 0.05, 6.20, 6.25, 0.12, 4.80, 2, 150, 151, 149, 0.0261, "
         "41.5, 44.2, 39.8, 43.1")
