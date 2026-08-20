@@ -7,4 +7,27 @@ config PACE_RACER_INTERRUPT_STACK_SIZE
     Size of the stack used for the interrupt handler. Used by the motor fault
     handler. May also be used by the hall effect sensors if configured.
 
+menu "Ethernet (WIZnet W5500)"
+
+config PACE_RACER_ETH_SPI_CLOCK_MHZ
+  int "W5500 SPI clock speed (MHz)"
+  default 20
+  range 1 33
+  help
+    SPI clock speed used to communicate with the on-board WIZnet W5500 Ethernet
+    breakout on the SPI expansion header. The W5500 supports up to 33.3 MHz; a
+    conservative default of 20 MHz is used to tolerate the shared communications
+    bus and header wiring. Lower this value if you observe SPI communication
+    errors with the Ethernet interface.
+
+config PACE_RACER_ETH_HOSTNAME
+  string "Default Ethernet hostname"
+  default "pace-racer"
+  help
+    Default hostname assigned to the Ethernet interface (e.g. advertised over
+    DHCP). This is used as the default value of EthernetConfig::hostname and can
+    be overridden at runtime.
+
+endmenu
+
 endmenu

@@ -11,11 +11,14 @@ maintainers:
 examples:
   - path: example
   - path: bringup
+  - path: ethernet
 tags:
   - cpp
   - Component
   - PACE
   - RAMMP
+  - Ethernet
+  - W5500
 dependencies:
   idf:
     version: '>=5.0'
@@ -38,5 +41,8 @@ dependencies:
   espp/pid: '>=1.0'
   espp/spi: '>=1.0'
   espp/timer: '>=1.0'
+  # WIZnet W5500 Ethernet breakout on the SPI expansion header (shares SPI2 with
+  # the DRV8353). Version 2.x targets ESP-IDF v6.0+.
+  espressif/w5500: '^2.0.0'
 targets:
   - esp32s3

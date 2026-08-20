@@ -1,12 +1,18 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <vector>
 
 #include <driver/spi_master.h>
+#include <esp_eth.h>
+#include <esp_event.h>
+#include <esp_netif.h>
 
 #include "base_component.hpp"
 #include "bldc_driver.hpp"
@@ -318,6 +324,115 @@ public:
   /// \return Current-sense conversion factor in amps per millivolt.
   static constexpr float motor_current_sense_mv_to_a() { return CURRENT_SENSE_MV_TO_A; }
 
+  /////////////////////////////////////////////////////////////////////////////
+  // Ethernet (WIZnet W5500 over the shared communications SPI bus)
+  /////////////////////////////////////////////////////////////////////////////
+
+  /// Alias for a 6-byte Ethernet MAC address.
+  using MacAddress = std::array<uint8_t, 6>;
+
+  /// Callback invoked when the Ethernet link state changes (comes up or goes
+  /// down). \note The callback runs in the ESP-IDF event-loop task context, so
+  ///       it must return quickly and must not block.
+  using EthernetLinkCallback = std::function<void()>;
+
+  /// Callback invoked when the interface obtains an IPv4 address. The
+  /// dotted-quad address string is passed as the argument. \note The callback
+  ///       runs in the ESP-IDF event-loop task context, so it must return
+  ///       quickly and must not block.
+  using EthernetIpCallback = std::function<void(const std::string &ip_address)>;
+
+  /// Configuration for the on-board WIZnet W5500 Ethernet interface.
+  /// \details The W5500 breakout is connected to the PACE RACER SPI expansion
+  ///          header, which shares the high-speed communications SPI bus
+  ///          (SPI2) with the DRV8353 gate driver. Only the interface-level
+  ///          options are exposed here; the SPI pins, reset pin, and interrupt
+  ///          pin are fixed by the board layout.
+  struct EthernetConfig {
+    /// MAC address to assign to the interface. The W5500 has no factory-burned
+    /// MAC, so if this is left empty a locally-administered address is derived
+    /// from the ESP32-S3 eFuse (ESP_MAC_ETH).
+    std::optional<MacAddress> mac_address{};
+
+    /// Optional hostname advertised by the interface (e.g. over DHCP). If empty
+    /// the ESP-IDF default hostname is used.
+    std::string hostname{CONFIG_PACE_RACER_ETH_HOSTNAME};
+
+    /// When true (default) the interface uses DHCP to obtain an address. When
+    /// false the static_ip / netmask / gateway values below are applied.
+    bool use_dhcp{true};
+
+    /// Static IPv4 address (dotted-quad) used when `use_dhcp` is false.
+    std::string static_ip{};
+
+    /// Static IPv4 netmask (dotted-quad) used when `use_dhcp` is false.
+    std::string netmask{"255.255.255.0"};
+
+    /// Static IPv4 gateway (dotted-quad) used when `use_dhcp` is false.
+    std::string gateway{};
+
+    /// Optional callback invoked when the Ethernet link comes up.
+    EthernetLinkCallback on_link_up{};
+
+    /// Optional callback invoked when the Ethernet link goes down.
+    EthernetLinkCallback on_link_down{};
+
+    /// Optional callback invoked when the interface obtains an IPv4 address.
+    /// The dotted-quad address string is passed as the argument.
+    EthernetIpCallback on_got_ip{};
+
+    /// Optional callback invoked when the interface loses its IPv4 address
+    /// (e.g. link down or DHCP lease loss; the address is reset to 0.0.0.0).
+    EthernetLinkCallback on_ip_lost{};
+  };
+
+  /// Initialize the on-board WIZnet W5500 Ethernet interface.
+  /// \details Brings up the TCP/IP stack, installs the W5500 driver on the
+  ///          shared communications SPI bus, assigns a MAC address, attaches
+  ///          the driver to a network interface, and starts the interface.
+  ///          The communications SPI bus must already be available (it is set
+  ///          up in the constructor). This method is idempotent: calling it
+  ///          again after a successful initialization is a no-op that returns
+  ///          true.
+  /// \param config The Ethernet configuration to apply.
+  /// \param ec Set on failure.
+  /// \return True if the interface was initialized (or was already
+  ///         initialized), false otherwise.
+  bool init_ethernet(const EthernetConfig &config, std::error_code &ec);
+
+  /// Initialize the on-board Ethernet interface with default (DHCP) settings.
+  /// \param ec Set on failure.
+  /// \return True on success, false otherwise.
+  bool init_ethernet(std::error_code &ec);
+
+  /// Return true once `init_ethernet(...)` has successfully run.
+  bool ethernet_initialized() const;
+
+  /// Return true while the Ethernet PHY reports an active link (cable
+  /// connected and negotiated).
+  bool ethernet_link_up() const;
+
+  /// Return true once the interface has been assigned an IPv4 address.
+  bool ethernet_has_ip() const;
+
+  /// Get the current IPv4 address of the interface as a dotted-quad string.
+  /// \return The address string, or "0.0.0.0" if none has been assigned.
+  std::string ethernet_ip_address() const;
+
+  /// Get the MAC address currently assigned to the Ethernet interface.
+  /// \param mac Populated with the interface MAC address on success.
+  /// \param ec Set on failure (e.g. if the interface is not initialized).
+  /// \return True on success, false otherwise.
+  bool ethernet_mac_address(MacAddress &mac, std::error_code &ec) const;
+
+  /// Get the underlying ESP-IDF Ethernet driver handle.
+  /// \return The driver handle, or nullptr if Ethernet is not initialized.
+  esp_eth_handle_t eth_handle() const;
+
+  /// Get the underlying ESP-IDF network interface for Ethernet.
+  /// \return The netif pointer, or nullptr if Ethernet is not initialized.
+  esp_netif_t *eth_netif() const;
+
 protected:
   static constexpr auto I2C_PORT = I2C_NUM_0;
   static constexpr auto I2C_SDA_PIN = GPIO_NUM_45;
@@ -328,6 +443,14 @@ protected:
   static constexpr auto COMM_CS_PIN = GPIO_NUM_10;
   static constexpr auto COMM_RESET_PIN = GPIO_NUM_21;
   static constexpr auto COMM_IRQ_PIN = GPIO_NUM_14;
+
+  // WIZnet W5500 Ethernet breakout on the SPI expansion header. It shares the
+  // communications SPI bus (SPI2) with the DRV8353 and uses COMM_CS_PIN as its
+  // chip select, COMM_RESET_PIN for hardware reset, and COMM_IRQ_PIN for its
+  // interrupt line.
+  static constexpr int ETH_SPI_CLOCK_SPEED_HZ = CONFIG_PACE_RACER_ETH_SPI_CLOCK_MHZ * 1000 * 1000;
+  static constexpr int ETH_SPI_QUEUE_SIZE = 20;
+  static constexpr uint32_t ETH_PHY_ADDR = 1; // W5500 has a single fixed PHY address
 
   static constexpr auto DRIVER_SPI_HOST = SPI2_HOST;
   static constexpr auto DRIVER_SPI_CLK_SPEED = 10 * 1000 * 1000; // max is 10 MHz
@@ -369,6 +492,18 @@ protected:
   void always_init();
   void init_spi();
 
+  /// Ensure the shared TCP/IP stack and default event loop exist. Safe to call
+  /// more than once.
+  bool ensure_netif_stack(std::error_code &ec);
+
+  /// ESP-IDF Ethernet event handler (link up / down, start / stop).
+  static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                                void *event_data);
+
+  /// ESP-IDF IP event handler (got / lost IPv4 address).
+  static void eth_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                                   void *event_data);
+
   float breathe(float breathing_period, uint64_t start_us, bool restart = false);
 
   bool read_encoder(const std::shared_ptr<Spi::Device> &encoder_device, uint8_t *data, size_t size);
@@ -383,6 +518,23 @@ protected:
   std::unique_ptr<Spi> comm_spi_;
   std::unique_ptr<Spi> encoder_spi_;
   std::shared_ptr<Spi::Device> encoder_spi_device_;
+
+  // Ethernet (WIZnet W5500) state
+  esp_eth_handle_t eth_handle_{nullptr};
+  esp_netif_t *eth_netif_{nullptr};
+  esp_eth_netif_glue_handle_t eth_glue_{nullptr};
+  std::atomic<bool> eth_initialized_{false};
+  std::atomic<bool> eth_link_up_{false};
+  std::atomic<bool> eth_has_ip_{false};
+  std::atomic<uint32_t> eth_ip_addr_{0}; // IPv4 address in network byte order
+
+  // Application callbacks. These are assigned once during init_ethernet(),
+  // before the driver is started, and are only read afterwards from the event
+  // task, so they do not require additional synchronization.
+  EthernetLinkCallback eth_on_link_up_{};
+  EthernetLinkCallback eth_on_link_down_{};
+  EthernetIpCallback eth_on_got_ip_{};
+  EthernetLinkCallback eth_on_ip_lost_{};
 
   std::array<std::shared_ptr<TemperatureSensor>, NUM_TEMPERATURE_SENSORS> temperature_sensors_{};
 
