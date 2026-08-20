@@ -129,8 +129,9 @@ queue.
 6. The current-sense conversion factor is still a placeholder in the
    implementation (`CURRENT_SENSE_MV_TO_A`), so current readings should be
    treated accordingly until that calibration is finalized.
-7. `init_ethernet(...)` installs the ESP-IDF `esp_eth` W5500 driver on the
-   shared SPI2 communications bus. Because the W5500 has no factory-burned MAC,
+7. `init_ethernet(...)` brings up the W5500 on the shared SPI2 communications
+   bus via the [espp::Ethernet](https://github.com/esp-cpp/espp/tree/main/components/ethernet)
+   component. Because the W5500 has no factory-burned MAC,
    a locally-administered address is derived from the ESP32-S3 eFuse unless one
    is supplied in `EthernetConfig`. Link and address availability are reported
    asynchronously via `ethernet_link_up()`, `ethernet_has_ip()`, and
