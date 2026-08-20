@@ -10,14 +10,12 @@
 #include <vector>
 
 #include <driver/spi_master.h>
-#include <esp_eth.h>
-#include <esp_event.h>
-#include <esp_netif.h>
 
 #include "base_component.hpp"
 #include "bldc_driver.hpp"
 #include "bldc_motor.hpp"
 #include "drv8353.hpp"
+#include "ethernet.hpp"
 #include "gaussian.hpp"
 #include "i2c.hpp"
 #include "interrupt.hpp"
@@ -306,7 +304,7 @@ public:
   /////////////////////////////////////////////////////////////////////////////
 
   /// Alias for a 6-byte Ethernet MAC address.
-  using MacAddress = std::array<uint8_t, 6>;
+  using MacAddress = espp::Ethernet::MacAddress;
 
   /// Callback invoked when the Ethernet link state changes (comes up or goes
   /// down). \note The callback runs in the ESP-IDF event-loop task context, so
@@ -402,6 +400,11 @@ public:
   /// \return True on success, false otherwise.
   bool ethernet_mac_address(MacAddress &mac, std::error_code &ec) const;
 
+  /// Get a pointer to the underlying espp::Ethernet component.
+  /// \return The Ethernet component, or nullptr if `init_ethernet(...)` has not
+  ///         been called yet.
+  espp::Ethernet *ethernet();
+
   /// Get the underlying ESP-IDF Ethernet driver handle.
   /// \return The driver handle, or nullptr if Ethernet is not initialized.
   esp_eth_handle_t eth_handle() const;
@@ -426,8 +429,7 @@ protected:
   // chip select, COMM_RESET_PIN for hardware reset, and COMM_IRQ_PIN for its
   // interrupt line.
   static constexpr int ETH_SPI_CLOCK_SPEED_HZ = CONFIG_PACE_RACER_ETH_SPI_CLOCK_MHZ * 1000 * 1000;
-  static constexpr int ETH_SPI_QUEUE_SIZE = 20;
-  static constexpr uint32_t ETH_PHY_ADDR = 1; // W5500 has a single fixed PHY address
+  static constexpr int ETH_PHY_ADDR = 1; // W5500 has a single fixed PHY address
 
   static constexpr auto DRIVER_SPI_HOST = SPI2_HOST;
   static constexpr auto DRIVER_SPI_CLK_SPEED = 10 * 1000 * 1000; // max is 10 MHz
@@ -469,18 +471,6 @@ protected:
   void always_init();
   void init_spi();
 
-  /// Ensure the shared TCP/IP stack and default event loop exist. Safe to call
-  /// more than once.
-  bool ensure_netif_stack(std::error_code &ec);
-
-  /// ESP-IDF Ethernet event handler (link up / down, start / stop).
-  static void eth_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
-                                void *event_data);
-
-  /// ESP-IDF IP event handler (got / lost IPv4 address).
-  static void eth_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
-                                   void *event_data);
-
   float breathe(float breathing_period, uint64_t start_us, bool restart = false);
 
   bool read_encoder(const std::shared_ptr<Spi::Device> &encoder_device, uint8_t *data, size_t size);
@@ -496,22 +486,8 @@ protected:
   std::unique_ptr<Spi> encoder_spi_;
   std::shared_ptr<Spi::Device> encoder_spi_device_;
 
-  // Ethernet (WIZnet W5500) state
-  esp_eth_handle_t eth_handle_{nullptr};
-  esp_netif_t *eth_netif_{nullptr};
-  esp_eth_netif_glue_handle_t eth_glue_{nullptr};
-  std::atomic<bool> eth_initialized_{false};
-  std::atomic<bool> eth_link_up_{false};
-  std::atomic<bool> eth_has_ip_{false};
-  std::atomic<uint32_t> eth_ip_addr_{0}; // IPv4 address in network byte order
-
-  // Application callbacks. These are assigned once during init_ethernet(),
-  // before the driver is started, and are only read afterwards from the event
-  // task, so they do not require additional synchronization.
-  EthernetLinkCallback eth_on_link_up_{};
-  EthernetLinkCallback eth_on_link_down_{};
-  EthernetIpCallback eth_on_got_ip_{};
-  EthernetLinkCallback eth_on_ip_lost_{};
+  // Ethernet (WIZnet W5500) component; created by init_ethernet().
+  std::unique_ptr<espp::Ethernet> ethernet_;
 
   std::array<std::shared_ptr<TemperatureSensor>, NUM_TEMPERATURE_SENSORS> temperature_sensors_{};
 
