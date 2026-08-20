@@ -15,3 +15,5 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 # Ethernet (WIZnet W5500 on the SPI expansion header)
 #
 CONFIG_ETH_ENABLED=y
+# enable the W5500 driver inside espp::Ethernet
+CONFIG_ESPP_ETHERNET_W5500=y

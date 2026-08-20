@@ -21,6 +21,8 @@ CONFIG_ESP_TIMER_TASK_STACK_SIZE=6144
 # Ethernet (WIZnet W5500 on the SPI expansion header)
 #
 CONFIG_ETH_ENABLED=y
+# enable the W5500 driver inside espp::Ethernet
+CONFIG_ESPP_ETHERNET_W5500=y
 
 # set the functions into IRAM
 CONFIG_SPI_MASTER_IN_IRAM=y
