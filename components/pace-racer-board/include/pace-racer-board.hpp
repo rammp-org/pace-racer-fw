@@ -198,6 +198,29 @@ public:
   struct DriverConfig {
     float power_supply_voltage; ///< The power supply voltage in volts
     float limit_voltage;        ///< The limit voltage in volts
+
+    /// MCPWM timer interrupt priority, range [0, 3]. 0 (the default) lets the
+    /// driver auto-allocate a low-priority interrupt, preserving the previous
+    /// behaviour. Levels 4-7 require assembly-only handlers and are rejected by
+    /// espp.
+    ///
+    /// \details This matters for applications that hang a current-sampling ISR
+    ///          off the MCPWM timer. At the default priority that ISR loses to
+    ///          the SPI, I2C, and Ethernet interrupts and is held off before it
+    ///          can start, so its ADC conversion lands outside the PWM null
+    ///          window and the sample is taken mid-switching. On this board that
+    ///          accounted for a ~5% late-sample rate at idle and ~18% under
+    ///          network load; raising the priority removed it almost entirely.
+    ///
+    /// \warning Raise this deliberately, and validate while the motor is
+    ///          actually driving. At idle the sampling ISR does very little, but
+    ///          while driving it runs the full acquisition path every PWM period
+    ///          (20 kHz here). Setting it to 3 — above every other peripheral —
+    ///          starved the console, the telemetry stream, and apparently the
+    ///          watchdog on this board once the motor was spinning, to the point
+    ///          that a stop command could not be issued. Prefer 2, which still
+    ///          outranks SPI/I2C/Ethernet while leaving headroom above it.
+    int intr_priority{0};
   };
 
   /// Default configuration for the PACE RACER's BLDC motor
@@ -240,9 +263,14 @@ public:
   /// \param motor_config The motor configuration
   /// \param driver_config The driver configuration
   /// \return True if the motor was successfully initialized, false otherwise
-  bool init_motor(const BldcMotor::Config &motor_config,
-                  const DriverConfig &driver_config = {.power_supply_voltage = 5.0f,
-                                                       .limit_voltage = 5.0f});
+  /// \note Two overloads instead of a default argument: GCC only parses a
+  ///       nested class's default member initializers at the end of the
+  ///       enclosing class, so a designated-initializer DriverConfig default
+  ///       argument here is rejected as non-aggregate. The one-argument
+  ///       overload (defined out of class) supplies the same
+  ///       {5 V, 5 V, priority 0} defaults.
+  bool init_motor(const BldcMotor::Config &motor_config, const DriverConfig &driver_config);
+  bool init_motor(const BldcMotor::Config &motor_config);
 
   /// Get a shared pointer to the DRV8353 gate-driver control component.
   std::shared_ptr<GateDriver> gate_driver();
