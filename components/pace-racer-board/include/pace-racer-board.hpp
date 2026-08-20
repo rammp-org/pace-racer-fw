@@ -464,7 +464,7 @@ protected:
   static constexpr auto GREEN_LED_GPIO = GPIO_NUM_41;
 
   // 1mΩ shunt, DRV8353 CSA at default GAIN_5: scale = 1 / (0.001Ω × 5 × 1000 mV/V) = 0.2 A/mV
-  // ponytail: change to 0.025 if GAIN_40 is explicitly set in the application
+  // NOTE: change to 0.025 if GAIN_40 is explicitly set in the application
   static constexpr float CURRENT_SENSE_MV_TO_A = 0.2f;
 
   /// Constructor
