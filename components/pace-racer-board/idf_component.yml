@@ -41,8 +41,14 @@ dependencies:
   espp/pid: '>=1.0'
   espp/spi: '>=1.0'
   espp/timer: '>=1.0'
-  # WIZnet W5500 Ethernet breakout on the SPI expansion header (shares SPI2 with
-  # the DRV8353). Version 2.x targets ESP-IDF v6.0+.
+  # espp::Ethernet drives the WIZnet W5500 Ethernet breakout on the SPI
+  # expansion header (shares SPI2 with the DRV8353). 1.1.8 is the first
+  # published release of the component.
+  espp/ethernet: '>=1.1.8'
+  # espp/ethernet only pulls in the W5500 driver conditionally (when
+  # CONFIG_ESPP_ETHERNET_W5500 is set), which cannot be evaluated on the very
+  # first dependency resolution of a clean checkout, so depend on it explicitly
+  # here as well. Version 2.x targets ESP-IDF v6.0+.
   espressif/w5500: '^2.0.0'
 targets:
   - esp32s3

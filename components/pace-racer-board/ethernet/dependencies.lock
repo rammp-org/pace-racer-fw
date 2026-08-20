@@ -127,6 +127,38 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.2.0
+  espp/ethernet:
+    component_hash: 0f34e6b4b5cc5c0c495a5d23ece41999dede42596e824b3ba570089270c521bb
+    dependencies:
+    - name: espp/base_component
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=1.0'
+    - name: espressif/dm9051
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: $CONFIG{ESPP_ETHERNET_DM9051} == True
+      version: '*'
+    - name: espressif/enc28j60
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: $CONFIG{ESPP_ETHERNET_ENC28J60} == True
+      version: '*'
+    - name: espressif/w5500
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: $CONFIG{ESPP_ETHERNET_W5500} == True
+      version: ^2.0.0
+    - name: idf
+      require: private
+      version: '>=5.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.0
   espp/filters:
     component_hash: 5ea654ccdc7118bd4b6881f7b8f6d7315da58dcd14e5ab515189d68d41483d2c
     dependencies:
@@ -400,6 +432,7 @@ direct_dependencies:
 - espp/base_peripheral
 - espp/bldc_driver
 - espp/bldc_motor
+- espp/ethernet
 - espp/filters
 - espp/format
 - espp/i2c
@@ -414,6 +447,6 @@ direct_dependencies:
 - espressif/w5500
 - idf
 - lm75adp
-manifest_hash: 62ad0ca625d71b025cbd52c4d3b9397f298c848837de52c142974d83d837a0ad
+manifest_hash: a961cfec77d632eb264657357910ed76b611afe273414f702de737ba821feab4
 target: esp32s3
 version: 3.0.0
