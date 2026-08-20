@@ -5,9 +5,6 @@
 using namespace espp;
 
 Drv8353::BasePeripheral::write_fn Drv8353::make_write_fn(const Config &config) {
-  if (config.write) {
-    return config.write;
-  }
   if (!config.transfer) {
     return nullptr;
   }
@@ -18,9 +15,6 @@ Drv8353::BasePeripheral::write_fn Drv8353::make_write_fn(const Config &config) {
 }
 
 Drv8353::BasePeripheral::read_fn Drv8353::make_read_fn(const Config &config) {
-  if (config.read) {
-    return config.read;
-  }
   if (!config.transfer) {
     return nullptr;
   }
@@ -44,7 +38,14 @@ Drv8353::Drv8353(const Config &config)
 
 bool Drv8353::initialize(std::error_code &ec) {
   std::lock_guard<std::recursive_mutex> lock(base_mutex_);
-  if (!config_.transfer && (!config_.write || !config_.read)) {
+  // A full-duplex transfer is REQUIRED, not merely preferred: the DRV8353
+  // answers in the SAME 16-bit frame as the command, so a half-duplex
+  // write+read pair cannot express a register read — the separate read clocks
+  // a second frame that the chip decodes as an access to register 0 and every
+  // read silently returns FAULT_STATUS_1. Reject the configuration up front.
+  if (!config_.transfer) {
+    logger_.error("Config::transfer is required — DRV8353 register reads are same-frame "
+                  "full-duplex, which a write+read pair cannot express");
     ec = std::make_error_code(std::errc::invalid_argument);
     return false;
   }
@@ -559,37 +560,24 @@ bool Drv8353::transfer_frame(uint16_t tx_frame, uint16_t &rx_frame, std::error_c
     return true;
   }
 
-  if (!send_frame(tx_frame, ec)) {
-    return false;
-  }
-  if (config_.inter_frame_delay.count() > 0) {
-    std::this_thread::sleep_for(config_.inter_frame_delay);
-  }
-  return receive_frame(rx_frame, ec);
+  // Unreachable after initialize() (which requires Config::transfer), but fail
+  // loudly rather than fall back to a two-frame read the chip would decode as
+  // a register-0 access.
+  ec = std::make_error_code(std::errc::operation_not_supported);
+  return false;
 }
 
 bool Drv8353::send_frame(uint16_t frame, std::error_code &ec) {
-  if (config_.transfer) {
-    auto tx = to_bytes(frame);
-    if (!config_.transfer(std::span<const uint8_t>(tx.data(), tx.size()), std::span<uint8_t>{})) {
-      ec = std::make_error_code(std::errc::io_error);
-      return false;
-    }
-    ec.clear();
-    return true;
-  }
-  auto tx = to_bytes(frame);
-  write(tx.data(), tx.size(), ec);
-  return !ec;
-}
-
-bool Drv8353::receive_frame(uint16_t &frame, std::error_code &ec) {
-  uint8_t rx[2] = {0, 0};
-  read(rx, sizeof(rx), ec);
-  if (ec) {
+  if (!config_.transfer) {
+    ec = std::make_error_code(std::errc::operation_not_supported);
     return false;
   }
-  frame = from_bytes(rx);
+  auto tx = to_bytes(frame);
+  if (!config_.transfer(std::span<const uint8_t>(tx.data(), tx.size()), std::span<uint8_t>{})) {
+    ec = std::make_error_code(std::errc::io_error);
+    return false;
+  }
+  ec.clear();
   return true;
 }
 

@@ -28,7 +28,6 @@ namespace espp {
 class Drv8353 : public BasePeripheral<uint8_t, false> {
 public:
   static constexpr std::chrono::microseconds DEFAULT_STARTUP_DELAY{40};
-  static constexpr std::chrono::microseconds DEFAULT_INTER_FRAME_DELAY{1};
 
   /// DRV8353 register addresses.
   enum class Register : uint8_t {
@@ -341,16 +340,18 @@ public:
 
   /// Configuration for the DRV8353 peripheral.
   struct Config {
-    BasePeripheral::write_fn write{nullptr}; ///< Function to write bytes to the SPI device.
-    BasePeripheral::read_fn read{nullptr};   ///< Function to read bytes from the SPI device.
-    transfer_fn transfer{nullptr};           ///< Preferred full-duplex SPI transfer function.
-    gpio_num_t enable_gpio{GPIO_NUM_NC};     ///< Optional nSLEEP / enable GPIO.
-    gpio_num_t fault_gpio{GPIO_NUM_NC};      ///< Optional nFAULT GPIO.
-    bool reset_before_init{true};            ///< Pulse nSLEEP low before SPI access.
+    /// REQUIRED full-duplex SPI transfer for one 16-bit frame. The DRV8353
+    /// answers in the SAME frame as the command, so a half-duplex write+read
+    /// callback pair cannot express a register read (the separate read clocks
+    /// a second frame that the chip decodes as an access to register 0) —
+    /// which is why no such configuration option exists. initialize() rejects
+    /// a configuration without it.
+    transfer_fn transfer{nullptr};
+    gpio_num_t enable_gpio{GPIO_NUM_NC}; ///< Optional nSLEEP / enable GPIO.
+    gpio_num_t fault_gpio{GPIO_NUM_NC};  ///< Optional nFAULT GPIO.
+    bool reset_before_init{true};        ///< Pulse nSLEEP low before SPI access.
     std::chrono::microseconds startup_delay{
         DEFAULT_STARTUP_DELAY}; ///< Minimum nSLEEP timing between toggles.
-    std::chrono::microseconds inter_frame_delay{
-        DEFAULT_INTER_FRAME_DELAY}; ///< Delay between the read command and response frame.
     std::optional<GateDriveCurrent> high_side_gate_drive_current{
         std::nullopt}; ///< Optional HS gate-drive current applied during initialize().
     std::optional<GateDriveCurrent> low_side_gate_drive_current{
@@ -569,7 +570,6 @@ protected:
   bool configure_gpios(std::error_code &ec);
   bool transfer_frame(uint16_t tx_frame, uint16_t &rx_frame, std::error_code &ec);
   bool send_frame(uint16_t frame, std::error_code &ec);
-  bool receive_frame(uint16_t &frame, std::error_code &ec);
   bool unlock_protected_registers(uint16_t &gate_drive_hs, uint16_t &original_lock,
                                   std::error_code &ec);
   bool restore_protected_register_lock(uint16_t gate_drive_hs, uint16_t original_lock,
