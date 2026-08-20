@@ -220,14 +220,7 @@ public:
     ///          watchdog on this board once the motor was spinning, to the point
     ///          that a stop command could not be issued. Prefer 2, which still
     ///          outranks SPI/I2C/Ethernet while leaving headroom above it.
-    ///
-    /// \note No default member initializer on purpose: GCC only parses nested
-    ///       default member initializers at the end of the enclosing class, so
-    ///       one here would reject the designated-initializer default argument
-    ///       of `init_motor(...)` below as non-aggregate. Aggregate
-    ///       initialization that omits this field still value-initializes it
-    ///       to 0.
-    int intr_priority;
+    int intr_priority{0};
   };
 
   /// Default configuration for the PACE RACER's BLDC motor
@@ -270,9 +263,14 @@ public:
   /// \param motor_config The motor configuration
   /// \param driver_config The driver configuration
   /// \return True if the motor was successfully initialized, false otherwise
-  bool init_motor(const BldcMotor::Config &motor_config,
-                  const DriverConfig &driver_config = {
-                      .power_supply_voltage = 5.0f, .limit_voltage = 5.0f, .intr_priority = 0});
+  /// \note Two overloads instead of a default argument: GCC only parses a
+  ///       nested class's default member initializers at the end of the
+  ///       enclosing class, so a designated-initializer DriverConfig default
+  ///       argument here is rejected as non-aggregate. The one-argument
+  ///       overload (defined out of class) supplies the same
+  ///       {5 V, 5 V, priority 0} defaults.
+  bool init_motor(const BldcMotor::Config &motor_config, const DriverConfig &driver_config);
+  bool init_motor(const BldcMotor::Config &motor_config);
 
   /// Get a shared pointer to the DRV8353 gate-driver control component.
   std::shared_ptr<GateDriver> gate_driver();

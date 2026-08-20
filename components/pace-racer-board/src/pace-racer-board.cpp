@@ -139,6 +139,11 @@ PaceRacerBoard::board_temperatures_c(PaceRacerBoard::TemperatureErrors &errors) 
   return readings;
 }
 
+bool PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_config) {
+  return init_motor(motor_config,
+                    DriverConfig{.power_supply_voltage = 5.0f, .limit_voltage = 5.0f});
+}
+
 bool PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_config,
                                 const PaceRacerBoard::DriverConfig &driver_config) {
   if (motor_ || motor_driver_ || encoder_ || gate_driver_) {
