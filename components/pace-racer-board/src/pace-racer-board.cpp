@@ -146,6 +146,15 @@ bool PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_c
     return false;
   }
 
+  // Reject an out-of-range interrupt priority here rather than letting it fail
+  // deeper in the driver stack, where the error is harder to trace back to
+  // this call site. Levels 4-7 require assembly-only handlers.
+  if (driver_config.intr_priority < 0 || driver_config.intr_priority > 3) {
+    logger_.error("Invalid MCPWM timer interrupt priority {}; valid range is [0, 3]",
+                  driver_config.intr_priority);
+    return false;
+  }
+
   auto cleanup_motor_subsystem = [this]() {
     if (gate_driver_) {
       std::error_code disable_ec;
