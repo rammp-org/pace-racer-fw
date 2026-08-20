@@ -10,6 +10,8 @@
 #include <vector>
 
 #include <driver/spi_master.h>
+#include <esp_eth.h>
+#include <esp_netif.h>
 
 #include "base_component.hpp"
 #include "bldc_driver.hpp"
@@ -403,7 +405,7 @@ public:
   /// Get a pointer to the underlying espp::Ethernet component.
   /// \return The Ethernet component, or nullptr if `init_ethernet(...)` has not
   ///         been called yet.
-  espp::Ethernet *ethernet();
+  espp::Ethernet *ethernet() const;
 
   /// Get the underlying ESP-IDF Ethernet driver handle.
   /// \return The driver handle, or nullptr if Ethernet is not initialized.

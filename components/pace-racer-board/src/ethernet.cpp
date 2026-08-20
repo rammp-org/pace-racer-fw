@@ -110,7 +110,7 @@ bool PaceRacerBoard::ethernet_mac_address(PaceRacerBoard::MacAddress &mac,
   return true;
 }
 
-espp::Ethernet *PaceRacerBoard::ethernet() { return ethernet_.get(); }
+espp::Ethernet *PaceRacerBoard::ethernet() const { return ethernet_.get(); }
 
 esp_eth_handle_t PaceRacerBoard::eth_handle() const {
   return ethernet_ ? ethernet_->native_handle() : nullptr;
