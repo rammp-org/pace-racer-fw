@@ -27,6 +27,18 @@ extern "C" void app_main(void) {
     return;
   }
 
+  // Bring up the on-board WIZnet W5500 Ethernet interface. This is non-fatal:
+  // the motor-control loop runs regardless of network availability.
+  if (!bsp.init_ethernet(ec)) {
+    logger.warn("Failed to initialize Ethernet: {}", ec.message());
+  } else {
+    Bsp::MacAddress mac{};
+    if (bsp.ethernet_mac_address(mac, ec)) {
+      logger.info("Ethernet MAC: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}", mac[0], mac[1], mac[2],
+                  mac[3], mac[4], mac[5]);
+    }
+  }
+
   // set the configuration for the motor. For simplicity, copy the defaults and
   // override the values we want to exercise in the board-level test app.
   auto motor_config = bsp.default_motor_config;
