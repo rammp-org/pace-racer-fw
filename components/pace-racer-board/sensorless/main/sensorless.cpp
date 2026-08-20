@@ -115,7 +115,7 @@ static constexpr float kTempLimitC = 80.0f;
 // jumps ~5-10x mid-blend and the acceleration burst slipped the rotor.
 static constexpr float kHoEngageRpm = 60.0f;
 static constexpr float kHoRevertRpm = 45.0f;
-static constexpr float kHoDecayAps = 1.0f;    // iq decay rate during CONVERGE
+static constexpr float kHoDecayAps = 1.0f; // iq decay rate during CONVERGE
 // Absolute CONVERGE floor. A FRACTIONAL floor (25% of run amps) made
 // convergence impossible at high run amps on the dyno: the load angle only
 // reaches 90° when iq decays to ~the machine's actual drag current (sinγ =
@@ -123,11 +123,11 @@ static constexpr float kHoDecayAps = 1.0f;    // iq decay rate during CONVERGE
 // 2.5 A floor parked aerr at ~90° until the stuck-abort fired, forever. 0.5 A
 // matches the unloaded converge current observed on this rig.
 static constexpr float kIqFloorAmps = 0.5f;
-static constexpr float kConvergeDeg = 15.0f;  // frames agree inside this cone
-static constexpr uint32_t kEngageTicks = 1000;    // 50 ms sustained above engage rpm
-static constexpr uint32_t kConvergeTicks = 400;   // 20 ms inside the cone -> switch
+static constexpr float kConvergeDeg = 15.0f;       // frames agree inside this cone
+static constexpr uint32_t kEngageTicks = 1000;     // 50 ms sustained above engage rpm
+static constexpr uint32_t kConvergeTicks = 400;    // 20 ms inside the cone -> switch
 static constexpr uint32_t kConvStuckTicks = 10000; // 500 ms at floor unconverged -> abort
-static constexpr uint32_t kCooldownTicks = 10000; // 500 ms after revert/abort: no chatter
+static constexpr uint32_t kCooldownTicks = 10000;  // 500 ms after revert/abort: no chatter
 // Outer speed loop, active only in CLOSED: rpm setpoint (ramped at the run's
 // ramp rate) -> iq command, clamped to ±run amps (amps = torque ceiling).
 // Few-Hz loop around a 400 rad/s current loop — decades of separation.
@@ -148,7 +148,7 @@ static constexpr uint32_t kStopUnloadTicks = 2000; // ~100 ms at 20 kHz
 // leaves no null window. SVPWM centers duties at 0.5.
 static constexpr float kMinDuty = 0.03f;
 static constexpr float kMaxDuty = 0.97f;
-static constexpr float kCenterDuty = 0.5f; // SVPWM idle: all phases at 0.5 = no current
+static constexpr float kCenterDuty = 0.5f;   // SVPWM idle: all phases at 0.5 = no current
 static constexpr float kPwmPeriodUs = 50.0f; // espp BldcDriver is fixed at 20 kHz
 
 // dq current-loop voltage limit. The loop output is a voltage; this caps it so a
@@ -310,10 +310,10 @@ std::atomic<float> g_max_target{kMaxTargetAmps};
 std::atomic<float> g_vlim{kVoltageLimit};
 std::atomic<float> g_temp_limit{kTempLimitC};
 // FOC task -> stream/console handshakes (SPI can't run on the control task).
-std::atomic<bool> g_request_coast{false}; // apply DRV8353 Hi-Z coast
-std::atomic<bool> g_failsafe_msg{false};  // observer fail-safe fired, report it
-std::atomic<bool> g_ceiling_msg{false};   // speed collapsed with iq pinned at the clamp
-std::atomic<bool> g_coasting{false};      // outputs are Hi-Z; drive cmds must clear
+std::atomic<bool> g_request_coast{false};     // apply DRV8353 Hi-Z coast
+std::atomic<bool> g_failsafe_msg{false};      // observer fail-safe fired, report it
+std::atomic<bool> g_ceiling_msg{false};       // speed collapsed with iq pinned at the clamp
+std::atomic<bool> g_coasting{false};          // outputs are Hi-Z; drive cmds must clear
 std::atomic<float> g_spin_amps{0.0f};         // Id during align, Iq during ramp
 std::atomic<float> g_spin_omega_target{0.0f}; // electrical rad/s
 std::atomic<float> g_spin_ramp_rate{0.0f};    // electrical rad/s^2
@@ -352,7 +352,8 @@ void foc_task_fn(void *) {
 
     const uint32_t c0 = esp_cpu_get_cycle_count();
     float dt = have_last ? (float)(c0 - last_cyc) / 240.0e6f : 50.0e-6f;
-    if (dt <= 0.0f || dt > 0.01f) dt = 50.0e-6f; // guard the first tick / long gaps
+    if (dt <= 0.0f || dt > 0.01f)
+      dt = 50.0e-6f; // guard the first tick / long gaps
     last_cyc = c0;
     have_last = true;
 
@@ -363,7 +364,8 @@ void foc_task_fn(void *) {
       pi_d.reset();
       pi_q.reset();
     }
-    if (g_reset_obs.exchange(false)) g_observer.reset();
+    if (g_reset_obs.exchange(false))
+      g_observer.reset();
 
     // Measured phase currents -> Clarke -> Park (rotor frame).
     const int px = g_sampler.phase_x();
@@ -435,7 +437,8 @@ void foc_task_fn(void *) {
         const bool flux_ok = flux > kFluxFailLo * lam && flux < kFluxFailHi * lam;
         const float revert = g_ho_revert.load(std::memory_order_relaxed);
         idref = 0.0f;
-        if (cooldown) cooldown--;
+        if (cooldown)
+          cooldown--;
         static float spd_set = 0.0f, spd_integ = 0.0f; // speed loop state
         if (ho == CLOSED) { // observer drives; synthetic state shadows it for revert
           th = th_est;
@@ -445,16 +448,14 @@ void foc_task_fn(void *) {
           // the run's ramp rate, PI to an iq command bounded by ±amps. Seeded
           // at the CONVERGE exit (setpoint = actual rpm, integrator = decayed
           // iq), so the transfer is bumpless.
-          const float rpm_t =
-              g_spin_omega_target.load(std::memory_order_relaxed) / kRpmToOmegaE;
-          const float step =
-              g_spin_ramp_rate.load(std::memory_order_relaxed) / kRpmToOmegaE * dt;
+          const float rpm_t = g_spin_omega_target.load(std::memory_order_relaxed) / kRpmToOmegaE;
+          const float step = g_spin_ramp_rate.load(std::memory_order_relaxed) / kRpmToOmegaE * dt;
           spd_set += std::clamp(rpm_t - spd_set, -step, step);
           const float serr = spd_set - rpm_est;
-          spd_integ = std::clamp(
-              spd_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt, -amps, amps);
-          iq_cmd = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + spd_integ,
-                              -amps, amps);
+          spd_integ = std::clamp(spd_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt,
+                                 -amps, amps);
+          iq_cmd =
+              std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + spd_integ, -amps, amps);
           iqref = iq_cmd;
           mstate = 'C';
           if (rpm_est < revert) {
@@ -476,8 +477,7 @@ void foc_task_fn(void *) {
           }
         } else { // synthetic I/f ramp keeps running under IF_DRIVE and CONVERGE
           const float wt = g_spin_omega_target.load(std::memory_order_relaxed);
-          sp_omega =
-              std::min(sp_omega + g_spin_ramp_rate.load(std::memory_order_relaxed) * dt, wt);
+          sp_omega = std::min(sp_omega + g_spin_ramp_rate.load(std::memory_order_relaxed) * dt, wt);
           sp_theta += sp_omega * dt;
           sp_theta -= kTwoPi * floorf(sp_theta / kTwoPi);
           th = sp_theta;
@@ -508,14 +508,15 @@ void foc_task_fn(void *) {
             e -= kTwoPi * floorf(e / kTwoPi + 0.5f);
             constexpr float kConvergeRad = kConvergeDeg * 3.14159265f / 180.0f;
             conv_ok = (e < kConvergeRad && e > -kConvergeRad) ? conv_ok + 1 : 0;
-            if (iq_cmd <= floor_a) conv_stuck++;
+            if (iq_cmd <= floor_a)
+              conv_stuck++;
             if (conv_ok >= kConvergeTicks) { // frames agree: switching is a near-no-op
               ho = CLOSED;
               th = th_est;
               sp_theta = th_est;
               sp_omega = g_observer.omega();
-              spd_set = rpm_est;    // bumpless speed-loop entry: zero error,
-              spd_integ = iq_cmd;   // integrator holds the converged torque
+              spd_set = rpm_est;  // bumpless speed-loop entry: zero error,
+              spd_integ = iq_cmd; // integrator holds the converged torque
             } else if (rpm_est < revert || conv_stuck >= kConvStuckTicks) {
               ho = IF_DRIVE; // didn't converge / estimate collapsed: back to stiff I/f
               cooldown = kCooldownTicks;
@@ -547,7 +548,8 @@ void foc_task_fn(void *) {
       idref = 0.0f;
       iqref = 0.0f;
       mstate = 'X';
-      if (++stop_ticks == kStopUnloadTicks) g_request_coast.store(true);
+      if (++stop_ticks == kStopUnloadTicks)
+        g_request_coast.store(true);
     } else { // HOLD
       th = g_theta.load(std::memory_order_relaxed);
       th -= kTwoPi * floorf(th / kTwoPi);
@@ -636,7 +638,8 @@ extern "C" void app_main(void) {
     std::error_code ec;
     // ESP32 reboot does NOT power-cycle the DRV8353 — clear any latched faults.
     bsp.gate_driver()->clear_faults(ec);
-    if (ec) logger.error("Failed to clear DRV8353 faults: {}", ec.message());
+    if (ec)
+      logger.error("Failed to clear DRV8353 faults: {}", ec.message());
   }
 
   // Hardware protection + known-good driver state. Force-write DRIVER_CONTROL
@@ -694,7 +697,8 @@ extern "C" void app_main(void) {
   }
   driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
 
-  if (!g_sampler.set_edge(true /*TEP*/, logger)) return;
+  if (!g_sampler.set_edge(true /*TEP*/, logger))
+    return;
   driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
   // Enabling the sampler starts the FOC task's control loop. With Id*=Iq*=0 the
   // loop commands 0 V -> centered duties -> no current, so this is safe.
@@ -705,8 +709,8 @@ extern "C" void app_main(void) {
 
   // Hall sensor: ground-truth angle for validating the observer. Never used in
   // the control path — it exists here only to log theta_hall alongside theta_est.
-  static HallSensor hall({.pin_a = kHallA, .pin_b = kHallB, .pin_c = kHallC,
-                          .pole_pairs = kPolePairs});
+  static HallSensor hall(
+      {.pin_a = kHallA, .pin_b = kHallB, .pin_c = kHallC, .pole_pairs = kPolePairs});
   hall.init();
   g_hall = &hall;
 
@@ -740,7 +744,8 @@ extern "C" void app_main(void) {
       const float tl = g_temp_limit.load(std::memory_order_relaxed);
       for (size_t i = 0; i < temps.size(); i++) {
         temps[i] = terrs[i] ? NAN : tr[i];
-        if (!terrs[i] && tr[i] > tl) hot = (int)i;
+        if (!terrs[i] && tr[i] > tl)
+          hot = (int)i;
       }
       const int md = g_mode.load(std::memory_order_relaxed);
       const bool driving = g_sampler.is_enabled() &&
@@ -762,15 +767,15 @@ extern "C" void app_main(void) {
       // (closed-loop unload -> Hi-Z coast). No brake, no disarm, no frame jump.
       // Everything needed to call glitch-vs-real: which limit fired, filtered
       // vs raw at the trip tick, and the filter counters since arm.
-      fmt::print("! soft trip >{:.0f}A on {}{} — unloading to 0 A, then Hi-Z coast "
-                 "(any drive command re-engages)\n"
-                 "!  filtered A={:+.1f} B={:+.1f} C={:+.1f}  raw {}={:+.1f}\n"
-                 "!  since arm: imp={}/{}/{} rej={}/{}/{} esc={}/{}/{} max|A|={:.0f}/{:.0f}/{:.0f}\n",
-                 g_sampler.trip_amps(), "ABC"[ti.trip_phase],
-                 ti.trip_phase == ti.recon ? " (recon)" : "",
-                 ti.amps[0], ti.amps[1], ti.amps[2], "ABC"[ti.raw_phase], ti.raw_amps, st.imp[0],
-                 st.imp[1], st.imp[2], st.rej[0], st.rej[1], st.rej[2], st.esc[0], st.esc[1],
-                 st.esc[2], st.max_amps[0], st.max_amps[1], st.max_amps[2]);
+      fmt::print(
+          "! soft trip >{:.0f}A on {}{} — unloading to 0 A, then Hi-Z coast "
+          "(any drive command re-engages)\n"
+          "!  filtered A={:+.1f} B={:+.1f} C={:+.1f}  raw {}={:+.1f}\n"
+          "!  since arm: imp={}/{}/{} rej={}/{}/{} esc={}/{}/{} max|A|={:.0f}/{:.0f}/{:.0f}\n",
+          g_sampler.trip_amps(), "ABC"[ti.trip_phase], ti.trip_phase == ti.recon ? " (recon)" : "",
+          ti.amps[0], ti.amps[1], ti.amps[2], "ABC"[ti.raw_phase], ti.raw_amps, st.imp[0],
+          st.imp[1], st.imp[2], st.rej[0], st.rej[1], st.rej[2], st.esc[0], st.esc[1], st.esc[2],
+          st.max_amps[0], st.max_amps[1], st.max_amps[2]);
       g_sampler.dump_summary();
     }
     if (g_sampler.take_overran()) {
@@ -867,10 +872,12 @@ extern "C" void app_main(void) {
       continue;
     }
     if (ch != '\n' && ch != '\r') {
-      if (len < sizeof(line) - 1) line[len++] = (char)ch;
+      if (len < sizeof(line) - 1)
+        line[len++] = (char)ch;
       continue;
     }
-    if (len == 0) continue;
+    if (len == 0)
+      continue;
     line[len] = '\0';
     len = 0;
 
@@ -879,7 +886,8 @@ extern "C" void app_main(void) {
       if (g_coasting.exchange(false)) {
         std::error_code cec;
         bsp.gate_driver()->set_coast(false, cec);
-        if (cec) fmt::print("! uncoast SPI write failed: {}\n", cec.message());
+        if (cec)
+          fmt::print("! uncoast SPI write failed: {}\n", cec.message());
         g_reset_pi.store(true);
       }
     };
@@ -891,7 +899,8 @@ extern "C" void app_main(void) {
       float amps = kSpinAmps, rpm = kSpinRpm, ramp = kSpinRampS;
       sscanf(line, "run %f %f %f", &amps, &rpm, &ramp);
       amps = std::clamp(amps, 0.0f, g_max_target.load());
-      if (ramp < 0.1f) ramp = 0.1f;
+      if (ramp < 0.1f)
+        ramp = 0.1f;
       const float wt = rpm * kRpmToOmegaE;
       g_spin_amps.store(amps);
       g_spin_omega_target.store(wt);
@@ -960,8 +969,9 @@ extern "C" void app_main(void) {
       b = std::clamp(b, a + 2.0f, kHardMaxTripAmps);
       g_max_target.store(a);
       g_sampler.set_trip_amps(b);
-      fmt::print("#lim target={:.1f}A trip={:.1f}A plausible={:.1f}A (hard ceilings {:.0f}/{:.0f})\n",
-                 a, b, b + 3.0f, kHardMaxTargetAmps, kHardMaxTripAmps);
+      fmt::print(
+          "#lim target={:.1f}A trip={:.1f}A plausible={:.1f}A (hard ceilings {:.0f}/{:.0f})\n", a,
+          b, b + 3.0f, kHardMaxTargetAmps, kHardMaxTripAmps);
     } else if (sscanf(line, "vl %f", &a) == 1) {
       // vl <volts> — current-loop voltage clamp. Under load vq ~ iq*R + w*lam:
       // at 20 A the iR term alone is ~6.5 V, so the 8 V boot default saturates
@@ -981,7 +991,6 @@ extern "C" void app_main(void) {
       // is past the ADC rail and the FETs' sane region — not offered. Rdson
       // rises ~1.5-2x with junction temp, so the amp threshold DERATES as the
       // FETs heat: late-run OCP trips at lower current are expected physics.
-      static constexpr const char *kVdsEstAmps[5] = {"17-22", "20-26", "23-30", "26-33", "29-37"};
       std::error_code vec;
       auto gd = bsp.gate_driver();
       gd->set_vds_level(static_cast<Bsp::GateDriver::VdsLevel>(x), vec);
@@ -990,6 +999,7 @@ extern "C" void app_main(void) {
         fmt::print("! vds write failed (ocp=0x{:04x}{}{})\n", ocp.raw, vec ? ", " : "",
                    vec ? vec.message() : "");
       } else {
+        static constexpr const char *kVdsEstAmps[5] = {"17-22", "20-26", "23-30", "26-33", "29-37"};
         fmt::print("#vds {:.2f}V (~{} A cold, derates hot)\n", 0.06f + 0.01f * (float)x,
                    kVdsEstAmps[x]);
       }
@@ -1063,9 +1073,11 @@ extern "C" void app_main(void) {
       std::this_thread::sleep_for(2ms);
       float amps[3];
       for (int p = 0; p < 3; p++)
-        amps[p] = (g_sampler.read_raw_async(p) - g_sampler.raw_zero(p)) * g_sampler.amps_per_count();
+        amps[p] =
+            (g_sampler.read_raw_async(p) - g_sampler.raw_zero(p)) * g_sampler.amps_per_count();
       g_sampler.prime();
-      if (was_enabled) g_sampler.enable();
+      if (was_enabled)
+        g_sampler.enable();
       fmt::print("#async ia={:.3f} ib={:.3f} ic={:.3f} A\n", amps[0], amps[1], amps[2]);
     } else if (line[0] == 's') {
       auto st = g_sampler.stats();
