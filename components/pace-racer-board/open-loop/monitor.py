@@ -26,6 +26,7 @@ PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/cu.usbmodem2101"
 BAUD = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
 HIST = 200  # sparkline history depth
 PP   = 15   # pole pairs — must match kPolePairs in open_loop.cpp
+TARGET_RPM = 30.0  # must match kTargetVelocityRpm in main/open_loop.cpp
 
 _INV_SQRT3 = 1.0 / math.sqrt(3)
 
@@ -143,7 +144,7 @@ class Monitor(App):
                 yield Static("VELOCITY", classes="head")
                 yield Label("hall rpm    ---", id="hall-rpm",  classes="val")
                 yield Label("shaft rpm   ---", id="shaft-rpm", classes="val")
-                yield Label("target       10.0", id="target",   classes="val")
+                yield Label(f"target      {TARGET_RPM:5.1f}", id="target",   classes="val")
                 yield Label("angle       --- rad", id="angle", classes="val")
                 yield Rule()
                 yield Static("PHASE CURRENT", classes="head")

@@ -448,11 +448,15 @@ sudo ifconfig en7 inet 192.168.50.1 netmask 255.255.255.0
 
 ### For the ATOS / RTPS work
 
-1. **Budget packets, not bytes.** ~250 pps is the ceiling and it does not move
-   with load, payload size, or motor state. 1 kHz telemetry as one datagram per
-   sample is impossible; batched it is comfortable.
-2. **Batch aggressively.** 20 × 64 B samples per 1400 B datagram gives ~5000
-   samples/s — more than double what the USB console can do.
+1. **Budget packets, not bytes.** The ceiling is packet-rate-bound, not
+   bandwidth-bound: with the 32 KB cache (§14) it is ~795 pps at 64 B, falling
+   only to ~539 pps at 1400 B — 22x the payload costs just 1.5x in rate. 1 kHz
+   telemetry as one datagram per sample is still out of reach; batched it is
+   comfortable. (This item originally quoted a flat ~250 pps; that number
+   predated the cache fix — see the correction at the top.)
+2. **Batch aggressively.** 20 × 64 B samples per 1400 B datagram gives ~10 000
+   samples/s at the measured 539 pps — roughly five times what the USB console
+   can do.
 3. **Give the telemetry task a real priority.** At priority 0 it is the lowest
    thing in the system and starves under load. Most of the observed halving is
    this, not the transport.
@@ -481,8 +485,13 @@ sudo ifconfig en7 inet 192.168.50.1 netmask 255.255.255.0
 >   cause was not investigated.
 > - **The USB sweep stopped at 256 B.** The ethernet/USB bandwidth crossover is
 >   bracketed between 512 and 1024 B, not pinned down.
-> - **RTPS itself was never run.** UDP was used as a stand-in. Real DDS adds
->   discovery traffic, QoS state, and its own threads.
+> - **Inbound RTPS processing cost is not established.** RTPS itself HAS been
+>   run since this section was first written — discovery, publish-rate sweeps to
+>   the 303 Hz ceiling, and endpoint scaling are all real-DDS measurements (§14);
+>   the UDP work stands as the transport baseline underneath them. The remaining
+>   gap is the receive path: no external discoverable writer exercised the
+>   readers (their columns price only idle readers), and no real subscriber
+>   drove QoS/acknowledgment traffic.
 > - **The static IP is not persistent** on the host across reboots.
 
 ---
