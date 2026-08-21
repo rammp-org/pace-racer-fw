@@ -878,7 +878,12 @@ extern "C" void app_main(void) {
 
   // Control task before the sampler is notified — it must exist to be notified.
   // CPU1 keeps the 20 kHz control cadence off the console/stream tasks on CPU0.
-  xTaskCreatePinnedToCore(foc_task_fn, "foc", 4096, nullptr, 20, &g_foc_task, 1);
+  // Abort on failure: enabling the sampler and bridge with no task consuming
+  // samples would leave drive commands running open-loop.
+  if (xTaskCreatePinnedToCore(foc_task_fn, "foc", 4096, nullptr, 20, &g_foc_task, 1) != pdPASS) {
+    logger.error("Failed to create the FOC control task — not running");
+    return;
+  }
   g_sampler.set_notify_task(g_foc_task);
 
   driver->enable();
