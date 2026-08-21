@@ -1,0 +1,44 @@
+# Linker fragments for the FOC hot path.
+#
+# Wired in via LDFRAGMENTS in main/CMakeLists.txt. `noflash` places an archive's
+# text and rodata into internal RAM so it is not fetched through the flash cache.
+#
+# WHY THIS FILE IS SMALL, and what it can and cannot do:
+#
+# The sampling ISR and the FOC task both live in sensorless.o, because
+# foc_sampler.hpp is a header and espp's BldcDriver::set_pwm() is a header
+# inline — the bldc_driver archive itself is only 22 bytes of text, so placing it
+# here does almost nothing on its own. Linker fragments map whole
+# archives/objects, not individual functions, and sensorless.o is ~142 KB of
+# text, most of it cold console and command-parsing code. Placing it wholesale
+# would consume more than half the remaining internal RAM to speed up code that
+# runs once.
+#
+# So the hot functions are marked IRAM_ATTR directly (see foc_sampler.hpp and
+# foc_task_fn in sensorless.cpp), which is function-granular and drags the
+# inlined set_pwm along with them. This file covers the supporting archives that
+# the ISR path calls into and that ARE separate translation units.
+#
+# If the hot path is ever split into its own .cpp, add it here as:
+#     archive: libmain.a
+#     entries:
+#         foc_hot (noflash)
+#
+# MEASURED CONTEXT (2026-08-04): `late%` is NOT limited by cache or fetch speed.
+# Raising the instruction cache 16 KB -> 32 KB cut cmax from ~220 us to ~65 us and
+# isr_max from ~22 us to ~13 us, while late% did not move at all. late% is
+# dominated by ISR ENTRY latency (the `gap` test in foc_sampler.hpp), i.e. the
+# interrupt being held off by other drivers' critical sections. IRAM reduces how
+# long the ISR takes once it runs; it does not make it start sooner. The lever
+# for entry latency is MCPWM intr_priority, which espp's BldcDriver does not
+# currently expose.
+
+[mapping:foc_adc]
+archive: libespp__adc.a
+entries:
+    * (noflash)
+
+[mapping:foc_bldc_driver]
+archive: libespp__bldc_driver.a
+entries:
+    * (noflash)

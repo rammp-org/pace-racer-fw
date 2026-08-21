@@ -462,7 +462,10 @@ protected:
   static constexpr int ETH_PHY_ADDR = 1; // W5500 has a single fixed PHY address
 
   static constexpr auto DRIVER_SPI_HOST = SPI2_HOST;
-  static constexpr auto DRIVER_SPI_CLK_SPEED = 10 * 1000 * 1000; // max is 10 MHz
+  // Config/cal/fault traffic only (not a hot path). At the datasheet-max 10 MHz
+  // the SDO response arrives shifted by one bit on this board — run well inside
+  // the timing margin instead.
+  static constexpr auto DRIVER_SPI_CLK_SPEED = 1 * 1000 * 1000;
   static constexpr auto DRIVER_SPI_MISO_PIN = GPIO_NUM_13;
   static constexpr auto DRIVER_SPI_MOSI_PIN = GPIO_NUM_11;
   static constexpr auto DRIVER_SPI_SCLK_PIN = GPIO_NUM_12;
@@ -492,8 +495,9 @@ protected:
   static constexpr auto BLUE_LED_GPIO = GPIO_NUM_42;
   static constexpr auto GREEN_LED_GPIO = GPIO_NUM_41;
 
-  // TODO: figure this out and update it :)
-  static constexpr float CURRENT_SENSE_MV_TO_A = 1.0f;
+  // 1mΩ shunt, DRV8353 CSA at default GAIN_5: scale = 1 / (0.001Ω × 5 × 1000 mV/V) = 0.2 A/mV
+  // NOTE: change to 0.025 if GAIN_40 is explicitly set in the application
+  static constexpr float CURRENT_SENSE_MV_TO_A = 0.2f;
 
   /// Constructor
   PaceRacerBoard();
