@@ -767,8 +767,20 @@ private:
       // the corrupted one (1322/1322 refuted spikes in the post-hop slot, 0 in
       // the settled slot; 37% of post-hop conversions off by >3 A at idle).
       int ph = pending_ph_;
-      if (ph != px && ph != py)
-        ph = px; // phases reassigned since the pre-select
+      if (ph != px && ph != py) {
+        // The pair changed since the pre-select ('p x y' or auto-select): the
+        // mux is still physically parked on the OLD channel, so converting now
+        // and labeling the result as a member of the new pair would inject
+        // another phase's current into the control loop. Re-target the mux to
+        // the new pair and DISCARD this tick — the next ISR converts the newly
+        // selected channel after a full period of settling, exactly like every
+        // other pre-selected conversion.
+        adc_fast_select_channel(ADC_UNIT_1, cfg_.phase_channels[px]);
+        pending_ph_ = px;
+        if (cfg_.scope_pin != GPIO_NUM_NC)
+          gpio_set_level(cfg_.scope_pin, 0);
+        return false;
+      }
       adc_oneshot_hal_convert(&hal_, &raw);
       if (ph == py) {
         new_y = raw;
