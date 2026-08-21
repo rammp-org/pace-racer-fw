@@ -139,10 +139,24 @@ PaceRacerBoard::board_temperatures_c(PaceRacerBoard::TemperatureErrors &errors) 
   return readings;
 }
 
+bool PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_config) {
+  return init_motor(motor_config,
+                    DriverConfig{.power_supply_voltage = 5.0f, .limit_voltage = 5.0f});
+}
+
 bool PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_config,
                                 const PaceRacerBoard::DriverConfig &driver_config) {
   if (motor_ || motor_driver_ || encoder_ || gate_driver_) {
     logger_.error("Motor subsystem already initialized");
+    return false;
+  }
+
+  // Reject an out-of-range interrupt priority here rather than letting it fail
+  // deeper in the driver stack, where the error is harder to trace back to
+  // this call site. Levels 4-7 require assembly-only handlers.
+  if (driver_config.intr_priority < 0 || driver_config.intr_priority > 3) {
+    logger_.error("Invalid MCPWM timer interrupt priority {}; valid range is [0, 3]",
+                  driver_config.intr_priority);
     return false;
   }
 
@@ -206,6 +220,10 @@ bool PaceRacerBoard::init_motor(const PaceRacerBoard::BldcMotor::Config &motor_c
 
   motor_driver_config_.power_supply_voltage = driver_config.power_supply_voltage;
   motor_driver_config_.limit_voltage = driver_config.limit_voltage;
+  // The MCPWM timer is created inside BldcDriver, so its interrupt priority can
+  // only be set here — an application that samples from that timer's callback
+  // has no other way to reach it.
+  motor_driver_config_.intr_priority = driver_config.intr_priority;
   motor_driver_ = std::make_shared<BldcDriver>(motor_driver_config_);
 
   auto configured_motor = motor_config;
