@@ -127,12 +127,15 @@ public:
     adc_cali_raw_to_voltage(cali_, 3000, &mv_hi);
     const float mv_per_count = (float)(mv_hi - mv_lo) / 2000.0f;
     amps_per_count_ = mv_per_count * cfg_.mv_to_a;
-    trip_counts_ = (int)(cfg_.trip_amps / amps_per_count_);
+    trip_amps_.store(cfg_.trip_amps, std::memory_order_relaxed);
+    trip_counts_.store((int)(cfg_.trip_amps / amps_per_count_), std::memory_order_relaxed);
     max_jump_counts_ = (int)(kMaxJumpAmps / amps_per_count_);
-    max_plausible_counts_ = (int)((cfg_.trip_amps + kPlausibleMarginAmps) / amps_per_count_);
+    max_plausible_counts_.store((int)((cfg_.trip_amps + kPlausibleMarginAmps) / amps_per_count_),
+                                std::memory_order_relaxed);
     dbl_dis_counts_ = (int)(kDblDisagreeAmps / amps_per_count_);
     logger.info("ADC slope {:.4f} mV/count -> {:.5f} A/count; {:.0f} A trip = {} counts",
-                mv_per_count, amps_per_count_, cfg_.trip_amps, trip_counts_);
+                mv_per_count, amps_per_count_, cfg_.trip_amps,
+                trip_counts_.load(std::memory_order_relaxed));
 
     // Our own HAL view of ADC1. The BSP's OneshotAdc keeps the unit claim, pad
     // config and SAR power reference; this only adds a second way to program the
@@ -270,15 +273,18 @@ public:
 
   /// Retune the software trip at runtime ('lim' during the high-power
   /// staircase). The plausibility gate follows at trip + kPlausibleMarginAmps
-  /// so real current rising toward the new trip stays visible to it. Plain int
-  /// stores: single-word writes are atomic on Xtensa and the ISR tolerates one
-  /// sample judged against the old threshold.
+  /// so real current rising toward the new trip stays visible to it. The
+  /// thresholds are relaxed atomics: the console task writes them while the
+  /// ISR and stream task read them, so plain fields would be a data race the
+  /// compiler may cache or reorder. The ISR tolerates one sample judged
+  /// against the old threshold.
   void set_trip_amps(float amps) {
-    cfg_.trip_amps = amps;
-    trip_counts_ = (int)(amps / amps_per_count_);
-    max_plausible_counts_ = (int)((amps + kPlausibleMarginAmps) / amps_per_count_);
+    trip_amps_.store(amps, std::memory_order_relaxed);
+    trip_counts_.store((int)(amps / amps_per_count_), std::memory_order_relaxed);
+    max_plausible_counts_.store((int)((amps + kPlausibleMarginAmps) / amps_per_count_),
+                                std::memory_order_relaxed);
   }
-  float trip_amps() const { return cfg_.trip_amps; }
+  float trip_amps() const { return trip_amps_.load(std::memory_order_relaxed); }
 
   // Diagnostic capture: dump the ring of the last kCapN samples (pre-median raw
   // -> amps, and ISR elapsed us), oldest first, then re-arm. Freezes it first so
@@ -601,15 +607,16 @@ private:
     int db = b - raw_zero_[phase];
     if (db < 0)
       db = -db;
+    const int plaus = max_plausible_counts_.load(std::memory_order_relaxed);
     if (d <= dbl_dis_counts_) {
-      if (da > max_plausible_counts_ && db > max_plausible_counts_)
+      if (da > plaus && db > plaus)
         dbl_spike_agree_.fetch_add(1, std::memory_order_relaxed);
       return (a + b) >> 1;
     }
     dbl_dis_.fetch_add(1, std::memory_order_relaxed);
-    if (da > max_plausible_counts_)
+    if (da > plaus)
       dbl_spike_first_.fetch_add(1, std::memory_order_relaxed);
-    if (db > max_plausible_counts_)
+    if (db > plaus)
       dbl_spike_second_.fetch_add(1, std::memory_order_relaxed);
     const int ref = median_hist_[phase][2];
     int ea = a - ref;
@@ -661,7 +668,7 @@ private:
     int jump = raw - h[2];
     if (jump < 0)
       jump = -jump;
-    if (dev > max_plausible_counts_) {
+    if (dev > max_plausible_counts_.load(std::memory_order_relaxed)) {
       imp_count_[phase].fetch_add(1, std::memory_order_relaxed);
       raw = h[2]; // non-physical amplitude -> hold, no escape credit
     } else if (jump > max_jump_counts_) {
@@ -888,7 +895,7 @@ private:
     // Check it too — under rotating vectors the highest-current phase is often
     // the reconstructed one, and the measured pair alone would miss it.
     const int dz = -(dx + dy);
-    const int lim = trip_counts_;
+    const int lim = trip_counts_.load(std::memory_order_relaxed);
     const bool over = dx > lim || dx < -lim || dy > lim || dy < -lim || dz > lim || dz < -lim;
     over_count_ = over ? over_count_ + 1 : 0;
     if (over_count_ >= kTripConsecutive) {
@@ -935,15 +942,19 @@ private:
   TaskHandle_t notify_task_{nullptr};
 
   float amps_per_count_{0.0f};
-  int trip_counts_{0};
+  // Runtime-tunable safety thresholds ('lim'): written by the console task,
+  // read by the ISR (trip/plausibility gates) and the stream task (trip
+  // report), so they must be atomics — see set_trip_amps().
+  std::atomic<float> trip_amps_{0.0f};
+  std::atomic<int> trip_counts_{0};
   // Glitch rejection state — see median_filter for the full story (slew gate
   // with a bounded hold, then median-of-3). median_hist_[phase][2] is the last
   // accepted sample.
   int median_hist_[3][3] = {};
-  int reject_run_[3] = {0, 0, 0}; // consecutive slew-limit rejections per phase
-  int max_jump_counts_{0};        // slew-limit threshold in raw counts
-  int max_plausible_counts_{0};   // plausibility threshold in raw counts (vs zero)
-  int dbl_dis_counts_{0};         // pair-disagreement threshold in raw counts
+  int reject_run_[3] = {0, 0, 0};            // consecutive slew-limit rejections per phase
+  int max_jump_counts_{0};                   // slew-limit threshold in raw counts
+  std::atomic<int> max_plausible_counts_{0}; // plausibility threshold, raw counts (vs zero)
+  int dbl_dis_counts_{0};                    // pair-disagreement threshold in raw counts
 
   std::atomic<bool> dbl_{false}; // verification pair mode ('dbl 1'); normal op
                                  // is a single settled conversion (~8 us ISR)
