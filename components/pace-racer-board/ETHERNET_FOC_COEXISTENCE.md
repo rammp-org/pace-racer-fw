@@ -462,11 +462,15 @@ sudo ifconfig en7 inet 192.168.50.1 netmask 255.255.255.0
    this, not the transport.
 4. **Do not pin lwIP to CPU0.** Leave it at the default, or pin to CPU1. CPU0 is
    where the sampler ISR lives.
-5. **RTPS discovery will need attention.** DDS SPDP discovery is UDP multicast;
-   on a point-to-point link with no router or multicast querier it generally will
-   not work, so expect to configure static/unicast peers. Note also that
-   micro-ROS on ESP32 uses Micro XRCE-DDS, which is *not* RTPS on the wire — it
-   talks to an Agent that bridges to real DDS.
+5. **RTPS discovery worked out of the box — the expectation recorded here was
+   wrong.** DDS SPDP discovery is UDP multicast, and the working assumption was
+   that a point-to-point link with no router or multicast querier would not
+   carry it. Measured, it does: announcements arrived and parsed, even across
+   the subnet mismatch (IGMP snooping is a switched-network concern, not a
+   direct-cable one). Keep static/unicast peers in the toolbox only for
+   switched networks that filter multicast. Note also that micro-ROS on ESP32
+   uses Micro XRCE-DDS, which is *not* RTPS on the wire — it talks to an Agent
+   that bridges to real DDS.
 
 ---
 
@@ -540,6 +544,13 @@ separately:
 inside it.
 
 ### Effect on transport throughput
+
+> [!warning] RTPS rows measured on the pre-v1.2.0 espp rtps engine
+> The RTPS figures below (publish cost, ceiling, margin) predate the port to
+> the espp v1.2.0 engine (embeddedRTPS + typed pub/sub) — different engine,
+> different task structure — and are **not** validated v1.2.0 capacity. They
+> stand as the baseline the rerun will be compared against; the raw-UDP row is
+> engine-independent.
 
 | metric | before | after |
 | --- | --- | --- |

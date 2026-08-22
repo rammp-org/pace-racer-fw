@@ -88,30 +88,46 @@ private:
     uint8_t state = static_cast<uint8_t>((gpio_get_level(self->cfg_.pin_a) << 2) |
                                          (gpio_get_level(self->cfg_.pin_b) << 1) |
                                          gpio_get_level(self->cfg_.pin_c));
-    int sector = kHallToSector[state & 0x7];
-    self->cur_state_.store(state, std::memory_order_relaxed);
+    int sec = kHallToSector[state & 0x7];
+
+    if (sec < 0)
+      return; // 0b000 / 0b111 — ignore entirely
 
     int prev = self->prev_sector_;
-    if (sector >= 0 && prev >= 0) {
-      int delta = sector - prev;
-      if (delta > 3)
-        delta -= 6;
-      if (delta < -3)
-        delta += 6;
-      if (delta != 0) {
-        self->steps_.fetch_add(delta, std::memory_order_relaxed);
-        if (delta == 1 || delta == -1) {
-          // Only update velocity timestamps on single-sector steps.
-          // Multi-sector jumps (|delta| > 1) are noise — a real motor can only
-          // cross one hall boundary at a time at any sane speed.
-          self->t_prev_.store(self->t_last_.load(std::memory_order_relaxed),
-                              std::memory_order_relaxed);
-          self->t_last_.store(esp_timer_get_time(), std::memory_order_relaxed);
-        }
-      }
+    int64_t t_now = esp_timer_get_time();
+    int64_t t_last = self->t_last_.load(std::memory_order_relaxed);
+
+    // Fresh-start / resync: first reading after boot, OR stopped long enough
+    // that prev_sector_ may be stale from a transition masked by noise. Accept
+    // the current sector as the new reference without a delta check — this is
+    // the recovery path for a prev_sector_ frozen by a rejected jump.
+    if (prev < 0 || t_last == 0 || (t_now - t_last) > kVelocityTimeoutUs) {
+      self->cur_state_.store(state, std::memory_order_relaxed);
+      self->prev_sector_ = sec;
+      self->t_last_.store(t_now, std::memory_order_relaxed); // keep the timeout from re-firing
+      return;
     }
-    if (sector >= 0)
-      self->prev_sector_ = sector;
+
+    int delta = sec - prev;
+    if (delta > 3)
+      delta -= 6;
+    if (delta < -3)
+      delta += 6;
+
+    if (delta == 0)
+      return; // same sector, spurious edge
+
+    if (delta == 1 || delta == -1) {
+      // Valid single-sector step — update commutation state, position, velocity.
+      self->cur_state_.store(state, std::memory_order_relaxed);
+      self->steps_.fetch_add(delta, std::memory_order_relaxed);
+      self->t_prev_.store(t_last, std::memory_order_relaxed);
+      self->t_last_.store(t_now, std::memory_order_relaxed);
+      self->prev_sector_ = sec;
+    }
+    // Multi-sector jump: noise — a real rotor crosses one hall boundary at a
+    // time. Touch NOTHING (position, commutation state, prev_sector_); if a
+    // real transition was masked, the timeout path above resynchronizes.
   }
 
   Config cfg_;
