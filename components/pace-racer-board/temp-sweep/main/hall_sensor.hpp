@@ -26,7 +26,14 @@ public:
   void init() {
     uint8_t state = read_state();
     cur_state_.store(state, std::memory_order_relaxed);
-    prev_sector_ = kHallToSector[state & 0x7];
+    int boot_sec = kHallToSector[state & 0x7];
+    prev_sector_ = boot_sec;
+    // Seed steps from the boot sector so pole_pairs*get_mechanical_radians() ==
+    // get_radians() at all times, making the electrical angle absolute rather
+    // than relative to boot position — temp_sweep.cpp skips align_sensor
+    // calibration (zero_electric_offset = 1e-6f) on exactly this assumption.
+    if (boot_sec >= 0)
+      steps_.store(boot_sec, std::memory_order_relaxed);
 
     gpio_config_t cfg{
         .pin_bit_mask = (1ULL << cfg_.pin_a) | (1ULL << cfg_.pin_b) | (1ULL << cfg_.pin_c),
