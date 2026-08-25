@@ -4,6 +4,7 @@
 Everything here talks to a board running the halls-sensorless firmware over the
 USB console, or to its ethernet interface over the dock link.
 """
+import os
 import re
 import subprocess
 import sys
@@ -13,11 +14,15 @@ import serial
 
 # --- board / link configuration ---------------------------------------------
 
-PORT = "/dev/cu.usbmodem2101"
+# Machine-specific. Override without editing this file:
+#   export PR_PORT=/dev/cu.usbmodemXXXX
+#   export PR_IFACE=en7
+# The board's USB port name changes between hosts and even between replugs.
+PORT = os.environ.get("PR_PORT", "/dev/cu.usbmodem2101")
 BAUD = 115200
 
-BOARD_IP = "192.168.50.50"
-IFACE = "en7"  # the USB dock's ethernet port
+BOARD_IP = os.environ.get("PR_BOARD_IP", "192.168.50.50")
+IFACE = os.environ.get("PR_IFACE", "en7")  # the USB dock's ethernet port
 
 RTPS_DOMAIN = 0
 # DDSI-RTPS port maths: PB + DG*domain + dN

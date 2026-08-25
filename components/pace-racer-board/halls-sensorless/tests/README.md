@@ -7,6 +7,18 @@ from the other end.
 Findings from these tests are written up in
 [`../../ETHERNET_FOC_COEXISTENCE.md`](../../ETHERNET_FOC_COEXISTENCE.md).
 
+## Hardware validation runs
+
+Results from running this suite on real hardware live in `bench-runs/`. Start with
+[`bench-runs/2026-08-25/README.md`](bench-runs/2026-08-25/README.md) — it carries the
+current status of PR #11, every measurement, and the hazards worth knowing before you
+touch the bench.
+
+`host_sub/` is a real DDS subscriber for the telemetry topic. **`rtps_sub.py` below
+cannot receive anything from the espp v1.2.0 engine** — it is a passive multicast
+sniffer, and the current engine only transmits to matched readers. Any delivered-rate
+number needs `host_sub`; see [`host_sub/README.md`](host_sub/README.md).
+
 ## Setup
 
 ```sh
