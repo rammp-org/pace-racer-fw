@@ -181,6 +181,13 @@ class Brake:
         return (float(self.dp.query(":MEAS:VOLT? CH2")),
                 float(self.dp.query(":MEAS:CURR? CH2")))
 
+    def torque_rail_meas(self):
+        """CH1 = the torque sensor's 24 V/0.5 A rail. READ ONLY by policy —
+        nothing here ever writes CH1. Healthy draw is ~0.13 A; a reading near
+        0 A means the sensor is unpowered and every torque number is garbage."""
+        return (float(self.dp.query(":MEAS:VOLT? CH1")),
+                float(self.dp.query(":MEAS:CURR? CH1")))
+
     def close(self):
         self.dp.close()
 
@@ -250,3 +257,80 @@ class Scope:
     def close(self):
         try: self.sock.close()
         except OSError: pass
+
+
+class Psu:
+    """BK MR3K160120 — the 48 V VM rail, SCPI over USB serial.
+
+    **Vset is never written from this class.** The rail voltage is set on the
+    front panel and the entire characterized envelope (fw limits, guard trips,
+    thermal plateaus, the 514 W peak) assumes 48 V. Iset and the output state
+    are fair game: runs raise Iset to 15-20 A and restore IDLE_ISET after.
+    """
+    IDLE_ISET = 8.0
+    MAX_ISET = 20.0
+    VM_MIN = 40.0  # below this the board will not enumerate
+
+    def __init__(self, port=PSU):
+        self.s = serial.Serial(port, 115200, timeout=1.0)
+        time.sleep(0.2)
+
+    def q(self, c, wait=0.25):
+        self.s.reset_input_buffer()
+        self.s.write((c + "\n").encode())
+        time.sleep(wait)
+        return self.s.read(200).decode(errors="replace").strip()
+
+    def meas(self):
+        """(volts, amps) actually delivered on the VM rail."""
+        try:
+            v = float(self.q("MEAS:VOLT?") or "nan")
+        except ValueError:
+            v = float("nan")
+        try:
+            i = float(self.q("MEAS:CURR?") or "nan")
+        except ValueError:
+            i = float("nan")
+        return v, i
+
+    def iset(self, amps):
+        amps = max(0.5, min(self.MAX_ISET, float(amps)))
+        self.s.write(("CURR %.3f\n" % amps).encode())
+        time.sleep(0.3)
+        return amps
+
+    def iset_read(self):
+        try:
+            return float(self.q("CURR?") or "nan")
+        except ValueError:
+            return float("nan")
+
+    def output(self, on):
+        self.s.write(b"OUTP ON\n" if on else b"OUTP OFF\n")
+        time.sleep(0.3)
+
+    def output_on(self):
+        r = self.q("OUTP?").upper()
+        return r.startswith("1") or r.startswith("ON")
+
+    def wait_vm(self, timeout=25.0, rising=True):
+        """Block until the rail is up (rising) or collapsed (falling).
+        Returns the last measured voltage."""
+        t0 = time.time()
+        v = float("nan")
+        while time.time() - t0 < timeout:
+            time.sleep(1.0)
+            v, _ = self.meas()
+            if v != v:
+                continue
+            if rising and v >= self.VM_MIN:
+                return v
+            if not rising and v < 5.0:
+                return v
+        return v
+
+    def close(self):
+        try:
+            self.s.close()
+        except OSError:
+            pass

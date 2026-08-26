@@ -11,6 +11,43 @@ published as a Claude artifact. Source data: `../logs/figs-20260819/`
 (committed). The older hall-campaign report is `../report/index.html`
 (`../compile_report.py`).
 
+## Use the MCP tools, not the raw values
+
+`bench_mcp.py` is an MCP server (registered via a local `.mcp.json`, below) that
+wraps everything below. Prefer it over re-deriving setpoints from this file:
+
+| Want to | Tool |
+|---|---|
+| See the whole stand | `bench_status` (read-only) |
+| Power up + arm | `bench_up` (`arm_profile` normal / power) |
+| Shut down safely | `bench_down` |
+| Re-arm after a reset | `bench_arm` |
+| Load the wheel | `bench_brake_set` / `bench_brake_off` |
+| VM current limit | `bench_psu_iset` (Vset is unreachable, by design) |
+| Measure | `bench_bus_read`, `bench_torque_read`, `bench_telemetry` |
+| Talk to the console | `bench_console` |
+| Mute console | `bench_usb_replug` |
+| Latched DRV fault | `bench_vm_recover` |
+
+It is **setup + measure only** — it will not spin the motor. Motion still
+belongs in a script with a watchdog loop (crib `fig6_hold.py`). The BK's Vset
+is not writable from any tool: the whole characterized envelope assumes 48 V.
+
+`.mcp.json` is deliberately **not committed** — it launches the server by
+absolute path, and the stand only exists on the machine wired to it. To
+register the server, drop this at the repo root with the path fixed up:
+
+```json
+{
+  "mcpServers": {
+    "bench": {
+      "command": "/usr/bin/python3",
+      "args": ["<repo>/components/pace-racer-board/halls-sensorless/bench/bench_mcp.py"]
+    }
+  }
+}
+```
+
 ## Hardware map
 
 | Thing | Where / how | Notes |
