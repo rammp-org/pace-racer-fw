@@ -1,10 +1,28 @@
 #!/usr/bin/env python3
 """Receive RTPS user-data telemetry from the board and report the arrival rate.
 
-Joins the RTPS user multicast group on the dock interface, parses the RTPS
-header + DATA submessage far enough to reach the CDR payload, and decodes the
-telemetry sample. Decoding (rather than just counting bytes) verifies the values
-survive the round trip.
+!! DOES NOT WORK ON THE espp v1.2.0 ENGINE -- USE tests/host_sub/ INSTEAD !!
+
+This is a PASSIVE MULTICAST SNIFFER: it joins the user multicast group and waits.
+That worked on the pre-v1.2.0 engine, whose `use_multicast_for_user_data` mode
+sprayed user data at the group with no reader required. v1.2.0 removed it and
+transmits ONLY to matched readers -- and this script never announces itself, so
+it is never discovered, so nothing is ever sent to it. The delivered rate always
+reads 0.0 Hz, and so does the `rx Hz` column of sweep_rtps.py / sweep_endpoints.py,
+which call measure() below.
+
+Verified on hardware 2026-08-25: user data is NOT multicast even with a real
+subscriber attached and matched -- the board unicasts to that reader's own
+locator. So no amount of listening here will help.
+
+decode() is ALSO wrong independently of the above: it assumes 15 contiguous
+floats then a trailing uint8 state, but the wire puts `state` in a 4-byte slot at
+offset 4, shifting every later field. Read as written it silently returns `flux`
+as temps[0] and a padding byte as `state`. Left unfixed because the script cannot
+receive anything to decode; tests/host_sub/ uses the Sample struct directly and
+lets espp's own reflection handle the layout, so it cannot drift.
+
+Kept for reference and for the RTPS header/DATA parsing, which is still correct.
 
 Usage:
     rtps_sub.py <seconds> [--decode] [--quiet]
@@ -115,6 +133,10 @@ def main():
     pkts, decoded, total, el = measure(dur, show)
     if el <= 0:
         print("RTPS user data: nothing arrived")
+        print("  This script CANNOT receive on the espp v1.2.0 engine -- it is a passive")
+        print("  multicast sniffer, and v1.2.0 unicasts user data only to matched readers.")
+        print("  Use tests/host_sub/ for any delivered-rate measurement. See the module")
+        print("  docstring and tests/host_sub/README.md.")
         return
     if "--quiet" not in sys.argv:
         print("RTPS user data: %d pkts (%d decoded) %d B in %.2fs -> %.1f Hz, %.1f kB/s, %.0f B/pkt"
