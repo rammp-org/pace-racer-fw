@@ -452,7 +452,7 @@ def build_body():
 </section>
 <footer class="rpt-foot">Compiled by <code>compile_report.py</code> from
 <code>data-reports/logs/</code> · branch
-<code>feat/ethernet-rtps-telemetry</code></footer>
+<code>feat/bench-campaign</code></footer>
 """)
     return "".join(s)
 
