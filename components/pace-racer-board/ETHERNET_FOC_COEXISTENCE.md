@@ -3,7 +3,7 @@ title: Ethernet / FOC Coexistence Testing
 date: 2026-08-03
 branch: feat/eth-foc-coexist
 hardware: PACE RACER (ESP32-S3) + WIZnet W5500 + DRV8353
-status: complete
+status: superseded-in-part (RTPS figures; see 2026-08-25 rerun)
 tags:
   - pace-racer
   - ethernet
@@ -20,6 +20,28 @@ tags:
 > **Ethernet and FOC coexist fine.** Speed regulation is unaffected by network
 > traffic at any load tested. What traffic costs is current-sample quality and
 > telemetry throughput.
+
+> [!important] SUPERSEDED 2026-08-25 — the espp v1.2.0 rerun has been done
+> Every RTPS figure in this document was measured on the **pre-v1.2.0** engine.
+> The rerun this document anticipates has now been run on hardware, against a
+> real DDS subscriber. The headline conclusion above **survives unchanged** —
+> `coalesce` stayed at 1.00 in every condition, idle and driving under load —
+> but the RTPS capacity numbers are all superseded:
+>
+> | metric | this doc (pre-port) | v1.2.0 rerun |
+> | --- | --- | --- |
+> | RTPS ceiling | 303 Hz | **485 Hz** |
+> | publish cost (`pub_us`) | 3,200–3,839 us | **377–569 us** |
+> | per-writer cost | ~11.4 ms | **~114 us** |
+> | writer scaling | "linear to 8" | **fails to start at >=5** |
+> | margin over the 10 Hz target | 30x | **~48x** |
+>
+> Two behaviours the rerun found that this document does not describe:
+> **delivery collapses to zero above ~485 Hz with `pub_fail` reporting 0**, and
+> the telemetry stream task starves ~25% under saturating traffic.
+>
+> Full write-up, raw data and re-run scripts:
+> [`halls-sensorless/tests/bench-runs/2026-08-25/`](halls-sensorless/tests/bench-runs/2026-08-25/README.md)
 
 > [!danger] REVISED 2026-08-04 — the original transport ceilings were CPU-bound, not hardware
 > This note originally concluded that the transmit ceiling was a flat ~250
@@ -489,13 +511,19 @@ sudo ifconfig en7 inet 192.168.50.1 netmask 255.255.255.0
 >   cause was not investigated.
 > - **The USB sweep stopped at 256 B.** The ethernet/USB bandwidth crossover is
 >   bracketed between 512 and 1024 B, not pinned down.
-> - **Inbound RTPS processing cost is not established.** RTPS itself HAS been
->   run since this section was first written — discovery, publish-rate sweeps to
->   the 303 Hz ceiling, and endpoint scaling are all real-DDS measurements (§14);
->   the UDP work stands as the transport baseline underneath them. The remaining
->   gap is the receive path: no external discoverable writer exercised the
->   readers (their columns price only idle readers), and no real subscriber
->   drove QoS/acknowledgment traffic.
+> - **Inbound RTPS processing cost is not established.** Still true, and the
+>   2026-08-25 rerun did not close it: closing it needs an external discoverable
+>   **writer** the board can subscribe to, which still does not exist. The reader
+>   columns continue to price only idle readers.
+> - **CORRECTION (2026-08-25): the pre-port sweeps were NOT real-DDS
+>   measurements.** This bullet previously claimed discovery, the publish-rate
+>   sweeps to the 303 Hz ceiling, and endpoint scaling were real-DDS. They were
+>   not — nothing was ever subscribed. `tests/rtps_sub.py` is a passive multicast
+>   sniffer that never announces itself, so no reader ever matched and the writer
+>   transmitted nothing; the old engine's `use_multicast_for_user_data` mode was
+>   what made those packets visible at all, and v1.2.0 removed it. The delivered
+>   rates in the rerun are the first measured against a real matched subscriber
+>   (`tests/host_sub/`).
 > - **The static IP is not persistent** on the host across reboots.
 
 ---
@@ -545,12 +573,14 @@ inside it.
 
 ### Effect on transport throughput
 
-> [!warning] RTPS rows measured on the pre-v1.2.0 espp rtps engine
+> [!warning] RTPS rows measured on the pre-v1.2.0 espp rtps engine — SUPERSEDED
 > The RTPS figures below (publish cost, ceiling, margin) predate the port to
 > the espp v1.2.0 engine (embeddedRTPS + typed pub/sub) — different engine,
-> different task structure — and are **not** validated v1.2.0 capacity. They
-> stand as the baseline the rerun will be compared against; the raw-UDP row is
-> engine-independent.
+> different task structure. **The rerun has since been done** (2026-08-25): the
+> v1.2.0 ceiling is 485 Hz at 377–569 us publish cost, ~48x margin. The rows
+> below are retained as the pre-port baseline the rerun was compared against.
+> The raw-UDP row is engine-independent and was re-confirmed (797 pps at
+> 1400 B, 1457 pps at 64 B, zero loss).
 
 | metric | before | after |
 | --- | --- | --- |
