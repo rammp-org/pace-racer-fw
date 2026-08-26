@@ -1,0 +1,94 @@
+Subject: [PATCH] rtps: honor interface_address for outgoing multicast
+
+EsppTransport never passes multicast_interface to the socket layer -- not on
+sends, not on group joins -- so on a multi-homed host every RTPS multicast
+follows the OS default route. On a developer laptop that is usually Wi-Fi, so
+SPDP announcements never reach a peer sitting on a second NIC (e.g. a wired
+point-to-point link to a board) and discovery fails silently in one direction:
+the host receives the board's announcements but the board never sees the host's,
+so no reader ever matches and the writer transmits nothing.
+
+espp::Socket already supports this (SendConfig::multicast_interface and the
+add_multicast_group interface_address argument, both documented for exactly this
+case) -- the RTPS transport simply never wires it up. This threads the
+participant's already-resolved interface address through to both.
+
+Invisible on a single-homed Linux CI box; fatal on a multi-homed host.
+
+Apply from the halls-sensorless app directory:
+    patch -p1 -d managed_components < tests/host_sub/espp-multicast-interface.patch
+
+NOTE: managed_components/ is gitignored and is re-fetched by the IDF component
+manager, so this must be re-applied after any component update. It is needed
+only to run the host-side subscriber; the firmware itself is unaffected.
+
+--- a/espp__rtps/include/rtps/communication/EsppTransport.hpp
++++ b/espp__rtps/include/rtps/communication/EsppTransport.hpp
+@@ -38,6 +38,13 @@
+ #include <vector>
+ 
+ namespace rtps {
++
++/// Local NIC used for OUTGOING multicast (IP_MULTICAST_IF) and for multicast
++/// group joins. Empty = let the OS pick the default route. Required on
++/// multi-homed hosts, where the default route (e.g. Wi-Fi) is not the NIC the
++/// RTPS peer is on. LOCAL TEST PATCH.
++void setRtpsMulticastInterface(const std::string &ip);
++
+ 
+ class EsppTransport : public espp::BaseComponent {
+ public:
+
+--- a/espp__rtps/src/communication/EsppTransport.cpp
++++ b/espp__rtps/src/communication/EsppTransport.cpp
+@@ -73,6 +73,11 @@
+ }
+ 
+ } // namespace
++
++// LOCAL TEST PATCH: multi-homed multicast NIC selection (see header).
++static std::string g_multicastInterface;
++void rtps::setRtpsMulticastInterface(const std::string &ip) { g_multicastInterface = ip; }
++
+ 
+ EsppTransport::EsppTransport(RxCallback callback, void *args)
+     : espp::BaseComponent("RtpsTransport", espp::Logger::Verbosity::WARN)
+@@ -195,7 +200,7 @@
+     }
+ 
+     for (const auto &group : m_multicastGroups) {
+-      (void)channel.socket->add_multicast_group(group);
++      (void)channel.socket->add_multicast_group(group, g_multicastInterface);
+     }
+     return &channel;
+   }
+@@ -281,7 +286,7 @@
+       continue;
+     }
+     has_active_channels = true;
+-    any_joined = channel.socket->add_multicast_group(group) || any_joined;
++    any_joined = channel.socket->add_multicast_group(group, g_multicastInterface) || any_joined;
+   }
+ 
+   if (!has_active_channels) {
+@@ -323,6 +328,7 @@
+   send_config.ip_address = ip4ToString(destination);
+   send_config.port = info.destPort;
+   send_config.is_multicast_endpoint = isMulticastAddress(info.destAddr);
++  send_config.multicast_interface = g_multicastInterface;
+ 
+   (void)channel->socket->send(info.payload, send_config);
+ }
+
+--- a/espp__rtps/src/rtps_participant.cpp
++++ b/espp__rtps/src/rtps_participant.cpp
+@@ -151,6 +151,9 @@
+     return false;
+   }
+ 
++  // LOCAL TEST PATCH: pin outgoing multicast + joins to this NIC.
++  rtps::setRtpsMulticastInterface(fmt::format("{}.{}.{}.{}", ip_bytes[0], ip_bytes[1],
++                                              ip_bytes[2], ip_bytes[3]));
+   domain_ = std::make_unique<rtps::Domain>(ip_bytes);
+   // Fresh liveness token for this run (a prior stop() left the old one flipped).
+   live_ = std::make_shared<Liveness>();

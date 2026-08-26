@@ -1,3 +1,8 @@
 dependencies:
   idf:
     version: '>=5.0'
+  # RTPS/DDS participant (SPDP + SEDP discovery, best-effort user data). Used to
+  # test whether the existing 10 Hz telemetry stream can be carried over RTPS
+  # instead of the USB console. 1.2.0 is the embeddedRTPS-backed rewrite with
+  # the typed pub/sub layer (espp::Publisher/Subscriber) this app uses.
+  espp/rtps: '>=1.2.0'

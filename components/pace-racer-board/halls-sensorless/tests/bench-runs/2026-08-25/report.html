@@ -1,0 +1,1471 @@
+<title>PR #11 Bench Results</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+
+<style>
+:root {
+  color-scheme: light;
+  --plane:        #f7f8f6;
+  --surface:      #fcfcfb;
+  --surface-sunk: #f1f2ef;
+  --ink:          #0b0b0b;
+  --ink-2:        #52514e;
+  --ink-muted:    #898781;
+  --grid:         #e1e0d9;
+  --rule:         #c3c2b7;
+  --hairline:     rgba(11,11,11,0.10);
+  --accent:       #2a78d6;
+  --series-1:     #2a78d6;
+  --series-2:     #eb6834;
+  --series-3:     #1baf7a;
+  --ok:           #0ca30c;
+  --warn:         #fab219;
+  --bad:          #d03b3b;
+  --ok-ink:       #006300;
+  --bad-ink:      #a92c2c;
+  --warn-ink:     #7a5300;
+
+  --f-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane:        #0d0d0d;
+    --surface:      #1a1a19;
+    --surface-sunk: #141413;
+    --ink:          #ffffff;
+    --ink-2:        #c3c2b7;
+    --ink-muted:    #898781;
+    --grid:         #2c2c2a;
+    --rule:         #383835;
+    --hairline:     rgba(255,255,255,0.10);
+    --accent:       #3987e5;
+    --series-1:     #3987e5;
+    --series-2:     #d95926;
+    --series-3:     #199e70;
+    --ok:           #0ca30c;
+    --warn:         #fab219;
+    --bad:          #d03b3b;
+    --ok-ink:       #4cc44c;
+    --bad-ink:      #ee7a7a;
+    --warn-ink:     #e0a615;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane:        #0d0d0d;
+  --surface:      #1a1a19;
+  --surface-sunk: #141413;
+  --ink:          #ffffff;
+  --ink-2:        #c3c2b7;
+  --ink-muted:    #898781;
+  --grid:         #2c2c2a;
+  --rule:         #383835;
+  --hairline:     rgba(255,255,255,0.10);
+  --accent:       #3987e5;
+  --series-1:     #3987e5;
+  --series-2:     #d95926;
+  --series-3:     #199e70;
+  --ok:           #0ca30c;
+  --warn:         #fab219;
+  --bad:          #d03b3b;
+  --ok-ink:       #4cc44c;
+  --bad-ink:      #ee7a7a;
+  --warn-ink:     #e0a615;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--plane);
+  color: var(--ink);
+  font-family: var(--f-serif);
+  font-size: 17px;
+  line-height: 1.65;
+  margin: 0;
+  padding: 0 24px 96px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap { max-width: 1080px; margin: 0 auto; }
+.col  { max-width: 660px; }
+
+/* ---------- masthead ---------- */
+.mast {
+  padding: 56px 0 28px;
+  border-bottom: 2px solid var(--ink);
+  margin-bottom: 40px;
+}
+.eyebrow {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin: 0 0 18px;
+}
+h1 {
+  font-family: var(--f-sans);
+  font-weight: 700;
+  font-size: clamp(30px, 5vw, 46px);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  margin: 0 0 18px;
+  max-width: 20ch;
+}
+.standfirst {
+  font-size: 19px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 62ch;
+  margin: 0 0 26px;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  color: var(--ink-muted);
+}
+.meta b { color: var(--ink-2); font-weight: 500; }
+
+/* ---------- headings ---------- */
+h2 {
+  font-family: var(--f-sans);
+  font-weight: 600;
+  font-size: 27px;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  text-wrap: balance;
+  margin: 64px 0 6px;
+  padding-top: 22px;
+  border-top: 1px solid var(--rule);
+}
+h2.nolead { margin-top: 44px; }
+h3 {
+  font-family: var(--f-sans);
+  font-weight: 600;
+  font-size: 18.5px;
+  letter-spacing: -0.008em;
+  text-wrap: balance;
+  margin: 40px 0 8px;
+}
+.sectionnote {
+  font-family: var(--f-sans);
+  font-size: 14px;
+  color: var(--ink-muted);
+  margin: 0 0 26px;
+}
+p { margin: 0 0 18px; }
+.col p, .col ul { max-width: 68ch; }
+ul { margin: 0 0 18px; padding-left: 22px; }
+li { margin-bottom: 9px; }
+strong { font-weight: 600; }
+code {
+  font-family: var(--f-mono);
+  font-size: 0.87em;
+  background: var(--surface-sunk);
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  padding: 1px 5px;
+}
+
+/* ---------- verdict chips ---------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--f-sans);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 3px 10px 3px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  white-space: nowrap;
+  vertical-align: 2px;
+}
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.chip.ok   { color: var(--ok-ink); }
+.chip.ok .dot   { background: var(--ok); }
+.chip.bad  { color: var(--bad-ink); }
+.chip.bad .dot  { background: var(--bad); }
+.chip.warn { color: var(--warn-ink); }
+.chip.warn .dot { background: var(--warn); }
+
+/* ---------- callout ---------- */
+.callout {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+  padding: 20px 24px;
+  margin: 0 0 30px;
+}
+.callout.crit { border-left-color: var(--bad); }
+.callout h3 { margin-top: 0; }
+.callout p:last-child { margin-bottom: 0; }
+
+/* ---------- stat tiles ---------- */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+  margin: 30px 0 34px;
+}
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 16px 18px 15px;
+}
+.tile .k {
+  font-family: var(--f-sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  margin-bottom: 9px;
+}
+.tile .v {
+  font-family: var(--f-sans);
+  font-size: 31px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.tile .v .u { font-size: 15px; font-weight: 500; color: var(--ink-2); margin-left: 3px; }
+.tile .sub {
+  font-family: var(--f-sans);
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-top: 8px;
+  line-height: 1.4;
+}
+
+/* ---------- figures & charts ---------- */
+figure {
+  margin: 34px 0 38px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 22px 24px 18px;
+}
+figcaption {
+  font-family: var(--f-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  margin-top: 14px;
+  padding-top: 13px;
+  border-top: 1px solid var(--grid);
+  max-width: 88ch;
+}
+figcaption b {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.chartbox { overflow-x: auto; }
+svg.chart { display: block; width: 100%; height: auto; min-width: 520px; }
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-family: var(--f-sans);
+  font-size: 13px;
+  color: var(--ink-2);
+  margin-bottom: 12px;
+}
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend i { width: 13px; height: 13px; border-radius: 2px; display: inline-block; flex: none; }
+
+/* svg text roles */
+.ax-title { font-family: var(--f-sans); font-size: 12.5px; font-weight: 600; fill: var(--ink-2); letter-spacing: 0.01em; }
+.ax-tick  { font-family: var(--f-mono); font-size: 11px; fill: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.val-lbl  { font-family: var(--f-mono); font-size: 11px; font-weight: 500; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.fail-lbl { font-family: var(--f-sans); font-size: 10.5px; font-weight: 600; fill: var(--bad-ink); letter-spacing: 0.04em; }
+.gridline { stroke: var(--grid); stroke-width: 1; }
+.axisline { stroke: var(--rule); stroke-width: 1; }
+
+/* ---------- tables ---------- */
+.tablebox { overflow-x: auto; margin: 26px 0 32px; }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 560px;
+  font-family: var(--f-sans);
+  font-size: 14px;
+  background: var(--surface);
+}
+caption {
+  caption-side: top;
+  text-align: left;
+  font-family: var(--f-sans);
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--ink);
+  padding: 0 0 10px;
+}
+th, td {
+  text-align: left;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--grid);
+}
+thead th {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--rule);
+  vertical-align: bottom;
+}
+td.n, th.n { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+thead th.n { font-family: var(--f-sans); }
+tbody tr:last-child td { border-bottom: none; }
+tr.flag td { background: color-mix(in srgb, var(--bad) 7%, transparent); }
+td .mini { font-family: var(--f-sans); font-size: 12px; color: var(--ink-muted); }
+
+/* ---------- console blocks ---------- */
+pre {
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  line-height: 1.62;
+  background: var(--surface-sunk);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  margin: 0 0 22px;
+  color: var(--ink-2);
+}
+pre b { color: var(--ink); font-weight: 600; }
+pre .c { color: var(--ink-muted); }
+
+/* ---------- glossary ---------- */
+.gloss {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 0 34px;
+  margin-top: 22px;
+}
+.gitem {
+  padding: 13px 0;
+  border-top: 1px solid var(--grid);
+}
+.gitem dt {
+  font-family: var(--f-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.gitem dd {
+  margin: 0;
+  font-family: var(--f-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+dl { margin: 0; }
+
+footer {
+  margin-top: 72px;
+  padding-top: 22px;
+  border-top: 1px solid var(--rule);
+  font-family: var(--f-sans);
+  font-size: 13px;
+  color: var(--ink-muted);
+  max-width: 76ch;
+}
+</style>
+
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Hardware bench report · rammp-org/pace-racer-fw</p>
+  <h1>Ethernet &amp; RTPS telemetry on the 20 kHz FOC loop</h1>
+  <p class="standfirst">
+    Host-side tests run against PR #11 on the real motor-control board, motor idle and
+    spinning under load. Speed regulation is untouched by saturating traffic — but the
+    delivered rate falls off a cliff above 485 Hz with no error reported, and it took an
+    espp bug fix before a subscriber could receive anything at all.
+  </p>
+  <div class="meta">
+    <span><b>PR</b> #11 · feat/ethernet-rtps-telemetry</span>
+    <span><b>Firmware</b> v0.1.0-30-ga3da403</span>
+    <span><b>Toolchain</b> ESP-IDF v6.0.0</span>
+    <span><b>Run</b> 2026-08-24/25</span>
+    <span><b>Motor</b> idle + 100 rpm @ 4 A loaded</span>
+  </div>
+</header>
+
+<div class="tiles">
+  <div class="tile">
+    <div class="k">Coalesce, all conditions</div>
+    <div class="v">1.00</div>
+    <div class="sub">Never missed a tick — idle, spinning, or driving under load</div>
+  </div>
+  <div class="tile">
+    <div class="k">Speed regulation, quiet → saturated</div>
+    <div class="v">0.83<span class="u">→0.82</span></div>
+    <div class="sub">rpm standard deviation at 100 rpm / 4 A — unchanged by traffic</div>
+  </div>
+  <div class="tile">
+    <div class="k">Lossless up to</div>
+    <div class="v">485<span class="u">Hz</span></div>
+    <div class="sub">Exact rate tracking to 300 Hz; saturates at 485</div>
+  </div>
+  <div class="tile">
+    <div class="k">Delivered at 2000 Hz</div>
+    <div class="v" style="color:var(--bad-ink)">0.0<span class="u">Hz</span></div>
+    <div class="sub">734/s published, none arrive — and <code>pub_fail</code> stays 0</div>
+  </div>
+  <div class="tile">
+    <div class="k">Max working writers</div>
+    <div class="v" style="color:var(--bad-ink)">4</div>
+    <div class="sub">PR documents linear scaling to 8; 5 and above fail to start</div>
+  </div>
+</div>
+
+<div class="col">
+<h2 class="nolead">Two corrections to earlier findings</h2>
+<div class="callout crit">
+  <h3>An earlier pass ran against the wrong firmware</h3>
+  <p>
+    The board arrived carrying an older build; the reflash inside
+    <code>sweep_endpoints.py</code> is what actually installed the PR build, partway
+    through the session. It was caught because <code>rtpstat</code> printed the field
+    names <code>parts=</code>/<code>eps=</code> — a string that does not exist anywhere
+    in the PR binary (<code>strings</code> on the flashed image finds only
+    <code>wmatch=</code>/<code>rmatch=</code>).
+  </p>
+  <p>
+    Those results are discarded. Everything below was measured on firmware verified by
+    boot banner <em>and</em> by string-matching the flashed image. The pre-port build
+    survives in one place only — the engine comparison in Figure 2 — where it is a
+    legitimate before/after baseline and is labelled as such.
+  </p>
+</div>
+<div class="callout">
+  <h3>"Publishing got 9× cheaper" was measured with nothing listening</h3>
+  <p>
+    Those <code>pub_us</code> figures were taken with <strong>no matched reader</strong>,
+    so <code>publish()</code> serialized the sample and then transmitted nothing — the
+    writer's proxy list was empty. Comparing that against the pre-port engine, which
+    <em>was</em> transmitting, flattered the new engine.
+  </p>
+  <p>
+    Figure 2 now uses with-subscriber costs throughout. The real improvement is
+    <strong>about 6.7×</strong> (3839 µs → 569 µs at 10 Hz), not 9×.
+  </p>
+</div>
+</div>
+
+<div class="col">
+<h2>Why nothing was arriving — and whose fault it was</h2>
+<p>
+  For most of this session <code>rtps_sub.py</code> reported <code>nothing arrived</code>
+  and the board sat at <code>wmatch=0</code>. Two independent causes, and
+  <strong>neither is a defect in this PR</strong>.
+</p>
+
+<h3><span class="chip ok"><span class="dot"></span>Correct behavior</span> &nbsp;The board only transmits to matched readers</h3>
+<p>
+  <code>StatelessWriter::progress()</code> iterates the writer's reader proxies. With none
+  matched the loop body never executes and no packet leaves the board — while
+  <code>pub_ok</code> still counts up, because the <code>publish()</code> call itself
+  succeeded. That is textbook RTPS.
+</p>
+<pre>if (m_proxies.getNumElements() == 0) {
+    SLW_LOG("No proxy!");          <span class="c">// logs, then falls through</span>
+}
+for (const auto &amp;proxy : m_proxies) {
+    <span class="c">...build packet, send...   // never executes with zero proxies</span>
+}</pre>
+<p>
+  The old engine had a <code>use_multicast_for_user_data</code> escape hatch that sprayed
+  user data at the multicast group with no reader required. The upstream espp v1.2.0
+  rewrite removed it. <code>rtps_sub.py</code> is a passive multicast sniffer that never
+  announces itself, so it is never discovered, so it is never sent anything. The PR ported
+  <em>to</em> that engine; it did not cause this.
+</p>
+
+<h3><span class="chip bad"><span class="dot"></span>espp bug</span> &nbsp;RTPS multicast ignores the configured interface</h3>
+<p>
+  Writing a proper DDS subscriber was not enough — it still failed to match. The cause is
+  in espp itself: <code>EsppTransport</code> never passes <code>multicast_interface</code>
+  to the socket layer, on sends or on group joins. On a multi-homed host every RTPS
+  multicast therefore follows the <strong>default route</strong>. On this Mac that is
+  Wi-Fi, so the subscriber's SPDP announcements went out over Wi-Fi and never touched the
+  bench cable. <code>interface_address</code> was honored for binding and receiving, and
+  silently ignored for transmitting.
+</p>
+<p>
+  The socket layer already supports this and its own documentation describes this exact
+  case — <em>"set it on multi-homed hosts to send multicast out a specific NIC (e.g. wired
+  vs Wi-Fi)"</em>. The transport just never wires it up. Invisible on a single-homed Linux
+  CI box; fatal on a developer laptop. A three-line local patch fixed it:
+</p>
+<pre><span class="c">before — SPDP seen on the wire</span>
+  192.168.50.50    BOARD       7 pkts    <span class="c">(host absent entirely)</span>
+
+<span class="c">after</span>
+  <b>192.168.50.1     HOST-SUB   14 pkts</b>
+  192.168.50.50    BOARD      10 pkts
+[RtpsTopicData]: Received unicast locator: 192.168.50.50:7411</pre>
+<p>
+  With that in place telemetry flows immediately and decodes correctly — <code>state=H</code>,
+  <code>temps=28.0/29.6/30.0/31.0</code>, <code>flux=0.0280</code>, matching the console
+  stream field for field. This is worth reporting upstream: it makes espp's RTPS unusable
+  for host tooling on most developer machines.
+</p>
+</div>
+
+<div class="col">
+<h2>The delivery cliff</h2>
+<p>
+  With a real subscriber attached, delivery is <strong>lossless and exact</strong> through
+  300 Hz, and saturates at about 485 Hz. Above that it does not degrade gracefully — it
+  collapses. At 1000 Hz requested the board publishes 535 samples per second and 25 arrive;
+  at 2000 Hz it publishes 734 per second and <strong>none arrive at all</strong>.
+</p>
+<p>
+  Throughout, <code>pub_fail</code> stays at <strong>0</strong>. The firmware believes every
+  publish succeeded. The loss is entirely silent, with no counter anywhere that reveals it.
+</p>
+</div>
+
+<figure>
+  <div class="legend">
+    <span><i style="background:var(--series-2)"></i>Published by the board (<code>pub_ok</code>)</span>
+    <span><i style="background:var(--series-1)"></i>Delivered to the host subscriber</span>
+  </div>
+  <div class="chartbox">
+  <svg class="chart" viewBox="0 0 700 340" role="img" aria-label="Line chart comparing samples published by the board against samples delivered to the host, versus requested publish rate. The two track exactly up to 500 hertz requested, then delivery collapses to 25 and then zero while publishing continues above 500 per second.">
+    <g>
+      <line class="gridline" x1="70" y1="240" x2="660" y2="240"></line>
+      <line class="gridline" x1="70" y1="185" x2="660" y2="185"></line>
+      <line class="gridline" x1="70" y1="130" x2="660" y2="130"></line>
+      <line class="gridline" x1="70" y1="75" x2="660" y2="75"></line>
+      <line class="gridline" x1="70" y1="20" x2="660" y2="20"></line>
+      <text class="ax-tick" x="62" y="244" text-anchor="end">0</text>
+      <text class="ax-tick" x="62" y="189" text-anchor="end">200</text>
+      <text class="ax-tick" x="62" y="134" text-anchor="end">400</text>
+      <text class="ax-tick" x="62" y="79" text-anchor="end">600</text>
+      <text class="ax-tick" x="62" y="24" text-anchor="end">800</text>
+    </g>
+
+    <!-- collapse region -->
+    <rect x="549" y="20" width="111" height="220" fill="var(--bad)" opacity="0.07"></rect>
+    <line x1="549" y1="20" x2="549" y2="240" stroke="var(--bad)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+    <text class="fail-lbl" x="604" y="34" text-anchor="middle" style="font-size:11px">delivery collapses</text>
+
+    <line class="axisline" x1="70" y1="20" x2="70" y2="240"></line>
+    <line class="axisline" x1="70" y1="240" x2="660" y2="240"></line>
+
+    <!-- published -->
+    <polyline fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round"
+      points="70,237.3 143.75,233.1 217.5,226.3 291.25,212.6 365,184.9 438.75,157.4 512.5,106.2 586.25,93.0 660,38.2"></polyline>
+    <g fill="var(--series-2)">
+      <circle cx="70" cy="237.3" r="4"><title>10 Hz requested — 10.0 published/s</title></circle>
+      <circle cx="143.75" cy="233.1" r="4"><title>25 Hz requested — 25.0 published/s</title></circle>
+      <circle cx="217.5" cy="226.3" r="4"><title>50 Hz requested — 50.0 published/s</title></circle>
+      <circle cx="291.25" cy="212.6" r="4"><title>100 Hz requested — 99.6 published/s</title></circle>
+      <circle cx="365" cy="184.9" r="4"><title>200 Hz requested — 200.4 published/s</title></circle>
+      <circle cx="438.75" cy="157.4" r="4"><title>300 Hz requested — 300.5 published/s</title></circle>
+      <circle cx="512.5" cy="106.2" r="4"><title>500 Hz requested — 486.4 published/s</title></circle>
+      <circle cx="586.25" cy="93.0" r="4"><title>1000 Hz requested — 534.6 published/s</title></circle>
+      <circle cx="660" cy="38.2" r="4"><title>2000 Hz requested — 733.7 published/s</title></circle>
+    </g>
+    <text class="val-lbl" x="655" y="31" text-anchor="end" fill="var(--series-2)">734</text>
+
+    <!-- delivered -->
+    <polyline fill="none" stroke="var(--series-1)" stroke-width="2.5" stroke-linejoin="round"
+      points="70,237.3 143.75,233.1 217.5,226.3 291.25,212.5 365,185.0 438.75,157.4 512.5,106.7 586.25,233.0 660,240"></polyline>
+    <g fill="var(--series-1)">
+      <circle cx="70" cy="237.3" r="4"><title>10 Hz requested — 10.0 delivered/s, 0.0% loss</title></circle>
+      <circle cx="143.75" cy="233.1" r="4"><title>25 Hz requested — 25.0 delivered/s</title></circle>
+      <circle cx="217.5" cy="226.3" r="4"><title>50 Hz requested — 50.0 delivered/s</title></circle>
+      <circle cx="291.25" cy="212.5" r="4"><title>100 Hz requested — 100.0 delivered/s</title></circle>
+      <circle cx="365" cy="185.0" r="4"><title>200 Hz requested — 200.0 delivered/s</title></circle>
+      <circle cx="438.75" cy="157.4" r="4"><title>300 Hz requested — 299.8 delivered/s</title></circle>
+      <circle cx="512.5" cy="106.7" r="5.5"><title>500 Hz requested — 484.6 delivered/s (peak), 0.4% loss</title></circle>
+      <circle cx="586.25" cy="233.0" r="4"><title>1000 Hz requested — 25.3 delivered/s, 95.3% loss</title></circle>
+      <circle cx="660" cy="240" r="4"><title>2000 Hz requested — 0.0 delivered/s, 100% loss</title></circle>
+    </g>
+    <text class="val-lbl" x="512.5" y="99" text-anchor="middle" fill="var(--series-1)">485</text>
+    <text class="val-lbl" x="586.25" y="248" text-anchor="middle" fill="var(--series-1)">25</text>
+    <text class="val-lbl" x="660" y="255" text-anchor="middle" fill="var(--series-1)">0</text>
+
+    <g class="ax-tick" text-anchor="middle">
+      <text x="70" y="266">10</text>
+      <text x="143.75" y="266">25</text>
+      <text x="217.5" y="266">50</text>
+      <text x="291.25" y="266">100</text>
+      <text x="365" y="266">200</text>
+      <text x="438.75" y="266">300</text>
+      <text x="512.5" y="266">500</text>
+      <text x="586.25" y="266">1000</text>
+      <text x="660" y="266">2000</text>
+    </g>
+    <text class="ax-title" x="365" y="292" text-anchor="middle">Requested publish rate (Hz) — categories, not to scale</text>
+    <text class="ax-title" x="18" y="130" text-anchor="middle" transform="rotate(-90 18 130)">Samples per second</text>
+    <text class="ax-tick" x="365" y="318" text-anchor="middle">pub_fail = 0 at every point, including where nothing is delivered</text>
+  </svg>
+  </div>
+  <figcaption>
+    <b>Figure 1 · Published vs delivered, and where delivery collapses</b>
+    Y axis is samples per second on a single linear scale, so the two series are directly
+    comparable — published is the board's own <code>pub_ok</code> counter, delivered is
+    counted by a real DDS subscriber on the host. X axis is the requested rate, spaced
+    evenly by category. Both counters cover an identical window: the board's counters are
+    reset and read through the console, and both edges are bracketed with the same command
+    latency offset so the offset cancels rather than appearing as phantom loss. The shaded
+    region marks where the two diverge. The enlarged marker at 500 Hz is peak delivery.
+  </figcaption>
+</figure>
+
+<div class="tablebox">
+<table>
+  <caption>Delivered-rate sweep — one subscriber, fresh boot, motor idle</caption>
+  <thead>
+    <tr>
+      <th class="n">Requested<br>(Hz)</th>
+      <th class="n">Published<br>(/s)</th>
+      <th class="n">Delivered<br>(/s)</th>
+      <th class="n">Loss<br>(%)</th>
+      <th class="n">pub_us<br>mean (µs)</th>
+      <th class="n">overrun<br>(cycles)</th>
+      <th class="n">late%<br>(%)</th>
+      <th class="n">coalesce</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td class="n">10</td><td class="n">10.0</td><td class="n">10.0</td><td class="n">0.0</td><td class="n">569</td><td class="n">0</td><td class="n">0.4</td><td class="n">1.00</td></tr>
+    <tr><td class="n">25</td><td class="n">25.0</td><td class="n">25.0</td><td class="n">0.0</td><td class="n">495</td><td class="n">0</td><td class="n">0.9</td><td class="n">1.00</td></tr>
+    <tr><td class="n">50</td><td class="n">50.0</td><td class="n">50.0</td><td class="n">0.0</td><td class="n">451</td><td class="n">0</td><td class="n">1.5</td><td class="n">1.00</td></tr>
+    <tr><td class="n">100</td><td class="n">99.6</td><td class="n">100.0</td><td class="n">0.0</td><td class="n">429</td><td class="n">0</td><td class="n">2.4</td><td class="n">1.00</td></tr>
+    <tr><td class="n">200</td><td class="n">200.4</td><td class="n">200.0</td><td class="n">0.2</td><td class="n">408</td><td class="n">0</td><td class="n">4.1</td><td class="n">1.00</td></tr>
+    <tr><td class="n">300</td><td class="n">300.5</td><td class="n">299.8</td><td class="n">0.2</td><td class="n">412</td><td class="n">15</td><td class="n">5.7</td><td class="n">1.00</td></tr>
+    <tr><td class="n">500</td><td class="n">486.4</td><td class="n">484.6</td><td class="n">0.4</td><td class="n">377</td><td class="n">1094</td><td class="n">7.5</td><td class="n">1.00</td></tr>
+    <tr class="flag"><td class="n">1000</td><td class="n">534.6</td><td class="n">25.3</td><td class="n">95.3</td><td class="n">846</td><td class="n">4181</td><td class="n">8.9</td><td class="n">1.00</td></tr>
+    <tr class="flag"><td class="n">2000</td><td class="n">733.7</td><td class="n">0.0</td><td class="n">100.0</td><td class="n">815</td><td class="n">7402</td><td class="n">9.5</td><td class="n">1.00</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="col">
+<h2>Publish cost, honestly compared</h2>
+<p>
+  <code>pub_us</code> is the per-cycle cost of one publish call. Both series below have a
+  matched reader, so both are actually transmitting — which is the only fair comparison,
+  and the one the earlier "9×" figure got wrong.
+</p>
+</div>
+
+<figure>
+  <div class="legend">
+    <span><i style="background:var(--series-2)"></i>Pre-port engine</span>
+    <span><i style="background:var(--series-1)"></i>PR build — espp v1.2.0, subscriber attached</span>
+  </div>
+  <div class="chartbox">
+  <svg class="chart" viewBox="0 0 700 336" role="img" aria-label="Line chart of publish cost per cycle versus requested rate on a logarithmic axis. The pre-port engine sits around 3000 to 3800 microseconds; the PR build sits around 377 to 569 microseconds, rising to 815 at 2000 hertz.">
+    <g>
+      <line class="gridline" x1="70" y1="240" x2="660" y2="240"></line>
+      <line class="gridline" x1="70" y1="198.7" x2="660" y2="198.7"></line>
+      <line class="gridline" x1="70" y1="144.0" x2="660" y2="144.0"></line>
+      <line class="gridline" x1="70" y1="102.7" x2="660" y2="102.7"></line>
+      <line class="gridline" x1="70" y1="61.3" x2="660" y2="61.3"></line>
+      <line class="gridline" x1="70" y1="20" x2="660" y2="20"></line>
+      <text class="ax-tick" x="62" y="244" text-anchor="end">100</text>
+      <text class="ax-tick" x="62" y="202.7" text-anchor="end">200</text>
+      <text class="ax-tick" x="62" y="148" text-anchor="end">500</text>
+      <text class="ax-tick" x="62" y="106.7" text-anchor="end">1000</text>
+      <text class="ax-tick" x="62" y="65.3" text-anchor="end">2000</text>
+      <text class="ax-tick" x="62" y="24" text-anchor="end">4000</text>
+    </g>
+    <line class="axisline" x1="70" y1="20" x2="70" y2="240"></line>
+    <line class="axisline" x1="70" y1="240" x2="660" y2="240"></line>
+
+    <polyline fill="none" stroke="var(--series-2)" stroke-width="2" stroke-linejoin="round"
+      points="70,22.4 168.3,28.0 266.7,31.4 365,34.3 463.3,35.5 561.7,36.1 660,36.2"></polyline>
+    <g fill="var(--series-2)">
+      <circle cx="70" cy="22.4" r="4.5"><title>10 Hz — 3839 µs (pre-port)</title></circle>
+      <circle cx="168.3" cy="28.0" r="4.5"><title>25 Hz — 3498 µs (pre-port)</title></circle>
+      <circle cx="266.7" cy="31.4" r="4.5"><title>50 Hz — 3302 µs (pre-port)</title></circle>
+      <circle cx="365" cy="34.3" r="4.5"><title>100 Hz — 3147 µs (pre-port)</title></circle>
+      <circle cx="463.3" cy="35.5" r="4.5"><title>200 Hz — 3084 µs (pre-port)</title></circle>
+      <circle cx="561.7" cy="36.1" r="4.5"><title>500 Hz — 3052 µs (pre-port)</title></circle>
+      <circle cx="660" cy="36.2" r="4.5"><title>2000 Hz — 3048 µs (pre-port)</title></circle>
+    </g>
+    <text class="val-lbl" x="70" y="14" text-anchor="start" fill="var(--series-2)">3839</text>
+
+    <polyline fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round"
+      points="70,136.3 168.3,144.6 266.7,150.2 365,153.1 463.3,156.1 561.7,160.9 660,114.9"></polyline>
+    <g fill="var(--series-1)">
+      <circle cx="70" cy="136.3" r="4.5"><title>10 Hz — 569 µs (PR build, subscriber attached)</title></circle>
+      <circle cx="168.3" cy="144.6" r="4.5"><title>25 Hz — 495 µs</title></circle>
+      <circle cx="266.7" cy="150.2" r="4.5"><title>50 Hz — 451 µs</title></circle>
+      <circle cx="365" cy="153.1" r="4.5"><title>100 Hz — 429 µs</title></circle>
+      <circle cx="463.3" cy="156.1" r="4.5"><title>200 Hz — 408 µs</title></circle>
+      <circle cx="561.7" cy="160.9" r="4.5"><title>500 Hz — 377 µs</title></circle>
+      <circle cx="660" cy="114.9" r="4.5"><title>2000 Hz — 815 µs (past saturation; cost rises again)</title></circle>
+    </g>
+    <text class="val-lbl" x="70" y="129" text-anchor="start" fill="var(--series-1)">569</text>
+    <text class="val-lbl" x="655" y="108" text-anchor="end" fill="var(--series-1)">815</text>
+
+    <g class="ax-tick" text-anchor="middle">
+      <text x="70" y="258">10</text>
+      <text x="168.3" y="258">25</text>
+      <text x="266.7" y="258">50</text>
+      <text x="365" y="258">100</text>
+      <text x="463.3" y="258">200</text>
+      <text x="561.7" y="258">500</text>
+      <text x="660" y="258">2000</text>
+    </g>
+    <text class="ax-title" x="365" y="284" text-anchor="middle">Requested publish rate (Hz) — categories, not to scale</text>
+    <text class="ax-title" x="18" y="130" text-anchor="middle" transform="rotate(-90 18 130)">Publish cost per cycle (µs, log scale)</text>
+    <text class="ax-tick" x="365" y="312" text-anchor="middle">Lower is better. Both series transmitting to a matched reader. 1 writer, 0 readers.</text>
+  </svg>
+  </div>
+  <figcaption>
+    <b>Figure 2 · Publish cost per cycle, pre-port engine vs PR build</b>
+    Y axis is logarithmic so both engines fit one scale; a linear axis would flatten the PR
+    build against the baseline. X axis lists the swept rates, spaced evenly by category.
+    Each point is the mean of the <code>pub_us</code> min/mean/max triple from
+    <code>rtpstat</code>. Cost falls as rate rises — publishing more often keeps the code
+    path warm — until saturation, after which it climbs again (815 µs at 2000 Hz) as the
+    send path backs up. The pre-port series is from the discarded firmware pass, retained
+    here as a legitimate before/after reference.
+  </figcaption>
+</figure>
+
+<div class="col">
+<h2>Coexistence holds — the PR's central claim</h2>
+<p>Two metrics must be kept apart, and the PR is right to insist on it:</p>
+<ul>
+  <li>
+    <strong><code>coalesce</code></strong> — notifications ÷ task runs. <strong>1.00 means
+    the FOC task never missed a tick.</strong> The real "did the control loop keep up"
+    measure.
+  </li>
+  <li>
+    <strong><code>late%</code></strong> — share of current samples where the sampling ISR
+    fired late or overran, so the sample landed outside the PWM null window and was
+    discarded. <em>Signal quality</em>, not control timing.
+  </li>
+</ul>
+<p>
+  <code>coalesce</code> held at <strong>1.00 in every condition tested</strong> — every
+  publish rate including the collapsed ones, and every network flood level. Publishing at
+  2000 Hz with 7402 overruns and total delivery failure still did not cost the control loop
+  a single tick.
+</p>
+<div class="callout">
+  <h3>Read late% within one boot, not across boots</h3>
+  <p>
+    The idle baseline is <strong>not stable across reboots</strong> — it was 0.2% in one
+    session, 5.0% in another, and 0.4% here, all with the motor idle and nothing on the
+    network. <code>foc_sampler.hpp:543</code> attributes lates to I2C temperature reads and
+    DRV fault polls preempting the sampling ISR, so it is unrelated to network activity;
+    the phase relationship between those pollers and the ISR appears to be set at boot.
+  </p>
+  <p>
+    The <em>deltas</em> within a single boot are sound and are what the tables below report.
+    Absolute late% figures should not be compared between runs — including against the PR's
+    4.9%.
+  </p>
+</div>
+</div>
+
+<figure>
+  <div class="chartbox">
+  <svg class="chart" viewBox="0 0 700 320" role="img" aria-label="Bar chart of discarded-sample percentage against requested publish rate, rising from 0.4 percent at 10 hertz to 9.5 percent at 2000 hertz.">
+    <g>
+      <line class="gridline" x1="70" y1="220" x2="665" y2="220"></line>
+      <line class="gridline" x1="70" y1="170" x2="665" y2="170"></line>
+      <line class="gridline" x1="70" y1="120" x2="665" y2="120"></line>
+      <line class="gridline" x1="70" y1="70" x2="665" y2="70"></line>
+      <line class="gridline" x1="70" y1="20" x2="665" y2="20"></line>
+      <text class="ax-tick" x="62" y="224" text-anchor="end">0.0</text>
+      <text class="ax-tick" x="62" y="174" text-anchor="end">2.5</text>
+      <text class="ax-tick" x="62" y="124" text-anchor="end">5.0</text>
+      <text class="ax-tick" x="62" y="74" text-anchor="end">7.5</text>
+      <text class="ax-tick" x="62" y="24" text-anchor="end">10.0</text>
+    </g>
+    <line class="axisline" x1="70" y1="20" x2="70" y2="220"></line>
+    <line class="axisline" x1="70" y1="220" x2="665" y2="220"></line>
+    <g fill="var(--series-1)">
+      <rect x="83" y="212" width="40" height="8" rx="3"><title>10 Hz — late 0.4%</title></rect>
+      <rect x="149.1" y="202" width="40" height="18" rx="3"><title>25 Hz — late 0.9%</title></rect>
+      <rect x="215.2" y="190" width="40" height="30" rx="3"><title>50 Hz — late 1.5%</title></rect>
+      <rect x="281.3" y="172" width="40" height="48" rx="3"><title>100 Hz — late 2.4%</title></rect>
+      <rect x="347.4" y="138" width="40" height="82" rx="3"><title>200 Hz — late 4.1%</title></rect>
+      <rect x="413.5" y="106" width="40" height="114" rx="3"><title>300 Hz — late 5.7%</title></rect>
+      <rect x="479.6" y="70" width="40" height="150" rx="3"><title>500 Hz — late 7.5%</title></rect>
+      <rect x="545.7" y="42" width="40" height="178" rx="3"><title>1000 Hz — late 8.9%</title></rect>
+      <rect x="611.8" y="30" width="40" height="190" rx="3"><title>2000 Hz — late 9.5%</title></rect>
+    </g>
+    <g class="val-lbl" text-anchor="middle">
+      <text x="103" y="206">0.4</text>
+      <text x="169.1" y="196">0.9</text>
+      <text x="235.2" y="184">1.5</text>
+      <text x="301.3" y="166">2.4</text>
+      <text x="367.4" y="132">4.1</text>
+      <text x="433.5" y="100">5.7</text>
+      <text x="499.6" y="64">7.5</text>
+      <text x="565.7" y="36">8.9</text>
+      <text x="631.8" y="24">9.5</text>
+    </g>
+    <g class="ax-tick" text-anchor="middle">
+      <text x="103" y="238">10</text>
+      <text x="169.1" y="238">25</text>
+      <text x="235.2" y="238">50</text>
+      <text x="301.3" y="238">100</text>
+      <text x="367.4" y="238">200</text>
+      <text x="433.5" y="238">300</text>
+      <text x="499.6" y="238">500</text>
+      <text x="565.7" y="238">1000</text>
+      <text x="631.8" y="238">2000</text>
+    </g>
+    <text class="ax-title" x="367" y="264" text-anchor="middle">Requested publish rate (Hz) — categories, not to scale</text>
+    <text class="ax-title" x="18" y="120" text-anchor="middle" transform="rotate(-90 18 120)">Discarded current samples, late% (%)</text>
+    <text class="ax-tick" x="367" y="292" text-anchor="middle">coalesce = 1.00 at every bar — the control loop never missed a tick</text>
+  </svg>
+  </div>
+  <figcaption>
+    <b>Figure 3 · Sample-discard rate vs publish rate (single boot, motor idle)</b>
+    Y axis is the percentage of current samples discarded for landing outside the PWM null
+    window — signal quality, <em>not</em> a control-timing failure. X axis is the requested
+    publish rate, evenly spaced by category. All nine bars come from one continuous boot, so
+    they are directly comparable to each other; the absolute level is not comparable to other
+    runs (see the note above). Even at 2000 Hz, where delivery has collapsed entirely,
+    <code>coalesce</code> held at 1.00.
+  </figcaption>
+</figure>
+
+<div class="col">
+<h2>Spinning: speed regulation is untouched</h2>
+<p>
+  Seven captures of 15 s each at 100 rpm, five free-shafted and two loaded against the
+  magnetic particle brake at ~4 A — the PR's own test condition. Each capture reports the
+  standard deviation of measured speed, of torque current, and the observer's tracking
+  error against the halls.
+</p>
+<p>
+  <strong>Speed regulation does not move.</strong> Across every condition — quiet, RTPS
+  publishing, inbound flood, and saturating bidirectional traffic while driving under load —
+  rpm standard deviation stays between 0.74 and 0.83. The gap between quiet and fully
+  saturated (0.832 → 0.815, loaded) is <em>smaller than the gap between two identical quiet
+  runs</em> (0.787 vs 0.805). That is the PR's central claim, and it holds.
+</p>
+</div>
+
+<figure>
+  <div class="legend">
+    <span><i style="background:var(--series-1)"></i>Free-shafted (~1.6 A)</span>
+    <span><i style="background:var(--series-3)"></i>Loaded against the brake (~4 A)</span>
+  </div>
+  <div class="chartbox">
+  <svg class="chart" viewBox="0 0 700 330" role="img" aria-label="Bar chart of speed standard deviation across seven network conditions at 100 rpm. All bars sit between 0.74 and 0.83 rpm, showing no systematic effect from network traffic.">
+    <g>
+      <line class="gridline" x1="90" y1="220" x2="660" y2="220"></line>
+      <line class="gridline" x1="90" y1="170" x2="660" y2="170"></line>
+      <line class="gridline" x1="90" y1="120" x2="660" y2="120"></line>
+      <line class="gridline" x1="90" y1="70" x2="660" y2="70"></line>
+      <line class="gridline" x1="90" y1="20" x2="660" y2="20"></line>
+      <text class="ax-tick" x="82" y="224" text-anchor="end">0.00</text>
+      <text class="ax-tick" x="82" y="174" text-anchor="end">0.25</text>
+      <text class="ax-tick" x="82" y="124" text-anchor="end">0.50</text>
+      <text class="ax-tick" x="82" y="74" text-anchor="end">0.75</text>
+      <text class="ax-tick" x="82" y="24" text-anchor="end">1.00</text>
+    </g>
+    <line class="axisline" x1="90" y1="20" x2="90" y2="220"></line>
+    <line class="axisline" x1="90" y1="220" x2="660" y2="220"></line>
+
+    <g fill="var(--series-1)">
+      <rect x="105" y="62.6" width="52" height="157.4" rx="4"><title>Quiet, free-shafted — rpm sd 0.787</title></rect>
+      <rect x="186.4" y="71.4" width="52" height="148.6" rx="4"><title>RTPS 10 Hz — rpm sd 0.743</title></rect>
+      <rect x="267.9" y="65.0" width="52" height="155.0" rx="4"><title>RTPS + inbound flood — rpm sd 0.775</title></rect>
+      <rect x="349.3" y="58.6" width="52" height="161.4" rx="4"><title>Bidirectional saturation — rpm sd 0.807</title></rect>
+      <rect x="430.7" y="59.0" width="52" height="161.0" rx="4"><title>Quiet again (drift control) — rpm sd 0.805</title></rect>
+    </g>
+    <g fill="var(--series-3)">
+      <rect x="512.1" y="53.6" width="52" height="166.4" rx="4"><title>Quiet, loaded to 4.1 A — rpm sd 0.832</title></rect>
+      <rect x="593.6" y="57.0" width="52" height="163.0" rx="4"><title>Bidirectional saturation, loaded to 3.9 A — rpm sd 0.815</title></rect>
+    </g>
+    <g class="val-lbl" text-anchor="middle">
+      <text x="131" y="56">0.79</text>
+      <text x="212.4" y="65">0.74</text>
+      <text x="293.9" y="59">0.78</text>
+      <text x="375.3" y="52">0.81</text>
+      <text x="456.7" y="53">0.81</text>
+      <text x="538.1" y="47">0.83</text>
+      <text x="619.6" y="51">0.82</text>
+    </g>
+    <g class="ax-tick" text-anchor="middle">
+      <text x="131" y="238">quiet</text>
+      <text x="212.4" y="238">RTPS</text>
+      <text x="293.9" y="238">+ rx load</text>
+      <text x="375.3" y="238">bidir</text>
+      <text x="456.7" y="238">quiet</text>
+      <text x="538.1" y="238">quiet</text>
+      <text x="619.6" y="238">bidir</text>
+      <text x="131" y="252">1.6 A</text>
+      <text x="212.4" y="252">1.6 A</text>
+      <text x="293.9" y="252">1.6 A</text>
+      <text x="375.3" y="252">1.5 A</text>
+      <text x="456.7" y="252">1.6 A</text>
+      <text x="538.1" y="252">4.1 A</text>
+      <text x="619.6" y="252">3.9 A</text>
+    </g>
+    <text class="ax-title" x="375" y="278" text-anchor="middle">Network condition (second row: mean torque current drawn)</text>
+    <text class="ax-title" x="20" y="120" text-anchor="middle" transform="rotate(-90 20 120)">Speed standard deviation (rpm)</text>
+    <text class="ax-tick" x="375" y="304" text-anchor="middle">Lower is steadier. Mean speed was 99.99–100.09 rpm in all seven captures.</text>
+  </svg>
+  </div>
+  <figcaption>
+    <b>Figure 4 · Speed regulation across network conditions, 100 rpm</b>
+    Y axis is the standard deviation of measured wheel speed in rpm over a 15-second capture —
+    lower is steadier — on a fixed 0–1.00 scale so the flatness is visible rather than
+    amplified by autoscaling. X axis lists the seven conditions in the order they were run,
+    with mean torque current on a second tick row to show which are loaded. "quiet" appears
+    twice free-shafted as a drift control: the run finished where it started. Colour
+    distinguishes mechanical load, not network condition, and every bar is directly labelled
+    so identity never rests on colour alone.
+  </figcaption>
+</figure>
+
+<div class="tablebox">
+<table>
+  <caption>Control quality at 100 rpm — 15 s captures</caption>
+  <thead>
+    <tr>
+      <th>Condition</th><th class="n">Load</th><th class="n">rpm mean</th><th class="n">rpm sd</th>
+      <th class="n">iq mean<br>(A)</th><th class="n">iq sd<br>(A)</th><th class="n">mean |aerr|</th>
+      <th class="n">obs err sd</th><th class="n">late%</th><th class="n">coalesce</th><th class="n">rows/s</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>Quiet, no network</td><td class="n">free</td><td class="n">100.04</td><td class="n">0.787</td><td class="n">1.618</td><td class="n">0.0921</td><td class="n">0.07</td><td class="n">0.976</td><td class="n">0.4</td><td class="n">1.00</td><td class="n">9.9</td></tr>
+    <tr><td>RTPS publishing 10 Hz</td><td class="n">free</td><td class="n">100.05</td><td class="n">0.743</td><td class="n">1.601</td><td class="n">0.0880</td><td class="n">0.01</td><td class="n">0.947</td><td class="n">0.4</td><td class="n">1.00</td><td class="n">9.7</td></tr>
+    <tr><td>RTPS + inbound flood</td><td class="n">free</td><td class="n">100.05</td><td class="n">0.775</td><td class="n">1.586</td><td class="n">0.0934</td><td class="n">0.02</td><td class="n">1.061</td><td class="n">2.8</td><td class="n">1.00</td><td class="n">8.4</td></tr>
+    <tr><td>Bidirectional saturation</td><td class="n">free</td><td class="n">100.05</td><td class="n">0.807</td><td class="n">1.549</td><td class="n">0.1034</td><td class="n">0.05</td><td class="n">1.121</td><td class="n">4.2</td><td class="n">1.00</td><td class="n">7.3</td></tr>
+    <tr><td>Quiet again <span class="mini">(drift control)</span></td><td class="n">free</td><td class="n">99.99</td><td class="n">0.805</td><td class="n">1.553</td><td class="n">0.0868</td><td class="n">0.09</td><td class="n">1.043</td><td class="n">0.4</td><td class="n">1.00</td><td class="n">9.9</td></tr>
+    <tr><td><strong>Quiet, loaded</strong></td><td class="n">brake</td><td class="n">100.09</td><td class="n">0.832</td><td class="n">4.104</td><td class="n">0.1189</td><td class="n">0.17</td><td class="n">1.100</td><td class="n">0.4</td><td class="n">1.00</td><td class="n">9.8</td></tr>
+    <tr><td><strong>Bidirectional, loaded</strong></td><td class="n">brake</td><td class="n">100.05</td><td class="n">0.815</td><td class="n">3.925</td><td class="n">0.1109</td><td class="n">0.05</td><td class="n">1.099</td><td class="n">3.9</td><td class="n">1.00</td><td class="n">7.4</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="col">
+<p>
+  Torque-current noise does move, but only slightly: <code>iq</code> standard deviation goes
+  from 0.088–0.092 A quiet to 0.103 A under bidirectional saturation free-shafted, and
+  0.119 → 0.111 A loaded — inside run-to-run scatter. The PR reports 0.088–0.091 quiet and
+  0.102 bidirectional, which these reproduce closely.
+</p>
+<p>
+  <code>late%</code> behaves as the PR describes, rising 0.4% → 4.2% under traffic while
+  <code>coalesce</code> stays pinned at 1.00 and <code>cmax</code> never exceeds 77 µs. Sample
+  quality degrades; control timing does not.
+</p>
+
+<h3><span class="chip warn"><span class="dot"></span>Worth acting on</span> &nbsp;The telemetry stream starves under load</h3>
+<p>
+  The <code>rows/s</code> column shows the CSV stream dropping from 9.9 to 7.3 rows per second
+  under bidirectional traffic — a quarter of the telemetry simply not emitted. This is the
+  stream task sitting at priority 0, the lowest in the system, which the PR's own review notes
+  raise as an open question. It is now measured: <strong>the answer is yes, it starves, by
+  about 25% at saturation.</strong>
+</p>
+
+<h3>Two caveats on these numbers</h3>
+<ul>
+  <li>
+    <strong>Absolute rpm sd is ~1.8× the PR's</strong> (0.83 vs 0.45) even at the same
+    100 rpm / 4 A operating point. The hall table was <strong>uncalibrated</strong> for this
+    session (<code>hs</code> reports <code>cal=0</code>), and <code>rpm_hall</code> — the
+    quantity being averaged — comes from that table. The <em>relative</em> comparison across
+    conditions is unaffected, since every capture shares the same uncalibrated table.
+  </li>
+  <li>
+    <strong>The brake stalls far earlier than the bench notes suggest.</strong> The stall edge
+    sits between <strong>1.0 V and 1.8 V</strong>, not at the ~2.5 V the notes describe: at
+    1.8 V the rotor stopped outright and the controller reverted from closed-loop sensorless
+    to hall mode with zero current. The loaded captures were taken at 1.2 V, which draws the
+    4.1 A the PR's condition calls for. Approach that edge from below.
+  </li>
+</ul>
+</div>
+
+<div class="col">
+<h2>Where the PR's claims still break</h2>
+
+<h3><span class="chip bad"><span class="dot"></span>Contradicted</span> &nbsp;Writers cap at four, not eight</h3>
+<p>
+  The PR states writers "cost about 11.4 ms each per cycle and scale linearly to 8 writers."
+  Neither half survives. Per-writer cost is about <strong>114 µs</strong>, a hundredfold
+  difference — and the participant <strong>fails to start at five writers or more</strong>,
+  leaving <code>up=0</code> and <code>pub_ok=0</code>.
+</p>
+</div>
+
+<figure>
+  <div class="chartbox">
+  <svg class="chart" viewBox="0 0 700 320" role="img" aria-label="Bar chart of publish cost per cycle against writer count. One, two and four writers cost 251, 302 and 592 microseconds. Five, six and eight writers fail to start and have no bar.">
+    <g>
+      <line class="gridline" x1="80" y1="220" x2="668" y2="220"></line>
+      <line class="gridline" x1="80" y1="177.1" x2="668" y2="177.1"></line>
+      <line class="gridline" x1="80" y1="134.3" x2="668" y2="134.3"></line>
+      <line class="gridline" x1="80" y1="91.4" x2="668" y2="91.4"></line>
+      <line class="gridline" x1="80" y1="48.6" x2="668" y2="48.6"></line>
+      <text class="ax-tick" x="72" y="224" text-anchor="end">0</text>
+      <text class="ax-tick" x="72" y="181.1" text-anchor="end">150</text>
+      <text class="ax-tick" x="72" y="138.3" text-anchor="end">300</text>
+      <text class="ax-tick" x="72" y="95.4" text-anchor="end">450</text>
+      <text class="ax-tick" x="72" y="52.6" text-anchor="end">600</text>
+    </g>
+    <line class="axisline" x1="80" y1="20" x2="80" y2="220"></line>
+    <line class="axisline" x1="80" y1="220" x2="668" y2="220"></line>
+    <g fill="var(--series-1)">
+      <rect x="106" y="148.3" width="62" height="71.7" rx="4"><title>1 writer — 251 µs per cycle</title></rect>
+      <rect x="200" y="133.7" width="62" height="86.3" rx="4"><title>2 writers — 302 µs per cycle</title></rect>
+      <rect x="294" y="50.9" width="62" height="169.1" rx="4"><title>4 writers — 592 µs per cycle</title></rect>
+    </g>
+    <g class="val-lbl" text-anchor="middle">
+      <text x="137" y="142">251</text>
+      <text x="231" y="128">302</text>
+      <text x="325" y="45">592</text>
+    </g>
+    <rect x="376" y="20" width="286" height="200" fill="var(--bad)" opacity="0.07"></rect>
+    <line x1="376" y1="20" x2="376" y2="220" stroke="var(--bad)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+    <g>
+      <rect x="388" y="196" width="62" height="24" rx="4" fill="none" stroke="var(--bad)" stroke-width="1.5" stroke-dasharray="3 2"></rect>
+      <rect x="482" y="196" width="62" height="24" rx="4" fill="none" stroke="var(--bad)" stroke-width="1.5" stroke-dasharray="3 2"></rect>
+      <rect x="576" y="196" width="62" height="24" rx="4" fill="none" stroke="var(--bad)" stroke-width="1.5" stroke-dasharray="3 2"></rect>
+    </g>
+    <g class="fail-lbl" text-anchor="middle">
+      <text x="419" y="190">FAILS</text>
+      <text x="513" y="190">FAILS</text>
+      <text x="607" y="190">FAILS</text>
+    </g>
+    <text class="fail-lbl" x="519" y="40" text-anchor="middle" style="font-size:12px">Participant does not start (up=0, pub_ok=0)</text>
+    <g class="ax-tick" text-anchor="middle">
+      <text x="137" y="238">1</text>
+      <text x="231" y="238">2</text>
+      <text x="325" y="238">4</text>
+      <text x="419" y="238">5</text>
+      <text x="513" y="238">6</text>
+      <text x="607" y="238">8</text>
+    </g>
+    <text class="ax-title" x="374" y="264" text-anchor="middle">Writer endpoints requested (count) — categories, not to scale</text>
+    <text class="ax-title" x="20" y="120" text-anchor="middle" transform="rotate(-90 20 120)">Publish cost per cycle (µs, all writers)</text>
+    <text class="ax-tick" x="374" y="292" text-anchor="middle">Measured at 50 Hz requested, no subscriber attached. PR claims linear scaling through 8.</text>
+  </svg>
+  </div>
+  <figcaption>
+    <b>Figure 5 · Publish cost vs writer count, and the failure boundary</b>
+    Y axis is total per-cycle cost across <em>all</em> writers, so it is expected to rise with
+    writer count. X axis is the number of writer endpoints requested at participant start,
+    spaced evenly by category. Bars exist only where the participant actually started; the
+    shaded region right of the dashed line marks counts that fail, drawn as empty dashed
+    outlines with an explicit <em>FAILS</em> label so absence is not mistaken for a zero
+    value. The three working points imply roughly 114 µs per additional writer.
+  </figcaption>
+</figure>
+
+<div class="col">
+<h3><span class="chip warn"><span class="dot"></span>Stale docs</span> &nbsp;Discovery works, but not as documented</h3>
+<p>
+  SPDP announcements arrive and parse, so discovery is healthy. Every identifying field
+  differs from the PR's screenshot, because that screenshot was taken on the old engine.
+</p>
+</div>
+
+<div class="tablebox">
+<table>
+  <caption>SPDP discovery — PR's documented evidence vs measured</caption>
+  <thead>
+    <tr><th>Field</th><th>PR description</th><th>Measured on PR build</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Source port</td><td class="n">7410</td><td class="n">7400</td></tr>
+    <tr><td>RTPS version</td><td class="n">2.3</td><td class="n">2.2</td></tr>
+    <tr><td>Vendor ID</td><td class="n">cafe</td><td class="n">0d25</td></tr>
+    <tr><td>Announcement size</td><td class="n">240 B</td><td class="n">204 B</td></tr>
+    <tr><td>GUID prefix</td><td class="n">00000000293d…</td><td class="n">8cfd49a2deb3… <span class="mini">(MAC-derived)</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="col">
+<h3><span class="chip warn"><span class="dot"></span>Test hazard</span> &nbsp;Stale reader proxies inflate every repeat measurement</h3>
+<p>
+  Each subscriber run creates a participant with a fresh GUID. Because the topic is
+  BEST_EFFORT with no liveliness timeout, the board keeps the <code>ReaderProxy</code> of
+  every dead subscriber and goes on transmitting to it. A second subscriber then receives
+  duplicates of every sample.
+</p>
+<p>
+  This produced an impossible <strong>18.3 Hz delivered from a 10 Hz request</strong> before
+  it was spotted. Any repeated measurement must reboot the board between subscriber
+  lifetimes — the sweep above uses a single subscriber across all nine rates for exactly
+  this reason.
+</p>
+
+<h3><span class="chip ok"><span class="dot"></span>Resolved</span> &nbsp;The decoder's wire layout</h3>
+<p>
+  <code>rtps_sub.py</code> assumes 15 contiguous floats then a trailing <code>uint8 state</code>.
+  The wire actually places <code>state</code> in a four-byte slot at offset 4, shifting every
+  later field — so it silently returned <code>flux</code> as <code>temps[0]</code> and a
+  padding byte as <code>state</code>. That script was left unpatched, because it cannot
+  receive anything on this engine anyway; the working subscriber uses the
+  <code>Sample</code> struct directly and lets espp's own reflection handle the layout,
+  which sidesteps the question entirely.
+</p>
+</div>
+
+<div class="col">
+<h2>Raw transport beats the documented figures</h2>
+<p>
+  The W5500 transmit path and USB console are untouched by the RTPS engine change and both
+  exceed the PR's numbers — which already reflect the instruction-cache fix it describes.
+  Host-side capture confirmed <strong>zero packet loss</strong> at both payload sizes, with
+  the firmware reporting <code>err=0</code>.
+</p>
+</div>
+
+<figure>
+  <div class="legend">
+    <span><i style="background:var(--series-1)"></i>Measured on PR build</span>
+    <span><i style="background:var(--series-2)"></i>Documented in PR description</span>
+  </div>
+  <div class="chartbox">
+  <svg class="chart" viewBox="0 0 700 316" role="img" aria-label="Grouped bar chart of UDP transmit rate by payload size. At 64 bytes, measured 1457 packets per second versus 795 documented. At 1400 bytes, measured 797 versus 539 documented.">
+    <g>
+      <line class="gridline" x1="86" y1="220" x2="640" y2="220"></line>
+      <line class="gridline" x1="86" y1="170" x2="640" y2="170"></line>
+      <line class="gridline" x1="86" y1="120" x2="640" y2="120"></line>
+      <line class="gridline" x1="86" y1="70" x2="640" y2="70"></line>
+      <line class="gridline" x1="86" y1="20" x2="640" y2="20"></line>
+      <text class="ax-tick" x="78" y="224" text-anchor="end">0</text>
+      <text class="ax-tick" x="78" y="174" text-anchor="end">400</text>
+      <text class="ax-tick" x="78" y="124" text-anchor="end">800</text>
+      <text class="ax-tick" x="78" y="74" text-anchor="end">1200</text>
+      <text class="ax-tick" x="78" y="24" text-anchor="end">1600</text>
+    </g>
+    <line class="axisline" x1="86" y1="20" x2="86" y2="220"></line>
+    <line class="axisline" x1="86" y1="220" x2="640" y2="220"></line>
+    <rect x="150" y="37.9" width="76" height="182.1" rx="4" fill="var(--series-1)"><title>64 B payload — measured 1457 pps</title></rect>
+    <rect x="230" y="120.6" width="76" height="99.4" rx="4" fill="var(--series-2)"><title>64 B payload — PR documented 795 pps</title></rect>
+    <rect x="410" y="120.4" width="76" height="99.6" rx="4" fill="var(--series-1)"><title>1400 B payload — measured 797 pps</title></rect>
+    <rect x="490" y="152.6" width="76" height="67.4" rx="4" fill="var(--series-2)"><title>1400 B payload — PR documented 539 pps</title></rect>
+    <g class="val-lbl" text-anchor="middle">
+      <text x="188" y="32">1457</text>
+      <text x="268" y="114">795</text>
+      <text x="448" y="114">797</text>
+      <text x="528" y="146">539</text>
+    </g>
+    <g class="ax-tick" text-anchor="middle">
+      <text x="228" y="240">64-byte payload</text>
+      <text x="488" y="240">1400-byte payload</text>
+    </g>
+    <text class="ax-title" x="363" y="266" text-anchor="middle">UDP payload size (bytes)</text>
+    <text class="ax-title" x="20" y="120" text-anchor="middle" transform="rotate(-90 20 120)">Transmit rate (packets per second)</text>
+    <text class="ax-tick" x="363" y="294" text-anchor="middle">Flat-out burst, 6 s per point. Zero loss host-side in both measured cases.</text>
+  </svg>
+  </div>
+  <figcaption>
+    <b>Figure 6 · Outbound UDP transmit ceiling, measured vs documented</b>
+    Y axis is packets per second sustained during a flat-out 6-second burst; higher is
+    better. X axis groups by UDP payload size, with the two series side by side inside each
+    group. Measured bars come from the firmware's <code>etx max</code> counters and were
+    cross-checked against host packet counts, which matched exactly — 8742 and 4785 packets,
+    no loss.
+  </figcaption>
+</figure>
+
+<div class="col">
+<h2>An unrecorded finding: inbound is the weak direction</h2>
+<p>
+  The PR characterises the transmit path in detail but never measures inbound capacity. It
+  is much lower, and collapses with payload size. That matters because the PR names inbound
+  RTPS cost as its biggest unmeasured gap — anything bidirectional hits this ceiling first.
+</p>
+</div>
+
+<figure>
+  <div class="chartbox">
+  <svg class="chart" viewBox="0 0 700 320" role="img" aria-label="Bar chart of the share of offered inbound packets the board actually received. 100 percent at 500 packets per second, falling to 6.9 percent at 2000 packets per second of 1400 byte payloads.">
+    <g>
+      <line class="gridline" x1="96" y1="220" x2="660" y2="220"></line>
+      <line class="gridline" x1="96" y1="170" x2="660" y2="170"></line>
+      <line class="gridline" x1="96" y1="120" x2="660" y2="120"></line>
+      <line class="gridline" x1="96" y1="70" x2="660" y2="70"></line>
+      <line class="gridline" x1="96" y1="20" x2="660" y2="20"></line>
+      <text class="ax-tick" x="88" y="224" text-anchor="end">0</text>
+      <text class="ax-tick" x="88" y="174" text-anchor="end">25</text>
+      <text class="ax-tick" x="88" y="124" text-anchor="end">50</text>
+      <text class="ax-tick" x="88" y="74" text-anchor="end">75</text>
+      <text class="ax-tick" x="88" y="24" text-anchor="end">100</text>
+    </g>
+    <line class="axisline" x1="96" y1="20" x2="96" y2="220"></line>
+    <line class="axisline" x1="96" y1="220" x2="660" y2="220"></line>
+    <g fill="var(--series-1)">
+      <rect x="130" y="20" width="88" height="200" rx="4"><title>500 pps × 64 B — 3002 of 3000 offered received (100%)</title></rect>
+      <rect x="270" y="120.8" width="88" height="99.2" rx="4"><title>2000 pps × 64 B — 5956 of 12000 offered received (49.6%)</title></rect>
+      <rect x="410" y="170.2" width="88" height="49.8" rx="4"><title>5000 pps × 64 B — 7481 of 30000 offered received (24.9%)</title></rect>
+      <rect x="550" y="206.2" width="88" height="13.8" rx="4"><title>2000 pps × 1400 B — 825 of 12000 offered received (6.9%)</title></rect>
+    </g>
+    <g class="val-lbl" text-anchor="middle">
+      <text x="174" y="14">100%</text>
+      <text x="314" y="114">49.6%</text>
+      <text x="454" y="164">24.9%</text>
+      <text x="594" y="200">6.9%</text>
+    </g>
+    <g class="ax-tick" text-anchor="middle">
+      <text x="174" y="238">500 × 64</text>
+      <text x="314" y="238">2000 × 64</text>
+      <text x="454" y="238">5000 × 64</text>
+      <text x="594" y="238">2000 × 1400</text>
+      <text x="174" y="253">500 pps in</text>
+      <text x="314" y="253">993 pps in</text>
+      <text x="454" y="253">1247 pps in</text>
+      <text x="594" y="253">138 pps in</text>
+    </g>
+    <text class="ax-title" x="378" y="280" text-anchor="middle">Offered inbound load — packets per second × payload bytes</text>
+    <text class="ax-title" x="20" y="120" text-anchor="middle" transform="rotate(-90 20 120)">Packets actually received (% of offered)</text>
+    <text class="ax-tick" x="378" y="306" text-anchor="middle">Second tick row shows the absolute rate sustained. Outbound reaches 1457 pps.</text>
+  </svg>
+  </div>
+  <figcaption>
+    <b>Figure 7 · Inbound delivery ratio under flood</b>
+    Y axis is the share of offered packets the board's <code>nstat</code> counter recorded, as
+    a percentage — 100% means nothing dropped. X axis lists the four offered loads, with a
+    second tick row giving the absolute inbound rate sustained. Receive saturates around
+    <strong>1247 packets per second</strong> at 64 bytes and collapses to <strong>138</strong>
+    at 1400 bytes, against 1457 outbound. The first bar slightly exceeds its offered count
+    because the measurement's own probe datagram is included in the board's counter.
+  </figcaption>
+</figure>
+
+<div class="col">
+<h2>Test inventory</h2>
+<p class="sectionnote">Verdicts are relative to the claims made in the PR description.</p>
+</div>
+
+<div class="tablebox">
+<table>
+  <caption>All tests and verdicts</caption>
+  <thead>
+    <tr><th>Test</th><th>What it exercises</th><th>Result</th><th>Verdict</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>idf.py build</code></td><td>Compilation against espp v1.2.0</td>
+      <td>Clean. 889 520 B, 15% of app partition free</td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+    <tr>
+      <td>Flash &amp; boot</td><td>Image integrity on target</td>
+      <td>Hash verified, banner <code>v0.1.0-30-ga3da403</code></td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+    <tr>
+      <td><code>test_parse.py</code></td><td>Host CSV parser vs 16-column stream</td>
+      <td><code>ok</code></td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+    <tr>
+      <td>ICMP ping</td><td>W5500 link bring-up</td>
+      <td>0% loss, 2.74 ms mean <span class="mini">(PR: 1.3 ms)</span></td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+    <tr>
+      <td><code>spdp_sniff.py</code></td><td>RTPS discovery announcements</td>
+      <td>Arrive and parse; vendor, version, port all differ from the PR's evidence</td>
+      <td><span class="chip warn"><span class="dot"></span>Stale docs</span></td>
+    </tr>
+    <tr>
+      <td><code>rtps_sub.py</code></td><td>End-to-end telemetry decode</td>
+      <td><code>nothing arrived</code> — passive sniffer, never discovered</td>
+      <td><span class="chip warn"><span class="dot"></span>Tooling gap</span></td>
+    </tr>
+    <tr>
+      <td><code>telem_sub</code> <span class="mini">(written for this run)</span></td>
+      <td>Real DDS subscriber, native macOS espp build</td>
+      <td>10.0 Hz exact at 10 Hz; fields match console; peak 485 Hz</td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+    <tr class="flag">
+      <td>Delivered-rate sweep</td><td>Rate tracking and saturation</td>
+      <td>Lossless to 485 Hz, then <strong>collapse to zero with <code>pub_fail=0</code></strong></td>
+      <td><span class="chip bad"><span class="dot"></span>New defect</span></td>
+    </tr>
+    <tr>
+      <td><code>foc_quality.py</code> <span class="mini">free-shafted</span></td>
+      <td>Speed/current/observer stability vs network load</td>
+      <td>rpm sd 0.74–0.81 across quiet → bidirectional saturation</td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+    <tr>
+      <td><code>foc_quality.py</code> <span class="mini">brake-loaded, 4 A</span></td>
+      <td>The PR's own 100 rpm / 4 A condition</td>
+      <td>rpm sd 0.832 quiet → 0.815 saturated; <code>coalesce</code> 1.00</td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+    <tr>
+      <td>Telemetry stream under load</td>
+      <td>Whether the priority-0 stream task starves</td>
+      <td>9.9 → 7.3 rows/s at saturation — <strong>~25% of rows lost</strong></td>
+      <td><span class="chip warn"><span class="dot"></span>Confirmed gap</span></td>
+    </tr>
+    <tr>
+      <td>espp multicast interface</td><td>Host-side discovery on multi-homed machines</td>
+      <td>Transport ignores <code>interface_address</code> when transmitting</td>
+      <td><span class="chip bad"><span class="dot"></span>Upstream bug</span></td>
+    </tr>
+    <tr class="flag">
+      <td><code>sweep_endpoints.py</code></td><td>Cost scaling per writer endpoint</td>
+      <td>W=1/2/4 fine; <strong>W=5, 6, 8 fail to start</strong></td>
+      <td><span class="chip bad"><span class="dot"></span>Contradicted</span></td>
+    </tr>
+    <tr>
+      <td><code>etx</code> + <code>udp_recv.py</code></td><td>Raw UDP transmit ceiling</td>
+      <td>1457 pps @ 64 B, 797 pps @ 1400 B, zero loss</td>
+      <td><span class="chip ok"><span class="dot"></span>Exceeds PR</span></td>
+    </tr>
+    <tr>
+      <td><code>udp_load.py</code></td><td>Inbound flood vs control loop</td>
+      <td><code>coalesce</code> 1.00 throughout; RX saturates ~1247 pps</td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+    <tr>
+      <td><code>usb_bench.py</code></td><td>USB console baseline</td>
+      <td>234.0 kB/s firmware-side, 237.2 kB/s host-side</td>
+      <td><span class="chip ok"><span class="dot"></span>Confirmed</span></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<div class="tablebox">
+<table>
+  <caption>Inbound flood vs control loop — <code>udp_load.py</code> (separate boot)</caption>
+  <thead>
+    <tr>
+      <th>Condition</th><th class="n">Offered<br>(packets)</th><th class="n">Received<br>(packets)</th>
+      <th class="n">Delivered<br>(%)</th><th class="n">late%<br>(%)</th><th class="n">coalesce</th>
+      <th class="n">cmax<br>(µs)</th><th class="n">ISR max<br>(µs)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr><td>Quiet baseline</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">0.2</td><td class="n">1.00</td><td class="n">37</td><td class="n">17.3</td></tr>
+    <tr><td>500 pps × 64 B</td><td class="n">3000</td><td class="n">3002</td><td class="n">100</td><td class="n">0.6</td><td class="n">1.00</td><td class="n">35</td><td class="n">16.8</td></tr>
+    <tr><td>2000 pps × 64 B</td><td class="n">12000</td><td class="n">5956</td><td class="n">49.6</td><td class="n">0.7</td><td class="n">1.00</td><td class="n">35</td><td class="n">21.6</td></tr>
+    <tr><td>5000 pps × 64 B</td><td class="n">30000</td><td class="n">7481</td><td class="n">24.9</td><td class="n">0.8</td><td class="n">1.00</td><td class="n">36</td><td class="n">20.5</td></tr>
+    <tr><td>2000 pps × 1400 B</td><td class="n">12000</td><td class="n">825</td><td class="n">6.9</td><td class="n">0.4</td><td class="n">1.00</td><td class="n">35</td><td class="n">15.5</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="tablebox">
+<table>
+  <caption>Transport throughput</caption>
+  <thead>
+    <tr><th>Path</th><th class="n">Firmware-side</th><th class="n">Host-side</th><th class="n">Errors</th><th class="n">PR documented</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>UDP transmit, 64 B</td><td class="n">1457 pps · 91.1 kB/s</td><td class="n">8742 / 8742 pkts</td><td class="n">0</td><td class="n">795 pps</td></tr>
+    <tr><td>UDP transmit, 1400 B</td><td class="n">797 pps · 1090.3 kB/s</td><td class="n">4785 / 4785 pkts</td><td class="n">0</td><td class="n">539 pps</td></tr>
+    <tr><td>USB console, 64 B lines</td><td class="n">3745 lines/s · 234.0 kB/s</td><td class="n">237.2 kB/s</td><td class="n">0</td><td class="n">—</td></tr>
+    <tr><td>ICMP ping</td><td class="n">—</td><td class="n">2.05 / 2.74 / 3.99 ms</td><td class="n">0% loss</td><td class="n">1.3 ms mean</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="col">
+<h2>What is still open</h2>
+<p>
+  The spin work is complete. Four things remain unmeasured or unresolved, in rough order of
+  how much they should block merging.
+</p>
+<ul>
+  <li>
+    <strong>The delivery cliff above 485 Hz</strong>, and the fact that <code>pub_fail</code>
+    reports nothing when samples vanish. A counter that surfaces the drop would make this
+    diagnosable in the field rather than only on a bench with a subscriber attached.
+  </li>
+  <li>
+    <strong>Participant start fails at five or more writers</strong>, against a documented
+    claim of linear scaling to eight.
+  </li>
+  <li>
+    <strong>Inbound RTPS processing cost</strong> — still the PR's own biggest stated gap. The
+    host subscriber built for this run is one half of what closing it needs; the other half is
+    an external <em>writer</em> the board can subscribe to.
+  </li>
+  <li>
+    <strong>High-power operation.</strong> Everything here is at or below 4.1 A and 100 rpm.
+    Switching noise on the current sense rises sharply beyond that, and the PR is explicit
+    that its own envelope stops in the same place.
+  </li>
+</ul>
+<p>
+  Two housekeeping items also worth folding in: the hall table was uncalibrated throughout
+  (<code>cal=0</code>), which inflates absolute rpm standard deviation; and this firmware has
+  no <code>lim</code>/<code>vds</code>/<code>vl</code>/<code>odg</code> commands, so the bench's
+  documented arm profile cannot be applied — all runs used boot defaults of an 8 A console
+  clamp, 15 A trip and 80 °C limit.
+</p>
+
+<h2>Abbreviations</h2>
+<dl class="gloss">
+  <div class="gitem"><dt>RTPS / DDS</dt><dd>Real-Time Publish-Subscribe, the wire protocol under the DDS middleware standard. The board publishes telemetry as a DDS participant.</dd></div>
+  <div class="gitem"><dt>SPDP</dt><dd>Simple Participant Discovery Protocol — the multicast announcements participants use to find each other.</dd></div>
+  <div class="gitem"><dt>SEDP</dt><dd>Simple Endpoint Discovery Protocol — how a discovered participant declares its individual readers and writers, with the topic, type and address to send to.</dd></div>
+  <div class="gitem"><dt>ReaderProxy</dt><dd>A writer's record of one matched remote reader. No proxies means no transmission — the writer has nowhere to send.</dd></div>
+  <div class="gitem"><dt>BEST_EFFORT</dt><dd>QoS with no retransmission or delivery guarantee. Correct for live telemetry, where a late sample is worthless — but it means loss is silent.</dd></div>
+  <div class="gitem"><dt>XCDR1 / CDR</dt><dd>Common Data Representation, the binary wire encoding DDS uses. Here generated by reflection over the C++ <code>Sample</code> struct.</dd></div>
+  <div class="gitem"><dt>FOC</dt><dd>Field-Oriented Control — the 20 kHz motor-control loop this work must not disturb.</dd></div>
+  <div class="gitem"><dt>pub_us</dt><dd>Per-cycle cost of one publish call, microseconds.</dd></div>
+  <div class="gitem"><dt>pub_ok / pub_fail</dt><dd>Publishes the firmware considers successful / failed. <code>pub_fail</code> stays 0 even when nothing is delivered.</dd></div>
+  <div class="gitem"><dt>coalesce</dt><dd>Task notifications ÷ task runs. 1.00 means the control task serviced every tick — the true "did the loop keep up" metric.</dd></div>
+  <div class="gitem"><dt>late%</dt><dd>Share of current samples discarded for landing outside the PWM null window. Signal quality, not control timing. Baseline varies between boots.</dd></div>
+  <div class="gitem"><dt>cmax</dt><dd>Longest single control-cycle execution time in the window, microseconds.</dd></div>
+  <div class="gitem"><dt>overrun</dt><dd>Publish cycles where the deadline had already passed — the publisher could not keep up with the requested rate.</dd></div>
+  <div class="gitem"><dt>wmatch / rmatch</dt><dd>Remote readers matched to local writers, and vice versa. <code>wmatch=0</code> means published data has nowhere to go.</dd></div>
+  <div class="gitem"><dt>ISR</dt><dd>Interrupt Service Routine — here, the current-sampling interrupt synchronised to the PWM null window.</dd></div>
+  <div class="gitem"><dt>pps</dt><dd>Packets per second. Network disturbance tracks packet rate rather than bandwidth.</dd></div>
+  <div class="gitem"><dt>W5500</dt><dd>The WIZnet Ethernet controller, on SPI2 — the same bus as the DRV8353 gate driver, which is why coupling was a concern.</dd></div>
+  <div class="gitem"><dt>VM</dt><dd>Motor bus supply, 48 V here. The gate driver will not answer without it.</dd></div>
+  <div class="gitem"><dt>iq / id</dt><dd>Quadrature and direct axis currents — the torque-producing and flux-producing components in the rotating frame.</dd></div>
+</dl>
+</div>
+
+<footer>
+  Measured 2026-08-24/25 on ESP32-S3 hardware at 48 V, W5500 on the SPI expansion header,
+  point-to-point over a USB dock Ethernet port to a Mac at 192.168.50.1. Firmware identity was
+  confirmed by boot banner and by string-matching the flashed binary before any figure here was
+  recorded. Delivered rates come from a purpose-built DDS subscriber compiled natively from the
+  espp sources, running with a three-line local patch that makes RTPS multicast honor the
+  configured interface; that patch lives in a gitignored directory and does not affect the
+  firmware, which was never reflashed after it was applied.
+</footer>
+
+</div>

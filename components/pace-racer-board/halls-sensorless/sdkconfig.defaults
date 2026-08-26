@@ -11,21 +11,36 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=6144
 
+# Ethernet (WIZnet W5500 on the SPI expansion header), brought up at runtime by
+# the 'eth' console command. The BSP drives it through espp::Ethernet, whose
+# W5500 support is compiled in only when this option is set.
+CONFIG_ETH_ENABLED=y
+CONFIG_ESPP_ETHERNET_W5500=y
+
 CONFIG_SPI_MASTER_IN_IRAM=y
 CONFIG_MCPWM_CTRL_FUNC_IN_IRAM=y
 
-# WHICH CORE THE ACQUISITION RUNS ON — worth knowing before placing other work.
+# lwIP tcpip task affinity: LEFT AT THE DEFAULT (unpinned) DELIBERATELY.
 #
-# The FOC *task* is pinned to CPU1 (xTaskCreatePinnedToCore in sensorless.cpp),
-# but the sampling ISR is NOT: g_sampler.init() is called from app_main, which is
-# pinned to CPU0 (CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0), and ESP-IDF allocates an
-# interrupt on the core that registers it. So the timing-critical acquisition
-# shares CPU0 with the console and the telemetry stream, while CPU1 runs only the
-# control maths.
+# The obvious move is to pin the network stack to CPU0 to "keep it off the
+# control core". That is wrong here, and measurably so. The FOC *task* is on
+# CPU1, but the sampling ISR is NOT: g_sampler.init() is called from app_main,
+# which is pinned to CPU0 (CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0), and ESP-IDF
+# allocates the interrupt on the calling core. So CPU0 is where the timing-
+# critical acquisition lives, and pinning lwIP there piles contention onto
+# exactly the wrong core.
 #
-# The consequence is counter-intuitive: adding load to CPU0 hurts sample quality
-# even though the "control loop" appears to live on CPU1. Anything periodic and
-# chatty should be kept off CPU0, or left unpinned so the scheduler can place it.
+# Controlled A/B/C, 4x10 s windows each, ethernet up and idle, motor idle
+# (2026-08-03) — identical builds except this one flag:
+#   unpinned (default) : late 2.33%  coalesce 1.00  cmax 200-238 us
+#   pinned CPU0        : late 3.28%  coalesce 1.01  cmax 188-213 us
+#   pinned CPU1        : late 3.08%  coalesce 1.00  cmax 138-164 us
+#
+# Unpinned wins on late%, which is the current-sample quality metric that
+# network load actually degrades. Pinning to CPU1 is the alternative worth
+# revisiting if FOC compute headroom (cmax) ever becomes the binding constraint
+# instead — it was clearly best on that axis. Pinning to CPU0 is simply worse on
+# both counts; do not do it.
 
 # Puts the adc_oneshot HAL in IRAM. The sampler runs it from the MCPWM timer ISR
 # once per PWM period, and the sample has to land inside a null window only a few
