@@ -17,6 +17,9 @@ def f(x):
     try: return float(x)
     except ValueError: return float("nan")
 
+# STALE (2026-08-26): CH2 was the phase-C current clamp; it is now the
+# phase-B high-side source for the gate-drive session. Re-attach the clamp
+# and pick a free channel before trusting the amps column below.
 sc = Scope()
 sc.w(":CHAN2:DISP ON"); sc.w(":MEAS:ITEM VAVG,CHAN2"); sc.w(":RUN")
 time.sleep(1.0)

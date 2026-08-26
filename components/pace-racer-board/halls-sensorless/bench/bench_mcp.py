@@ -9,7 +9,8 @@ The bench (see README.md for the full map and gotcha list):
   BK MR3K160120   48 V VM rail, SCPI serial. Vset NEVER written — no tool
                   reaches it. Iset/output only.
   Rigol DP2031    CH1 = torque sensor 24 V rail, READ ONLY. CH2 = mag brake.
-  Rigol MHO984    scope, LAN only (raw socket). Torque sensor on CH1 @ 200 N·m/V.
+  Rigol MHO984    scope, LAN only (raw socket). CH1/CH2 phase-B high-side
+                  gate/source (MATH1 = VGS), CH3 speed out, CH4 torque @ 20 N·m/V.
   Board           ESP32-S3 + DRV8353 on the dock hub, USB console 115200.
 
 Scope of this server: bring-up, teardown, instrument setpoints, measurement,
@@ -368,9 +369,33 @@ def t_bench_torque_read(a):
     tq = sc.torque_nm(n=n)
     if tq is None:
         return ("no valid torque reading (all samples returned the 9.9e37 sentinel). "
-                "CH1 is clipping: reset it to 0.2 V/div, ':MEAS:CLE ALL', re-add "
-                "VAVG,CHAN1.")
-    return "torque %.2f N·m (median of %d VAVG samples, 200 N·m/V)" % (tq, n)
+                "CH%d is clipping: give it room (the 0-10 V output needs ~2 V/div "
+                "with a 10x probe), ':MEAS:CLE ALL', re-add VAVG,CHAN%d."
+                % (bl.Scope.TORQUE_CH, bl.Scope.TORQUE_CH))
+    return ("torque %.2f N·m (median of %d VAVG samples on CH%d, %g N·m/V)"
+            % (tq, n, bl.Scope.TORQUE_CH, bl.Scope.NM_PER_V))
+
+
+def t_bench_speed_read(a):
+    """Wheel rpm from the torque sensor's speed output on CH3."""
+    n = int(a.get("samples", 6))
+    try:
+        sc = scope()
+    except Exception as e:
+        _h["scope"] = None
+        return "scope unreachable (%s)." % e
+    if bl.Scope.RPM_PER_V is None:
+        v = sc.vavg(bl.Scope.SPEED_CH, n=n)
+        return ("speed output reads %s V average on CH%d, but Scope.RPM_PER_V is "
+                "unset so it cannot be converted to rpm. Set the scale from the "
+                "sensor datasheet first — an assumed scale would look right and "
+                "be wrong. If the output is a pulse train, measure FREQ instead."
+                % ("unreadable (clipping)" if v is None else "%.4f" % v,
+                   bl.Scope.SPEED_CH))
+    rpm = sc.speed_rpm(n=n)
+    if rpm is None:
+        return "no valid speed reading (CH%d clipping)." % bl.Scope.SPEED_CH
+    return "speed %.1f rpm (median of %d VAVG samples on CH%d)" % (rpm, n, bl.Scope.SPEED_CH)
 
 
 def t_bench_telemetry(a):
@@ -557,10 +582,18 @@ TOOLS = [
      "is the number the 514 W peak was recorded from.",
      {"type": "object", "properties": {}}, t_bench_bus_read),
 
+    ("bench_speed_read",
+     "Wheel rpm from the dynamic torque sensor's speed output on scope CH3. "
+     "Refuses to invent a scale: until Scope.RPM_PER_V is set from the sensor "
+     "datasheet it returns the raw volts and says so.",
+     {"type": "object",
+      "properties": {"samples": {"type": "integer", "default": 6}}},
+     t_bench_speed_read),
     ("bench_torque_read",
-     "Read shaft torque from the MHO984 scope (CH1, 200 N·m/V, median of N "
-     "samples). Explains itself if the scope is unreachable (Tailscale hijacks "
-     "the 169.254 link-local the scope lives on) or if the channel is clipping.",
+     "Read shaft torque from the MHO984 scope (CH4, 20 N·m/V with the probe "
+     "declared 10x, median of N samples). Explains itself if the scope is "
+     "unreachable (Tailscale hijacks the 169.254 link-local the scope lives "
+     "on) or if the channel is clipping.",
      {"type": "object", "properties": {"samples": {"type": "integer", "default": 6}}},
      t_bench_torque_read),
 

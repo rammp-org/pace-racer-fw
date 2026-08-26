@@ -202,10 +202,37 @@ def save(datadir, name, obj):
 class Scope:
     """MHO984 over raw LAN socket (port 5555), source-bound to the dock link.
     No pyvisa/libusb — the scope's USB presence was wedging the board's
-    USB-JTAG console (2026-08-20). Torque: 0-10 V = 0-200 N·m."""
+    USB-JTAG console (2026-08-20).
+
+    CHANNEL MAP — rewired 2026-08-26 for the gate-drive session. The old map
+    (CH1 torque, CH2 phase-C current clamp) is GONE; anything still reading
+    CHAN1 for torque or CHAN2 for amps is reading a gate node instead.
+
+      CH1  phase-B high-side GATE    referenced to board ground
+      CH2  phase-B high-side SOURCE  (= the phase node), board ground
+           MATH1 = CH1 - CH2 is the floating VGS. Both probe grounds stay on
+           board ground: clipping a barrel to the phase node would tie a
+           switching node to scope earth, and two barrels on two phase nodes
+           would short those phases together through the scope chassis.
+      CH3  torque sensor SPEED output
+      CH4  torque sensor TORQUE output
+
+    PROBE ATTENUATION: the scope is now told 10x, so queries return REAL volts.
+    That rescales torque. The sensor is 0-10 V = 0-200 N·m => 20 N·m per real
+    volt. The old NM_PER_V=200 was compensating for a 10:1 probe while the
+    scope was still set to 1x — do not carry that number over."""
     ADDR = ("169.254.100.100", 5555)
-    SRC = "169.254.91.251"
-    NM_PER_V = 200.0  # 10:1 probe attenuation confirmed vs sensor display 2026-08-20
+    SRC = "169.254.91.251"  # stale; __init__ discovers the live link-local
+
+    TORQUE_CH = 4
+    SPEED_CH = 3
+    VGS_GATE_CH = 1
+    VGS_SOURCE_CH = 2
+
+    NM_PER_V = 20.0  # 0-10 V = 0-200 N·m, read through a 10x-declared probe
+    # Speed output scale is NOT yet characterised. Left None on purpose so
+    # speed_rpm() raises instead of returning a confident wrong number.
+    RPM_PER_V = None
     SENTINEL = 9.0e37
 
     def __init__(self):
@@ -230,7 +257,8 @@ class Scope:
         else:
             raise last_err
         self.q("*IDN?")
-        self.w(":MEAS:ITEM VAVG,CHAN1")
+        self.w(":MEAS:ITEM VAVG,CHAN%d" % self.TORQUE_CH)
+        self.w(":MEAS:ITEM VAVG,CHAN%d" % self.SPEED_CH)
         self.w(":RUN")
         time.sleep(0.6)
 
@@ -241,18 +269,47 @@ class Scope:
         self.w(cmd)
         return self.sock.recv(300).decode(errors="replace").strip()
 
-    def torque_nm(self, n=6, settle=0.2):
+    def vavg(self, ch, n=6, settle=0.2):
+        """Median of n VAVG samples on one channel, in real volts. None if every
+        sample came back as the clipping sentinel."""
         import statistics
         vals = []
         for _ in range(n):
             try:
-                v = float(self.q(":MEAS:ITEM? VAVG,CHAN1"))
+                v = float(self.q(":MEAS:ITEM? VAVG,CHAN%d" % ch))
                 if abs(v) < self.SENTINEL:
-                    vals.append(v * self.NM_PER_V)
+                    vals.append(v)
             except (ValueError, OSError):
                 pass
             time.sleep(settle)
         return statistics.median(vals) if vals else None
+
+    def torque_nm(self, n=6, settle=0.2, ch=None):
+        v = self.vavg(self.TORQUE_CH if ch is None else ch, n, settle)
+        return None if v is None else v * self.NM_PER_V
+
+    def speed_rpm(self, n=6, settle=0.2, ch=None):
+        """Wheel rpm from the torque sensor's speed output.
+
+        Raises until RPM_PER_V is set from the sensor's datasheet: an unscaled
+        guess here would read plausibly and be wrong, which is exactly how the
+        torque channel misled us before."""
+        if self.RPM_PER_V is None:
+            raise RuntimeError(
+                "Scope.RPM_PER_V is unset — the torque sensor's speed-output "
+                "scale is not yet known. Set it (V -> rpm) before reading, or "
+                "use vavg(Scope.SPEED_CH) for the raw volts. If the output is "
+                "a pulse train rather than analog, measure FREQ instead.")
+        v = self.vavg(self.SPEED_CH if ch is None else ch, n, settle)
+        return None if v is None else v * self.RPM_PER_V
+
+    def vgs_v(self, n=6, settle=0.2):
+        """High-side VGS as gate-minus-source, both referenced to board ground.
+        Uses the two channel averages rather than MATH so it needs no scope-side
+        math setup; for edge shape read MATH1 on the screen."""
+        g = self.vavg(self.VGS_GATE_CH, n, settle)
+        s = self.vavg(self.VGS_SOURCE_CH, n, settle)
+        return None if (g is None or s is None) else g - s
 
     def close(self):
         try: self.sock.close()
