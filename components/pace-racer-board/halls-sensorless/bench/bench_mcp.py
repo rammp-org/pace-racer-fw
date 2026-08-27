@@ -376,6 +376,24 @@ def t_bench_torque_read(a):
             % (tq, n, bl.Scope.TORQUE_CH, bl.Scope.NM_PER_V))
 
 
+def t_bench_torque_rail(a):
+    """Power the torque sensor's 24 V rail (Rigol CH1)."""
+    on = a.get("on", True)
+    ilim = float(a.get("ilim", 1.0))
+    br = brake()
+    v, i = br.torque_rail_set(bool(on), ilim=ilim)
+    if not on:
+        return "torque-sensor rail OFF (%.2f V / %.3f A). Torque readings are now meaningless." % (v, i)
+    if i < 0.05:
+        return ("torque-sensor rail commanded ON at 24.000 V but draw is only %.3f A "
+                "— the sensor is not powering up. Check the rail wiring before "
+                "trusting any torque number." % i)
+    if i > 0.40:
+        return ("torque-sensor rail ON: %.2f V / %.3f A — draw is well above the "
+                "documented ~0.13 A. Check for a short before proceeding." % (v, i))
+    return "torque-sensor rail ON: %.2f V / %.3f A (healthy is ~0.13 A)" % (v, i)
+
+
 def t_bench_speed_read(a):
     """Wheel rpm from the torque sensor's speed output on CH3."""
     n = int(a.get("samples", 6))
@@ -581,6 +599,17 @@ TOOLS = [
      "Measure the VM rail right now and return volts, amps and bus watts. This "
      "is the number the 514 W peak was recorded from.",
      {"type": "object", "properties": {}}, t_bench_bus_read),
+
+    ("bench_torque_rail",
+     "Power the dynamic torque sensor's 24 V rail (Rigol CH1) on or off. The "
+     "voltage is fixed at 24.000 V and cannot be set from here — the whole "
+     "campaign's torque scale assumes it. Only the current limit is adjustable. "
+     "Warns if the draw is not the healthy ~0.13 A.",
+     {"type": "object",
+      "properties": {"on": {"type": "boolean", "default": True},
+                     "ilim": {"type": "number", "default": 1.0,
+                              "description": "Current limit, A. Clamped to 0.2-1.5."}}},
+     t_bench_torque_rail),
 
     ("bench_speed_read",
      "Wheel rpm from the dynamic torque sensor's speed output on scope CH3. "
