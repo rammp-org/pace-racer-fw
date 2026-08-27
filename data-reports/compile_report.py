@@ -45,6 +45,14 @@ FAULTS = [
     ("0x0604 / 0x0608", "VDS OCP, low-side B",
      "Sustained 24-25 A stalled DC in heat-soaked FETs; VDS threshold derates "
      "with Rdson — the protection working at its designed boundary", "2026-08-06 / 08-17"),
+    ("0x0628 \u00d72", "VDS OCP, high-side A+B",
+     "The 2026-08-26 1 kW chase: real OCP from the hot-derated threshold "
+     "meeting ~29 A clamp-verified peaks at 850-950 W bus, board 57-60 \u00b0C; "
+     "independent of brake step size", "2026-08-26"),
+    ("49-52 A phantom trips", "software trip, phase C \u2014 resolved",
+     "Reported spikes never existed: a 100 A clamp armed at 35 A on the same "
+     "phase stayed quiet, 3\u00d7 reproduced. Trip raised 35\u219245 A; zero phantoms "
+     "through 848 W", "2026-08-26"),
     ("chip wedge", "USB-serial-JTAG dead, esptool cannot connect",
      "Correlates with the corrupted-angle OCP transient; only a VM power-cycle "
      "recovers it. Open board-level item since 07-30", "2026-08-06"),

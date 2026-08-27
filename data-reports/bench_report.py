@@ -71,19 +71,20 @@ def pie_chart(cid, title, slices):
             f'aria-label="{html.escape(title)}">{"".join(parts)}</svg></div>{tbl}</figure>')
 
 
-def envelope_chart(cid, title, meas, derived, iso_watts):
+def envelope_chart(cid, title, meas, derived, iso_watts, xmax=170.0):
     """Tested operating envelope: (rpm, N·m) points over iso-power curves.
     meas = sensor-measured torque (filled), derived = Kt·iq estimates (rings)."""
     W_, H_, ML_, MR_, MT_, MB_ = 860, 380, 74, 16, 18, 52
     pw, ph = W_ - ML_ - MR_, H_ - MT_ - MB_
-    XMAX, YMAX = 170.0, 20.0
+    XMAX, YMAX = xmax, 20.0
     sx = lambda v: ML_ + v / XMAX * pw
     sy = lambda v: MT_ + ph - v / YMAX * ph
     g = []
     for t in (0, 5, 10, 15, 20):
         g.append(f'<line x1="{ML_}" y1="{sy(t):.1f}" x2="{W_-MR_}" y2="{sy(t):.1f}" class="grid"/>')
         g.append(f'<text x="{ML_-8}" y="{sy(t):.1f}" class="tick" text-anchor="end" dy="0.32em">{t}</text>')
-    for t in (0, 30, 60, 90, 120, 150):
+    xticks = (0, 30, 60, 90, 120, 150) if XMAX <= 200 else (0, 100, 200, 300, 400)
+    for t in xticks:
         g.append(f'<text x="{sx(t):.1f}" y="{MT_+ph+18}" class="tick" text-anchor="middle">{t}</text>')
     g.append(f'<line x1="{ML_}" y1="{MT_+ph}" x2="{W_-MR_}" y2="{MT_+ph}" class="axis"/>')
     g.append(f'<text class="axis-label" transform="rotate(-90 14 {MT_+ph/2:.0f})" x="14" '
@@ -92,13 +93,13 @@ def envelope_chart(cid, title, meas, derived, iso_watts):
              f'rotor speed (rpm)</text>')
     for P in iso_watts:
         pts = []
-        for k in range(6, 171, 2):
+        for k in range(6, int(XMAX) + 1, 2):
             T = P / (k * 2 * math.pi / 60)
             if T <= YMAX:
                 pts.append(f"{sx(k):.1f},{sy(T):.1f}")
         if pts:
             g.append(f'<polyline points="{" ".join(pts)}" fill="none" class="ref"/>')
-            k_lbl = max(10, P / (YMAX * 2 * math.pi / 60) * 1.15)
+            k_lbl = min(XMAX * 0.86, max(10, P / (YMAX * 2 * math.pi / 60) * 1.15))
             T_lbl = min(YMAX * 0.93, P / (k_lbl * 2 * math.pi / 60))
             g.append(f'<text x="{sx(k_lbl)+6:.0f}" y="{sy(T_lbl)-4:.0f}" class="note">{P} W</text>')
     for rpm, tq in derived:
@@ -169,13 +170,23 @@ def build_body():
     f6 = load("fig6/power150_fine.json")
     f6hold = load("fig6/power150_edge.json")
 
+    def load_run(rel):
+        q = APP / "logs" / rel
+        return json.loads(q.read_text()) if q.exists() else None
+    la7 = load_run("run-20260826-1kw/ladder_1kw.json")
+    lb7 = load_run("run-20260826-1kw/ladder_1kw_b.json")
+    lc7 = load_run("run-20260826-1kw/ladder_1kw_c.json")
+
     # ---------------- header + tiles ----------------
     out.append("<h1>PACE RACER — bench characterization figures</h1>")
     out.append("<p class='sub'>ESP32-S3 + DRV8353, 48 V bus, NineBot S hub motor (15 pp), "
                "MT6701 encoder through 2.5:1 gearing, magnetic-particle-brake dyno. "
-               "2026-08-19/20. All data captured by the on-board 20 kHz FOC task via the "
-               "<code>cap</code> ring buffer.</p>")
+               "2026-08-19/20, extended 2026-08-26 with the 400 rpm power chase (§7). "
+               "Figs 1-6 captured by the on-board 20 kHz FOC task via the <code>cap</code> "
+               "ring buffer; §7 is host-logged at ~1 Hz per rung.</p>")
     tiles = []
+    if lc7:
+        tiles.append(tile(f"{lc7['peak_w']:.0f} W", "peak bus power, 400 rpm (08-26)"))
     if rl:
         tiles.append(tile(f"{rl['R']*2:.3f} Ω", "R line-line, fit (DMM: 0.323)"))
     if jest:
@@ -653,17 +664,23 @@ def build_body():
             meas_pts += [(0.0, s["torque_raw"] * SCALE) for s in f5["steps"]
                          if s.get("torque_raw") is not None and s["iq_meas"] > 2]
         meas_pts += [(r["rpm"], r["torque_nm"]) for r in effrows]
+        for lad in (la7, lb7, lc7):
+            if lad:
+                meas_pts += [(r["rpm"], r["torque_nm"]) for r in lad["log"]
+                             if r.get("torque_nm") and r.get("rpm") and r["rpm"] > 300]
         derived_pts = [(100, 8.5 * 0.62), (100, 2.7 * 0.62),   # fig 2/3 at 100 rpm
                        (60, 6.4 / 2.9 * 1.0), (50, 2.5)]       # fig 1 drive tests
         out.append(envelope_chart("f6-env", "Validated operating points, torque vs speed",
-                                  meas_pts, derived_pts, [50, 100, 250]))
+                                  meas_pts, derived_pts, [50, 250, 500, 750], xmax=440))
         out.append("<p>Iso-lines are <i>mechanical</i> power — the top of the 150 rpm "
                    "column sits just above the 250 W curve (267 W mechanical, which the "
                    "bus fed with 514 W; the gap is §6.1's copper). The stall column at "
-                   "0 rpm is fig 5's staircase. Territory still unexplored: the "
-                   "high-speed half of the plane (right of 160 rpm) and sustained dwells "
-                   "at the top corner — both bounded today by the 150 rpm campaign cap "
-                   "and the brake's short-run thermal budget, not by the drive.</p>")
+                   "0 rpm is fig 5's staircase. The 400 rpm column is the "
+                   "2026-08-26 power chase (§7) — it filled in the high-speed half up to "
+                   "the firmware's ±400 rpm command clamp, topping out just above the "
+                   "500 W mechanical iso-line. Unexplored now: speeds past 400 rpm "
+                   "(a one-line clamp change) and sustained dwells at the top corner, "
+                   "bounded by VDS-OCP thermal derating (§7), not the 30 A ceiling.</p>")
 
         # ---- 6.2 temp vs power ----
         both = ([("coarse ramp", "--series-1", f6["log"]),
@@ -693,6 +710,80 @@ def build_body():
                    "temperature near 60–65 °C at this power in a 25 °C room — inside the "
                    "80 °C guard with margin.</p>")
 
+
+    # ---------------- 7. the 1 kW chase ----------------
+    if lc7:
+        out.append(sec("7 · The 1 kW chase at 400 rpm — 848 W bus",
+                       "2026-08-26. Hall-commutated 400 rpm speed hold, brake ladders in "
+                       "0.1-0.6 V steps. Soft trip raised 35\u219245 A (see prose), vl 26 V, "
+                       "Iset 24 A. Torque from the sensor on CH4, real phase-C current "
+                       "peaks from an independent 100 A clamp on CH3."))
+        out.append("<p><b>Why the trip moved:</b> the 08-20 campaign\u2019s intermittent "
+                   "over-current aborts reported 49\u201352 A on phase C, but a 100 A current "
+                   "clamp on that phase, armed to trigger at 35 A, never fired \u2014 "
+                   "reproduced three times. The spikes are conversion artifacts, not "
+                   "current (the reads sat beyond the ADC\u2019s +51/\u221239 A rail only because "
+                   "the <i>reconstructed</i> phase can read to 2\u00d7 rail). With the trip at "
+                   "45 A the ladders below logged <b>zero</b> phantom trips while the "
+                   "clamp confirmed real peaks stayed \u2264 29 A. Caveat: at 45 A the trip "
+                   "is blind to negative excursions on the measured pair (rail \u221239 A); "
+                   "the DRV VDS OCP stays as the hardware layer.</p>")
+        rampc = lc7["log"]
+        out.append(line_chart("f7-ramp", "Bus power vs brake command \u2014 final ladder, 0.1 V steps",
+                              [r["brake_v"] for r in rampc],
+                              [("bus power (W)", "--series-1",
+                                [round(r["bus_w"]) for r in rampc]),
+                               ("torque \u00d720 (N\u00b7m)", "--series-3",
+                                [round(r["torque_nm"] * 20) for r in rampc])],
+                              "brake command (V)", "W \u00b7 N\u00b7m\u00d720",
+                              hlines=[(1000, "1 kW target")],
+                              notes=[(3.9, 870, "847.7 W \u2014 fault on next rung", "end")]))
+        out.append("<p>The ladder ended at the 4.0 V rung with <b>DRV8353 fault 0x0628</b> "
+                   "(VDS OCP, high-side A+B) \u2014 the second of the day: an earlier coarser "
+                   "ladder peaked at 790.8 W and faulted stepping 3.4\u21923.8 V. The second "
+                   "fault came on a gentle 0.1 V step from a steady 847.7 W, which rules "
+                   "out load-step transients: this is the VDS threshold (0.20 V \u2248 "
+                   "58\u201374 A cold) <i>derating with FET temperature</i> into legitimate "
+                   "peak current. Both faults struck with the board at 57\u201360 \u00b0C after "
+                   "~2 min of loaded laddering; the clamp read 28\u201329 A real peaks at the "
+                   "time. Brake remanence, quantified: the same 2.4 V command produced "
+                   "232 W on a fresh coil, 340 W later the same afternoon, and 400 W "
+                   "after a 3.8 V excitation.</p>")
+        effpts7 = sorted((r["bus_w"], r["torque_nm"] * r["rpm"] * 2 * math.pi / 60
+                          / r["bus_w"] * 100)
+                         for r in rampc if r.get("torque_nm") and r["bus_w"] > 100)
+        out.append(line_chart("f7-eff", "System efficiency vs bus power at 400 rpm",
+                              [round(x) for x, _ in effpts7],
+                              [("efficiency (%)", "--series-4",
+                                [round(e, 1) for _, e in effpts7])],
+                              "bus power (W)", "efficiency (%)", ylo=40, yhi=85))
+        e_top = effpts7[-1][1]
+        out.append(f"<p><b>Efficiency at the 848 W point: {e_top:.0f}%</b> (14.7 N\u00b7m "
+                   "\u00d7 400 rpm = 616 W mechanical) \u2014 versus 52% at \u00a76\u2019s 510 W / "
+                   "150 rpm corner. Same hardware, same currents, 20 points better: "
+                   "power bought with speed instead of torque skips the I\u00b2 copper "
+                   "tax. This is the curve \u00a76.1 predicted.</p>")
+        wall = sorted((r["bus_w"], r["clamp_peak_a"], r["tmax"]) for r in rampc)
+        out.append(line_chart("f7-wall", "The derating wall: real peaks and board temp vs power",
+                              [round(w) for w, _, _ in wall],
+                              [("phase-C peak, clamp (A)", "--series-2",
+                                [round(c, 1) for _, c, _ in wall]),
+                               ("hottest board sensor (\u00b0C)", "--series-1",
+                                [round(tm, 1) for _, _, tm in wall])],
+                              "bus power (W)", "A \u00b7 \u00b0C"))
+        out.append("<p><b>Control-loop timing, exonerated:</b> every rung of every ladder "
+                   "logged <code>late=0.1%</code> and <code>cmax \u2264 57 \u00b5s</code> against "
+                   "the 50 \u00b5s PWM period \u2014 at 848 W the FOC task ran exactly as it does "
+                   "idle. The earlier \u201clate stuck at 5%\u201d scare was a reading error: the "
+                   "<code>s</code>/<code>sq</code> stats reset on every read, so a first "
+                   "read after boot averages in the zero-cal and arm work. Pure-idle "
+                   "windows read 0.1%. There is no firmware timing limit in evidence.</p>"
+                   "<p><b>Road to 1 kW:</b> in order of preference \u2014 a cold sprint "
+                   "(the 848 W ladder spent two minutes heat-soaking below 700 W; cold "
+                   "FETs keep the OCP threshold at 58\u201374 A), raising the \u00b1400 rpm "
+                   "command clamp so 1 kW rides on speed at ~20 A instead of torque at "
+                   "~30 A, or as a last resort exposing DRV vds level 6 (0.30 V).</p>")
+
     out.append("<h2>Bench notes</h2><ul>"
                "<li><b>Torque sensor scale:</b> the analog path read 10× low vs the sensor's "
                "display (10:1 probe on a 1× scope channel); all torque here uses the "
@@ -709,9 +800,18 @@ def build_body():
                "goes mute — chip cold boots don't clear it, USB re-enumeration does, "
                "pointing at the host driver instance. Harness mitigations: stream-quiet "
                "around port open/close and a software replug via hub port power-cycling.</li>"
-               "<li><b>Hardware watch item:</b> intermittent DRV8353 VDS faults naming "
-               "phase B high-side at low current near high-stress transients; not "
-               "reproducible cold. A gate-drive scope session is recommended.</li>"
+               "<li><b>Phantom over-current, closed (08-26):</b> the intermittent 49-52 A "
+               "phase-C trip reports were proven phantom against a 100 A clamp (never "
+               "above 29 A real, 3\u00d7 reproduced); soft trip raised 35\u219245 A, zero phantom "
+               "trips since. The gate-drive scope session happened: ~322 ns dead-time, "
+               "zero overlap samples, no shoot-through.</li>"
+               "<li><b>VDS OCP derating is the current power wall (08-26):</b> two real "
+               "0x0628 faults (high-side A+B) at 850-950 W attempts with the board at "
+               "57-60 \u00b0C \u2014 the 0.20 V threshold\u2019s amp value falls with hot Rdson into "
+               "real ~29 A peaks. Cold starts buy headroom; see \u00a77.</li>"
+               "<li><b>Stats counters reset on read:</b> <code>s</code>/<code>sq</code> "
+               "print-and-zero; a single read after boot mixes cal/arm work into the "
+               "late percentage. Take a throwaway read, wait, read again.</li>"
                "<li>The stream task can block silently if an LM75/I2C read hangs — the "
                "thermal guard is blind in that state (VM cycle recovers).</li></ul>")
     return "".join(out)
