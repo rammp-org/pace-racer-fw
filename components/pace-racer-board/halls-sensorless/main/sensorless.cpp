@@ -1335,7 +1335,7 @@ extern "C" void app_main(void) {
         if (ramp < 0.1f)
           ramp = 0.1f;
         g_hall_amps.store(amps);
-        g_hall_rpm.store(std::clamp(rpm, -400.0f, 400.0f));
+        g_hall_rpm.store(std::clamp(rpm, -520.0f, 520.0f)); // raised 400->520 for the 1 kW-on-speed route 2026-08-27
         g_hall_ramp.store(std::fabs(rpm) / ramp);
         g_hall_sub.store(HALL_SPEED);
         g_theta_src.store(0);
@@ -1388,7 +1388,7 @@ extern "C" void app_main(void) {
         if (ramp < 0.1f)
           ramp = 0.1f;
         g_hall_amps.store(amps);
-        g_hall_rpm.store(std::clamp(rpm, -400.0f, 400.0f));
+        g_hall_rpm.store(std::clamp(rpm, -520.0f, 520.0f)); // raised 400->520 for the 1 kW-on-speed route 2026-08-27
         g_hall_ramp.store(std::fabs(rpm) / ramp);
         g_hall_sub.store(HALL_SPEED);
         g_theta_src.store(1);
@@ -1692,7 +1692,7 @@ extern "C" void app_main(void) {
       a = std::clamp(a, 30.0f, 120.0f);
       g_temp_limit.store(a);
       fmt::print("#tlimit {:.0f} C\n", a);
-    } else if (sscanf(line, "vds %d", &x) == 1 && x >= 0 && x <= 5) {
+    } else if (sscanf(line, "vds %d", &x) == 1 && x >= 0 && x <= 6) {
       // vds <0-5> — DRV8353 hardware OCP threshold. 0-4 are the fine steps
       // (0.06-0.10 V); 5 is the chip's next step, a 2x jump to 0.20 V
       // (~58-74 A cold). At 5 the VDS trip sits beyond the current-sense ADC
@@ -1700,8 +1700,11 @@ extern "C" void app_main(void) {
       // protection — high-power runs only, keep them short, thermal guard on.
       // Rdson rises ~1.5-2x with junction temp, so the amp threshold DERATES
       // as the FETs heat: late-run OCP trips at lower current are physics.
-      static constexpr const char *kVdsEstAmps[6] = {"17-22", "20-26", "23-30",
-                                                     "26-33", "29-37", "58-74"};
+      // 6 (0.30 V) added 2026-08-27, user-authorized: three real VDS OCP trips
+      // (0x0628 x2, 0x060a) ended 850-950 W attempts at 400 rpm; level 6 is the
+      // last-resort rung after the 520 rpm speed route.
+      static constexpr const char *kVdsEstAmps[7] = {"17-22", "20-26", "23-30",
+                                                     "26-33", "29-37", "58-74", "87-111"};
       const int lvl = x; // enum indices 0-5 map 1:1 for these steps
       std::error_code vec;
       auto gd = bsp.gate_driver();
@@ -1712,8 +1715,9 @@ extern "C" void app_main(void) {
                    vec ? vec.message() : "");
       } else {
         fmt::print("#vds {:.2f}V (~{} A cold, derates hot){}\n",
-                   x == 5 ? 0.20f : 0.06f + 0.01f * (float)x, kVdsEstAmps[x],
-                   x == 5 ? " — SW 30A trip is now the outer current guard" : "");
+                   x >= 5 ? 0.20f + 0.10f * (float)(x - 5) : 0.06f + 0.01f * (float)x,
+                   kVdsEstAmps[x],
+                   x >= 5 ? " — SW 30A trip is now the outer current guard" : "");
       }
     } else if (sscanf(line, "odg %d", &x) == 1 && (x == 1 || x == 2 || x == 4 || x == 8)) {
       // odg <1|2|4|8> — VDS OCP deglitch, us. 8 rides through switching-edge

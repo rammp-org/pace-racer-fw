@@ -83,7 +83,7 @@ def envelope_chart(cid, title, meas, derived, iso_watts, xmax=170.0):
     for t in (0, 5, 10, 15, 20):
         g.append(f'<line x1="{ML_}" y1="{sy(t):.1f}" x2="{W_-MR_}" y2="{sy(t):.1f}" class="grid"/>')
         g.append(f'<text x="{ML_-8}" y="{sy(t):.1f}" class="tick" text-anchor="end" dy="0.32em">{t}</text>')
-    xticks = (0, 30, 60, 90, 120, 150) if XMAX <= 200 else (0, 100, 200, 300, 400)
+    xticks = (0, 30, 60, 90, 120, 150) if XMAX <= 200 else tuple(range(0, int(XMAX), 100))
     for t in xticks:
         g.append(f'<text x="{sx(t):.1f}" y="{MT_+ph+18}" class="tick" text-anchor="middle">{t}</text>')
     g.append(f'<line x1="{ML_}" y1="{MT_+ph}" x2="{W_-MR_}" y2="{MT_+ph}" class="axis"/>')
@@ -176,32 +176,34 @@ def build_body():
     la7 = load_run("run-20260826-1kw/ladder_1kw.json")
     lb7 = load_run("run-20260826-1kw/ladder_1kw_b.json")
     lc7 = load_run("run-20260826-1kw/ladder_1kw_c.json")
+    lf7 = load_run("run-20260826-1kw/ladder_1kw_f_500rpm.json")
+    th8 = load_run("run-20260827-torque-hold/torque_hold.json")
 
     # ---------------- header + tiles ----------------
     out.append("<h1>PACE RACER — bench characterization figures</h1>")
     out.append("<p class='sub'>ESP32-S3 + DRV8353, 48 V bus, NineBot S hub motor (15 pp), "
                "MT6701 encoder through 2.5:1 gearing, magnetic-particle-brake dyno. "
-               "2026-08-19/20, extended 2026-08-26 with the 400 rpm power chase (§7). "
-               "Figs 1-6 captured by the on-board 20 kHz FOC task via the <code>cap</code> "
-               "ring buffer; §7 is host-logged at ~1 Hz per rung.</p>")
+               "Campaign 2026-08-19/20, extended 2026-08-26/27 with the high-power chase "
+               "(§7) and the constant-speed load-step run (§8). Figs 1-6 are captured "
+               "by the on-board 20 kHz FOC task via the <code>cap</code> ring buffer; "
+               "§7-8 are host-logged. All loads are reported as measured shaft torque "
+               "(N·m) from the inline rotary sensor.</p>")
     tiles = []
-    if lc7:
-        tiles.append(tile(f"{lc7['peak_w']:.0f} W", "peak bus power, 400 rpm (08-26)"))
+    if lf7:
+        pk = max(lf7["log"], key=lambda r: r["bus_w"])
+        eff1kw = pk["torque_nm"] * pk["rpm"] * 2 * math.pi / 60 / pk["bus_w"] * 100
+        tiles.append(tile(f"{lf7['peak_w']:.0f} W", "peak bus power, 483 rpm (08-27)"))
+        tiles.append(tile(f"{eff1kw:.0f}%", "system efficiency at the 1 kW point"))
+    if th8:
+        import statistics as _st
+        _hr = [r["rpm"] for r in th8["series"] if r["phase"] == "hold" and r["rpm"]]
+        tiles.append(tile(f"±{_st.stdev(_hr):.1f} rpm", "speed hold across 2-10 N·m load steps"))
     if rl:
         tiles.append(tile(f"{rl['R']*2:.3f} Ω", "R line-line, fit (DMM: 0.323)"))
     if jest:
         tiles.append(tile(f"{jest['J']*1000:.0f} m·kg·m²", "inertia J (drag-inclusive)"))
-    if f3:
-        rpm = [r[1] for r in f3["rows"]]
-        mid = rpm[int(3/f3["dt"]):int(20/f3["dt"])]
-        mean = sum(mid)/len(mid)
-        sd = (sum((x-mean)**2 for x in mid)/len(mid))**0.5
-        tiles.append(tile(f"±{sd:.1f} rpm", "speed hold under sweeping load"))
     if f2:
-        tiles.append(tile("10 rpm", "worst dip on a torque step"))
-    if f6hold:
-        pw = max(r["bus_w"] for r in f6hold["log"] if r["rpm"] > 120)
-        tiles.append(tile(f"{pw:.0f} W", "peak bus power at 150 rpm"))
+        tiles.append(tile("10 rpm", "worst dip on a 2.6 N·m torque step"))
     out.append(f"<div class='tiles'>{''.join(tiles)}</div>")
 
     # ---------------- 1. R/L identification ----------------
@@ -326,7 +328,7 @@ def build_body():
     if f2:
         out.append(sec("2 · Disturbance rejection — torque step at 100 rpm",
                        "Spinning at 100 rpm under encoder commutation, the particle brake "
-                       "steps from 0 → 1.25 V (≈2.6 N·m) and back. Capture at 250 Hz."))
+                       "applies a 2.6 N·m step and releases it. Capture at 250 Hz."))
         ts = [k * f2["dt"] for k in range(len(f2["rows"]))]
         rpm = [r[1] for r in f2["rows"]]
         iq = [r[2] for r in f2["rows"]]
@@ -356,9 +358,9 @@ def build_body():
     # ---------------- 3. continuous load ----------------
     if f3:
         out.append(sec("3 · Continuously varying load",
-                       "Same 100 rpm hold while the brake follows two cycles of a slow sine "
-                       "(0.3–1.3 V, 10 s period). Load and drive torque share one axis by "
-                       "converting both to N·m."))
+                       "Same 100 rpm hold while the brake follows two cycles of a slow "
+                       "sinusoidal load, ≈0.3-2 N·m nominal with a 10 s period. Load and "
+                       "drive torque share one axis in N·m."))
         ts = [k * f3["dt"] for k in range(len(f3["rows"]))]
         rpm = [r[1] for r in f3["rows"]]
         iq = [r[2] for r in f3["rows"]]
@@ -388,7 +390,7 @@ def build_body():
         load_T = [interp(t) for t in ts]
         out.append(line_chart("sine-torque", "Drive torque vs applied load", dec(ts),
                               [("drive torque Kt·iq", "--series-2", dec(drive_T)),
-                               ("brake command (nominal N·m)", "--series-3", dec(load_T))],
+                               ("applied load (nominal N·m)", "--series-3", dec(load_T))],
                               "time (s)", "torque (N·m)"))
         mid = rpm[int(3/f3["dt"]):int(20/f3["dt"])]
         mean = sum(mid)/len(mid)
@@ -521,7 +523,7 @@ def build_body():
     SCALE = 10.0  # 10:1 probe on a 1x channel — confirmed against the sensor display
     if f5:
         out.append(sec("5 · Torque vs current — encoder commutation is linear",
-                       "eiq staircase at locked rotor (brake at 2.5 V), torque read from the "
+                       "eiq staircase with the rotor held by the particle brake, torque read from the "
                        "sensor's 0–10 V output on the scope over LAN. The commutation offset "
                        "came from a torque-peak sweep: constant 8 A while stepping the offset "
                        "through 360° — torque peaks at the true angle, and since nothing "
@@ -563,19 +565,14 @@ def build_body():
                        "Hall-commutated 150 rpm hold while the 200 N·m particle brake ramps; "
                        "bus power measured at the 48 V supply. Current ceiling raised to "
                        "30 A target / 35 A trip for this run."))
-        # monotonic rising portion only — the raw log is a time series that
-        # retraces its brake-voltage x-axis after the stall backoff
-        ramp6 = []
-        vmax = 0.0
-        for r in f6["log"]:
-            if r["rpm"] > 120 and r["brake_v"] >= vmax:
-                vmax = r["brake_v"]
-                ramp6.append(r)
-        out.append(line_chart("f6-ramp", "Bus power vs brake command (rising ramp)",
-                              [r["brake_v"] for r in ramp6],
+        # power vs measured shaft torque (edge run carries the torque channel)
+        tq6 = sorted((r["torque_nm"], r["bus_w"]) for r in f6hold["log"]
+                     if r.get("torque_nm") is not None and r["rpm"] > 120)
+        out.append(line_chart("f6-ramp", "Bus power vs shaft torque at 150 rpm",
+                              [round(a, 1) for a, _ in tq6],
                               [("bus power (W)", "--series-1",
-                                [round(r["bus_w"]) for r in ramp6])],
-                              "brake command (V)", "bus power (W)"))
+                                [round(b) for _, b in tq6])],
+                              "shaft torque (N·m)", "bus power (W)"))
         hold6 = f6hold["log"]
         ts6 = [r["t"] for r in hold6]
         out.append(line_chart("f6-hold", "The edge run: power, current, speed vs time",
@@ -631,8 +628,9 @@ def build_body():
                    "current (copper heat ∝ I²) while output power needs speed, so a "
                    "max-torque / low-speed point is inherently copper-dominated. The same "
                    "17 N·m at 400 rpm would put mechanical output near 710 W against the "
-                   "same ~240 W of losses (≈75%). The drive electronics themselves burn "
-                   f"only ~{drive_other:.0f} W ({drive_other/bus_w*100:.0f}% of bus).</p>")
+                   "same ~240 W of losses (≈75%) — §7 later confirmed it: 73% at 848 W / "
+                   "400 rpm and 78% at 1049 W / 483 rpm. The drive electronics themselves "
+                   f"burn only ~{drive_other:.0f} W ({drive_other/bus_w*100:.0f}% of bus).</p>")
 
         # ---- 6.1b efficiency along the ramp ----
         effrows = [r for r in hold6
@@ -640,7 +638,7 @@ def build_body():
         effpts = [(r["bus_w"], r["torque_nm"] * r["rpm"] * 2 * math.pi / 60 / r["bus_w"] * 100)
                   for r in effrows]
         effpts = sorted(p for p in effpts if p[1] <= 100)
-        out.append("<h3>6.1b · Efficiency along the ramp</h3>"
+        out.append("<h3>6.2 · Efficiency along the ramp</h3>"
                    "<p>Mechanical power (torque sensor × speed) over bus power (supply "
                    "meter) — two independent instruments, so this is a true end-to-end "
                    "system efficiency at fixed 150 rpm as torque rises:</p>")
@@ -653,35 +651,6 @@ def build_body():
                    "point — the I² copper cost of buying torque at fixed speed. The curve "
                    "is the quantitative version of the pie above.</p>")
 
-        # ---- 6.3 tested envelope ----
-        out.append("<h3>6.3 · The tested operating envelope</h3>"
-                   "<p>Every validated operating point from the campaign on the "
-                   "torque–speed plane, against iso-power curves. Filled points carry "
-                   "sensor-measured torque; rings are K<sub>t</sub>·i<sub>q</sub> "
-                   "estimates from runs before the torque readout existed.</p>")
-        meas_pts = []
-        if f5:
-            meas_pts += [(0.0, s["torque_raw"] * SCALE) for s in f5["steps"]
-                         if s.get("torque_raw") is not None and s["iq_meas"] > 2]
-        meas_pts += [(r["rpm"], r["torque_nm"]) for r in effrows]
-        for lad in (la7, lb7, lc7):
-            if lad:
-                meas_pts += [(r["rpm"], r["torque_nm"]) for r in lad["log"]
-                             if r.get("torque_nm") and r.get("rpm") and r["rpm"] > 300]
-        derived_pts = [(100, 8.5 * 0.62), (100, 2.7 * 0.62),   # fig 2/3 at 100 rpm
-                       (60, 6.4 / 2.9 * 1.0), (50, 2.5)]       # fig 1 drive tests
-        out.append(envelope_chart("f6-env", "Validated operating points, torque vs speed",
-                                  meas_pts, derived_pts, [50, 250, 500, 750], xmax=440))
-        out.append("<p>Iso-lines are <i>mechanical</i> power — the top of the 150 rpm "
-                   "column sits just above the 250 W curve (267 W mechanical, which the "
-                   "bus fed with 514 W; the gap is §6.1's copper). The stall column at "
-                   "0 rpm is fig 5's staircase. The 400 rpm column is the "
-                   "2026-08-26 power chase (§7) — it filled in the high-speed half up to "
-                   "the firmware's ±400 rpm command clamp, topping out just above the "
-                   "500 W mechanical iso-line. Unexplored now: speeds past 400 rpm "
-                   "(a one-line clamp change) and sustained dwells at the top corner, "
-                   "bounded by VDS-OCP thermal derating (§7), not the 30 A ceiling.</p>")
-
         # ---- 6.2 temp vs power ----
         both = ([("coarse ramp", "--series-1", f6["log"]),
                  ("edge run", "--series-2", hold6)])
@@ -692,7 +661,7 @@ def build_body():
             series_tp.append((name, var, [round(p[1], 1) for p in pts]))
             xs_tp = [round(p[0]) for p in pts]
         # use the edge run's x grid (longest); plot each against its own sorted power
-        out.append("<h3>6.2 · Board temperature vs bus power</h3>")
+        out.append("<h3>6.3 · Board temperature vs bus power</h3>")
         for name, var, rows_ in both:
             pts = sorted((r["bus_w"], r["tmax"]) for r in rows_
                          if r["rpm"] > 120 and r["tmax"] == r["tmax"])
@@ -710,14 +679,47 @@ def build_body():
                    "temperature near 60–65 °C at this power in a 25 °C room — inside the "
                    "80 °C guard with margin.</p>")
 
+        # ---- 6.3 tested envelope ----
+        out.append("<h3>6.4 · The tested operating envelope</h3>"
+                   "<p>Every validated operating point from the campaign on the "
+                   "torque–speed plane, against iso-power curves. Filled points carry "
+                   "sensor-measured torque; rings are K<sub>t</sub>·i<sub>q</sub> "
+                   "estimates from runs before the torque readout existed.</p>")
+        meas_pts = []
+        if f5:
+            meas_pts += [(0.0, s["torque_raw"] * SCALE) for s in f5["steps"]
+                         if s.get("torque_raw") is not None and s["iq_meas"] > 2]
+        meas_pts += [(r["rpm"], r["torque_nm"]) for r in effrows]
+        for lad in (la7, lb7, lc7, lf7):
+            if lad:
+                meas_pts += [(r["rpm"], r["torque_nm"]) for r in lad["log"]
+                             if r.get("torque_nm") and r.get("rpm") and r["rpm"] > 300]
+        if th8:
+            meas_pts += [(r["rpm"], r["torque_nm"]) for r in th8["series"]
+                         if r["phase"] == "hold" and r.get("torque_nm") and r.get("rpm")]
+        derived_pts = [(100, 8.5 * 0.62), (100, 2.7 * 0.62),   # fig 2/3 at 100 rpm
+                       (60, 6.4 / 2.9 * 1.0), (50, 2.5)]       # fig 1 drive tests
+        out.append(envelope_chart("f6-env", "Validated operating points, torque vs speed",
+                                  meas_pts, derived_pts, [50, 250, 500, 1000], xmax=560))
+        out.append("<p>Iso-lines are <i>mechanical</i> power — the top of the 150 rpm "
+                   "column sits just above the 250 W curve (267 W mechanical, which the "
+                   "bus fed with 514 W; the gap is §6.1's copper). The stall column at "
+                   "0 rpm is fig 5's staircase. The 400 and 500 rpm columns are the "
+                   "power chase (§7): the 400 rpm column tops out against VDS-OCP "
+                   "thermal derating just above the 500 W mechanical iso-line, and the "
+                   "500 rpm column crosses it to the 1 kW-bus operating point (816 W "
+                   "mechanical). The dense 400 rpm column at 2-10 N·m is §8's "
+                   "load-step staircase. Unexplored: speeds past 520 rpm (the present "
+                   "command clamp) and sustained dwells at the top corner.</p>")
+
 
     # ---------------- 7. the 1 kW chase ----------------
     if lc7:
-        out.append(sec("7 · The 1 kW chase at 400 rpm — 848 W bus",
-                       "2026-08-26. Hall-commutated 400 rpm speed hold, brake ladders in "
-                       "0.1-0.6 V steps. Soft trip raised 35\u219245 A (see prose), vl 26 V, "
-                       "Iset 24 A. Torque from the sensor on CH4, real phase-C current "
-                       "peaks from an independent 100 A clamp on CH3."))
+        out.append(sec("7 · The 1 kW chase — a torque wall at 400 rpm, crossed on speed",
+                       "2026-08-26/27. Hall-commutated speed holds under stepped brake "
+                       "loads; soft trip raised 35\u219245 A (below), vl 26 V, Iset 24 A. "
+                       "Torque from the inline sensor, independent phase-C current peaks "
+                       "from a 100 A clamp."))
         out.append("<p><b>Why the trip moved:</b> the 08-20 campaign\u2019s intermittent "
                    "over-current aborts reported 49\u201352 A on phase C, but a 100 A current "
                    "clamp on that phase, armed to trigger at 35 A, never fired \u2014 "
@@ -728,27 +730,27 @@ def build_body():
                    "clamp confirmed real peaks stayed \u2264 29 A. Caveat: at 45 A the trip "
                    "is blind to negative excursions on the measured pair (rail \u221239 A); "
                    "the DRV VDS OCP stays as the hardware layer.</p>")
-        rampc = lc7["log"]
-        out.append(line_chart("f7-ramp", "Bus power vs brake command \u2014 final ladder, 0.1 V steps",
-                              [r["brake_v"] for r in rampc],
+        out.append("<h3>7.1 \u00b7 The 400 rpm attempts</h3>")
+        rampc = sorted(lc7["log"], key=lambda r: r["torque_nm"])
+        out.append(line_chart("f7-ramp", "Bus power vs shaft torque at 400 rpm \u2014 final 08-26 ladder",
+                              [round(r["torque_nm"], 1) for r in rampc],
                               [("bus power (W)", "--series-1",
-                                [round(r["bus_w"]) for r in rampc]),
-                               ("torque \u00d720 (N\u00b7m)", "--series-3",
-                                [round(r["torque_nm"] * 20) for r in rampc])],
-                              "brake command (V)", "W \u00b7 N\u00b7m\u00d720",
+                                [round(r["bus_w"]) for r in rampc])],
+                              "shaft torque (N\u00b7m)", "bus power (W)",
                               hlines=[(1000, "1 kW target")],
-                              notes=[(3.9, 870, "847.7 W \u2014 fault on next rung", "end")]))
-        out.append("<p>The ladder ended at the 4.0 V rung with <b>DRV8353 fault 0x0628</b> "
-                   "(VDS OCP, high-side A+B) \u2014 the second of the day: an earlier coarser "
-                   "ladder peaked at 790.8 W and faulted stepping 3.4\u21923.8 V. The second "
-                   "fault came on a gentle 0.1 V step from a steady 847.7 W, which rules "
-                   "out load-step transients: this is the VDS threshold (0.20 V \u2248 "
+                              notes=[(14.7, 870, "847.7 W \u2014 fault on the next step", "end")]))
+        out.append("<p>The ladder ended one load step past 847.7 W with <b>DRV8353 fault "
+                   "0x0628</b> (VDS OCP, high-side A+B) \u2014 the second of the day: an earlier "
+                   "coarser ladder peaked at 790.8 W and faulted on a ~2 N\u00b7m load step. "
+                   "The second came on a gentle ~0.7 N\u00b7m increment from a steady 847.7 W, "
+                   "which rules out load-step transients: this is the VDS threshold (0.20 V \u2248 "
                    "58\u201374 A cold) <i>derating with FET temperature</i> into legitimate "
                    "peak current. Both faults struck with the board at 57\u201360 \u00b0C after "
                    "~2 min of loaded laddering; the clamp read 28\u201329 A real peaks at the "
-                   "time. Brake remanence, quantified: the same 2.4 V command produced "
-                   "232 W on a fresh coil, 340 W later the same afternoon, and 400 W "
-                   "after a 3.8 V excitation.</p>")
+                   "time. Brake remanence, quantified: identical brake excitation produced "
+                   "232 W of load on a fresh coil, 340 W later the same afternoon, and "
+                   "400 W after a high-excitation event \u2014 a 72% spread, which is why "
+                   "\u00a78 closes the loop on measured torque instead.</p>")
         effpts7 = sorted((r["bus_w"], r["torque_nm"] * r["rpm"] * 2 * math.pi / 60
                           / r["bus_w"] * 100)
                          for r in rampc if r.get("torque_nm") and r["bus_w"] > 100)
@@ -778,11 +780,106 @@ def build_body():
                    "<code>s</code>/<code>sq</code> stats reset on every read, so a first "
                    "read after boot averages in the zero-cal and arm work. Pure-idle "
                    "windows read 0.1%. There is no firmware timing limit in evidence.</p>"
-                   "<p><b>Road to 1 kW:</b> in order of preference \u2014 a cold sprint "
-                   "(the 848 W ladder spent two minutes heat-soaking below 700 W; cold "
-                   "FETs keep the OCP threshold at 58\u201374 A), raising the \u00b1400 rpm "
-                   "command clamp so 1 kW rides on speed at ~20 A instead of torque at "
-                   "~30 A, or as a last resort exposing DRV vds level 6 (0.30 V).</p>")
+                   "")
+
+        # ---- 7.2 the 500 rpm resolution ----
+        if lf7:
+            out.append("<h3>7.2 \u00b7 1049 W at 500 rpm \u2014 the speed route</h3>"
+                       "<p>Fixed speed means power only grows through torque, and torque "
+                       "costs current: crossing ~850 W at 400 rpm demands ~29 A peaks, "
+                       "inside the derated VDS band. Raising speed buys power without "
+                       "current: the <code>hrun</code> command clamp went \u00b1400 \u2192 "
+                       "\u00b1520 rpm (bemf ~21 V + IR ~3 V fits the 26 V ceiling), and on "
+                       "2026-08-27 a cold-start ladder at 500 rpm walked straight through "
+                       "the fault band \u2014 phase-C peaks stayed near 21 A where the 400 rpm "
+                       "attempts needed 29 A.</p>")
+            rampf = sorted(lf7["log"], key=lambda r: r["torque_nm"])
+            out.append(line_chart("f7-500", "Bus power vs shaft torque at 500 rpm \u2014 08-27, clean to 1 kW",
+                                  [round(r["torque_nm"], 1) for r in rampf],
+                                  [("bus power (W)", "--series-4",
+                                    [round(r["bus_w"]) for r in rampf])],
+                                  "shaft torque (N\u00b7m)", "bus power (W)",
+                                  hlines=[(1000, "1 kW target")]))
+            rowsf = "".join(
+                f"<tr><td>{r['torque_nm']:.1f}</td><td>{r['bus_w']:.0f}</td>"
+                f"<td>{r['rpm']:.0f}</td><td>{r['torque_nm']*r['rpm']*2*math.pi/60/r['bus_w']*100:.0f}%</td>"
+                f"<td>{(r['clamp_peak_a'] or 0) or '\u2014'}</td><td>{r['tmax']:.0f}</td></tr>"
+                for r in lf7["log"])
+            out.append("<div class='scroll'><table><thead><tr><th>N\u00b7m</th><th>bus W</th>"
+                       "<th>rpm</th><th>system eff</th><th>clamp peak (A)</th><th>board \u00b0C</th>"
+                       f"</tr></thead><tbody>{rowsf}</tbody></table></div>")
+            pk = max(lf7["log"], key=lambda r: r["bus_w"])
+            eff = pk["torque_nm"] * pk["rpm"] * 2 * math.pi / 60 / pk["bus_w"] * 100
+            out.append(f"<p><b>Result: {pk['bus_w']:.0f} W bus at {pk['rpm']:.0f} rpm, "
+                       f"{pk['torque_nm']:.1f} N\u00b7m \u2014 {eff:.0f}% system efficiency "
+                       f"({pk['torque_nm']*pk['rpm']*2*math.pi/60:.0f} W mechanical)</b>, "
+                       "no fault during the run, protection stack untouched (VDS threshold "
+                       "at its stock 0.20 V; the exposed 0.30 V level was never needed). "
+                       "Two engineering footnotes: a VDS fault did fire <i>after</i> the "
+                       "run while stopping the motor into the still-energized brake \u2014 "
+                       "the shutdown order is now brake-release first, motor stop second \u2014 "
+                       "and the sampler\u2019s <code>late</code> fraction rises from 0.1% at "
+                       "400 rpm to a steady 4.9% at 500 rpm (max ISR-to-use latency still "
+                       "\u226446 \u00b5s, no overruns): the electrical frequency is approaching "
+                       "the sampling architecture\u2019s comfort zone, which soft-bounds "
+                       "further speed-route gains until it\u2019s addressed.</p>")
+
+
+    # ---------------- 8. load-step regulation ----------------
+    if th8:
+        out.append(sec("8 \u00b7 Load-step regulation at constant speed",
+                       "2026-08-27. 400 rpm hall-commutated hold while the load steps "
+                       "through 2 \u2192 4 \u2192 6 \u2192 8 \u2192 10 \u2192 8 \u2192 6 \u2192 4 \u2192 2 N\u00b7m. "
+                       "Each setpoint is closed-loop on the torque sensor itself (\u00b10.4 "
+                       "N\u00b7m acceptance) \u2014 the brake is just the actuator, so the data "
+                       "is entirely in measured N\u00b7m."))
+        ser = th8["series"]
+        ts8 = [r["t"] for r in ser]
+        out.append(line_chart("f8-tq", "Measured shaft torque vs setpoint",
+                              ts8,
+                              [("setpoint (N\u00b7m)", "--series-3",
+                                [r["setpoint_nm"] for r in ser]),
+                               ("measured torque (N\u00b7m)", "--series-1",
+                                [round(r["torque_nm"], 2) if r["torque_nm"] is not None else None
+                                 for r in ser])],
+                              "time (s)", "torque (N\u00b7m)"))
+        out.append(line_chart("f8-rpm", "Speed hold through the staircase",
+                              ts8,
+                              [("rotor rpm", "--series-2",
+                                [r["rpm"] for r in ser])],
+                              "time (s)", "rotor speed (rpm)",
+                              ylo=380, yhi=420, hlines=[(400, "setpoint 400 rpm")]))
+        # per-setpoint summary over the dwell phase, in visit order
+        visits, seen = [], None
+        for r in ser:
+            if r["phase"] != "hold":
+                seen = None
+                continue
+            key = (r["setpoint_nm"], seen)
+            if seen != r["setpoint_nm"]:
+                visits.append({"sp": r["setpoint_nm"], "tq": [], "w": [], "rpm": []})
+                seen = r["setpoint_nm"]
+            v = visits[-1]
+            if r["torque_nm"] is not None: v["tq"].append(r["torque_nm"])
+            v["w"].append(r["bus_w"]); v["rpm"].append(r["rpm"])
+        rows8 = "".join(
+            f"<tr><td>{v['sp']:.0f}</td><td>{sum(v['tq'])/len(v['tq']):.2f}</td>"
+            f"<td>{sum(v['w'])/len(v['w']):.0f}</td>"
+            f"<td>{sum(v['rpm'])/len(v['rpm']):.1f}</td></tr>" for v in visits if v["tq"])
+        out.append("<div class='scroll'><table><thead><tr><th>setpoint (N\u00b7m)</th>"
+                   "<th>held mean (N\u00b7m)</th><th>bus (W)</th><th>rpm mean</th></tr></thead>"
+                   f"<tbody>{rows8}</tbody></table></div>")
+        import statistics as _st
+        hr = [r["rpm"] for r in ser if r["phase"] == "hold" and r["rpm"]]
+        out.append(f"<p><b>Result: {_st.mean(hr):.1f} \u00b1 {_st.stdev(hr):.2f} rpm across the "
+                   "entire 2\u219210\u21922 N\u00b7m staircase</b> (worst single sample 1 rpm off "
+                   "setpoint), bus power tracking 76\u2192536\u219293 W. Setpoints are reached "
+                   "from both directions \u2014 the down-leg exercises the brake\u2019s remanence "
+                   "hysteresis, which the torque servo absorbs invisibly (the actuator "
+                   "needed ~15% less excitation for the same torque on the way down). "
+                   "Held means sit within \u00b10.5 N\u00b7m of target; the residual is "
+                   "remanence creep during each dwell, visible as the slow rise inside "
+                   "each torque step above.</p>")
 
     out.append("<h2>Bench notes</h2><ul>"
                "<li><b>Torque sensor scale:</b> the analog path read 10× low vs the sensor's "
@@ -808,7 +905,17 @@ def build_body():
                "<li><b>VDS OCP derating is the current power wall (08-26):</b> two real "
                "0x0628 faults (high-side A+B) at 850-950 W attempts with the board at "
                "57-60 \u00b0C \u2014 the 0.20 V threshold\u2019s amp value falls with hot Rdson into "
-               "real ~29 A peaks. Cold starts buy headroom; see \u00a77.</li>"
+               "real ~29 A peaks. A cold start did NOT clear it (third fault at 44 \u00b0C) \u2014 resolved by the 500 rpm speed route instead; see \u00a77.2.</li>"
+               "<li><b>Shutdown order matters:</b> stopping the motor while the brake is "
+               "still energized fired a VDS fault after an otherwise clean 1 kW run "
+               "(hard decel + back-EMF). The harness now releases the brake, waits, "
+               "then stops the motor.</li>"
+               "<li><b>Sampler timing at speed (watch item):</b> <code>late</code> is "
+               "0.1% at \u2264400 rpm but a steady 4.9% at 500 rpm (cmax \u226446 \u00b5s, no "
+               "overruns). Fine today; bounds the next speed increment.</li>"
+               "<li><b>Firmware 2026-08-27:</b> speed-command clamp \u00b1400 \u2192 \u00b1520 rpm; "
+               "DRV VDS level 6 (0.30 V) exposed on the console but unused \u2014 the 1 kW "
+               "point was reached with the stock 0.20 V threshold.</li>"
                "<li><b>Stats counters reset on read:</b> <code>s</code>/<code>sq</code> "
                "print-and-zero; a single read after boot mixes cal/arm work into the "
                "late percentage. Take a throwaway read, wait, read again.</li>"

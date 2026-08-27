@@ -1,0 +1,1 @@
+{"log": [{"t": 1787859263.9331388, "brake_v": 3.0, "bus_v": 48.01, "bus_i": 4.434, "bus_w": 212.87634, "torque_nm": 11.8346, "clamp_peak_a": 14.315, "iq": 30.01, "rpm": 0.0, "tmax": 41.2, "late_pct": 0.1, "cmax_us": 45}], "peak_w": 212.87634, "abort": "iq ceiling + speed collapse", "target_rpm": 400, "amps": 30, "trip_a": 45}

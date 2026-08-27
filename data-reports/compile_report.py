@@ -47,8 +47,13 @@ FAULTS = [
      "with Rdson — the protection working at its designed boundary", "2026-08-06 / 08-17"),
     ("0x0628 \u00d72", "VDS OCP, high-side A+B",
      "The 2026-08-26 1 kW chase: real OCP from the hot-derated threshold "
-     "meeting ~29 A clamp-verified peaks at 850-950 W bus, board 57-60 \u00b0C; "
-     "independent of brake step size", "2026-08-26"),
+     "meeting ~29 A clamp-verified peaks at 850-950 W bus (a third fired cold "
+     "at 44 \u00b0C); resolved by moving to 500 rpm \u2014 1049 W clean at ~21 A peaks",
+     "2026-08-26/27"),
+    ("0x0622", "VDS OCP, high-side A+C",
+     "Fired while stopping the motor into a still-energized brake after the "
+     "clean 1049 W run (hard decel + back-EMF); shutdown order fixed: brake "
+     "release first, motor stop second", "2026-08-27"),
     ("49-52 A phantom trips", "software trip, phase C \u2014 resolved",
      "Reported spikes never existed: a 100 A clamp armed at 35 A on the same "
      "phase stayed quiet, 3\u00d7 reproduced. Trip raised 35\u219245 A; zero phantoms "
