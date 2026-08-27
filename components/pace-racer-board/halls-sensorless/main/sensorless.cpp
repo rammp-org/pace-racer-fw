@@ -106,7 +106,7 @@ static constexpr float kMaxTargetAmps = 8.0f; // console clamp at boot; raise li
 // The '#range' line at zero-cal prints the actual ADC rail in amps (~±40 A at
 // GAIN_20 with a centered zero) — the trip is blind past it.
 static constexpr float kHardMaxTargetAmps = 30.0f; // raised for the 500 W campaign 2026-08-20
-static constexpr float kHardMaxTripAmps = 35.0f;   // plausibility rides at +3 -> 38 A
+static constexpr float kHardMaxTripAmps = 45.0f;   // raised 35->45 2026-08-26: phantom phase-C spikes (clamp-verified <35 A real); DRV VDS OCP still backstops
 static constexpr float kHardMaxVolts = 26.0f;      // 'vl' ceiling: ~0.94 * 48/sqrt(3),
                                                    // the SVPWM linear-region edge
 // Board thermal guard: any LM75 above the limit while driving -> the same
