@@ -181,12 +181,32 @@ class Brake:
         return (float(self.dp.query(":MEAS:VOLT? CH2")),
                 float(self.dp.query(":MEAS:CURR? CH2")))
 
+    TORQUE_RAIL_V = 24.000  # the sensor's documented rail — never parameterised
+
     def torque_rail_meas(self):
-        """CH1 = the torque sensor's 24 V/0.5 A rail. READ ONLY by policy —
-        nothing here ever writes CH1. Healthy draw is ~0.13 A; a reading near
-        0 A means the sensor is unpowered and every torque number is garbage."""
+        """CH1 = the torque sensor's 24 V rail. Healthy draw is ~0.13 A; a
+        reading near 0 A means the sensor is unpowered and every torque number
+        is garbage."""
         return (float(self.dp.query(":MEAS:VOLT? CH1")),
                 float(self.dp.query(":MEAS:CURR? CH1")))
+
+    def torque_rail_set(self, on, ilim=1.0, settle=2.0):
+        """Turn the torque-sensor rail on or off.
+
+        The VOLTAGE is deliberately not a parameter. Every torque number in the
+        campaign assumes 24.000 V, so this can power the sensor up and down but
+        cannot set it wrong — which was the point of the old 'never touch CH1'
+        rule. Only the current limit is adjustable, within a sane band."""
+        ilim = max(0.2, min(1.5, float(ilim)))
+        self.dp.write(f":SOUR1:CURR {ilim:.3f}")
+        if on:
+            self.dp.write(f":SOUR1:VOLT {self.TORQUE_RAIL_V:.3f}")
+            self.dp.write(":OUTP:STAT CH1,ON")
+        else:
+            self.dp.write(":OUTP:STAT CH1,OFF")
+        if settle:
+            time.sleep(settle)
+        return self.torque_rail_meas()
 
     def close(self):
         self.dp.close()
@@ -204,12 +224,13 @@ class Scope:
     No pyvisa/libusb — the scope's USB presence was wedging the board's
     USB-JTAG console (2026-08-20).
 
-    CHANNEL MAP — rewired 2026-08-26 for the gate-drive session. The old map
+    CHANNEL MAP — rewired 2026-08-26 for the gate-drive session; moved
+    from phase B to phase C the same day. The old map
     (CH1 torque, CH2 phase-C current clamp) is GONE; anything still reading
     CHAN1 for torque or CHAN2 for amps is reading a gate node instead.
 
-      CH1  phase-B high-side GATE    referenced to board ground
-      CH2  phase-B high-side SOURCE  (= the phase node), board ground
+      CH1  phase-C high-side GATE    referenced to board ground
+      CH2  phase-C high-side SOURCE  (= the phase node), board ground
            MATH1 = CH1 - CH2 is the floating VGS. Both probe grounds stay on
            board ground: clipping a barrel to the phase node would tie a
            switching node to scope earth, and two barrels on two phase nodes
@@ -325,7 +346,11 @@ class Psu:
     are fair game: runs raise Iset to 15-20 A and restore IDLE_ISET after.
     """
     IDLE_ISET = 8.0
-    MAX_ISET = 20.0
+    # Raised 20 -> 25 on 2026-08-26 for the 1 kW campaign. 1 kW on a 48 V rail
+    # draws 20.8 A, so a 20 A cap puts the supply into CC right at the target:
+    # the rail sags, the run tops out near 960 W, and it reads as "the motor
+    # could not do it" when it was the bench limiting. 25 A leaves ~4 A margin.
+    MAX_ISET = 25.0
     VM_MIN = 40.0  # below this the board will not enumerate
 
     def __init__(self, port=PSU):
