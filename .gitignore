@@ -57,3 +57,4 @@ dependencies.lock
 # machine physically wired to it. Copy .mcp.json from bench/README.md to
 # register it elsewhere.
 .mcp.json
+.DS_Store
