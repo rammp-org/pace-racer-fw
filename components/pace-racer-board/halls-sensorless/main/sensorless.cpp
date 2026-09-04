@@ -1703,8 +1703,6 @@ extern "C" void app_main(void) {
       // 6 (0.30 V) added 2026-08-27, user-authorized: three real VDS OCP trips
       // (0x0628 x2, 0x060a) ended 850-950 W attempts at 400 rpm; level 6 is the
       // last-resort rung after the 520 rpm speed route.
-      static constexpr const char *kVdsEstAmps[7] = {"17-22", "20-26", "23-30",
-                                                     "26-33", "29-37", "58-74", "87-111"};
       const int lvl = x; // enum indices 0-5 map 1:1 for these steps
       std::error_code vec;
       auto gd = bsp.gate_driver();
@@ -1714,6 +1712,8 @@ extern "C" void app_main(void) {
         fmt::print("! vds write failed (ocp=0x{:04x}{}{})\n", ocp.raw, vec ? ", " : "",
                    vec ? vec.message() : "");
       } else {
+        static constexpr const char *kVdsEstAmps[7] = {"17-22", "20-26", "23-30",
+                                                       "26-33", "29-37", "58-74", "87-111"};
         fmt::print("#vds {:.2f}V (~{} A cold, derates hot){}\n",
                    x >= 5 ? 0.20f + 0.10f * (float)(x - 5) : 0.06f + 0.01f * (float)x,
                    kVdsEstAmps[x],
