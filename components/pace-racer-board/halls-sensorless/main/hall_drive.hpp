@@ -37,6 +37,8 @@ namespace sensorless {
 /// (validated steps, transition timing) plus glitch counters.
 class HallPoller {
 public:
+  static constexpr float kResyncSec = 0.25f; // non-adjacent jumps resync only
+                                             // this soon after real motion
   static constexpr int kDebounceTicks = 4;   // 200 us stable before accepting:
                                              // slow edges on the weak internal
                                              // pull-ups bounced through 100 us
@@ -50,7 +52,9 @@ public:
   static constexpr int kHallToSector[8] = {-1, 5, 3, 4, 1, 0, 2, -1};
 
   void init(gpio_num_t a, gpio_num_t b, gpio_num_t c) {
-    a_ = a; b_ = b; c_ = c;
+    a_ = a;
+    b_ = b;
+    c_ = c;
     gpio_config_t cfg{
         .pin_bit_mask = (1ULL << a) | (1ULL << b) | (1ULL << c),
         .mode = GPIO_MODE_INPUT,
@@ -67,7 +71,8 @@ public:
 
   /// One 50 us sample (FOC task). Advances steps on validated transitions.
   void poll(float dt) {
-    if (!ready_) return;
+    if (!ready_)
+      return;
     t_since_ += dt;
     const uint8_t st = read_state();
     if (st == stable_state_) {
@@ -80,7 +85,8 @@ public:
       pend_n_ = 1;
       return;
     }
-    if (++pend_n_ < kDebounceTicks) return;
+    if (++pend_n_ < kDebounceTicks)
+      return;
     // Stable new state. Legal sector? Adjacent?
     pend_n_ = 0;
     stable_state_ = st;
@@ -94,8 +100,10 @@ public:
       return;
     }
     int delta = sec - sector_;
-    if (delta > 3) delta -= 6;
-    if (delta < -3) delta += 6;
+    if (delta > 3)
+      delta -= 6;
+    if (delta < -3)
+      delta += 6;
     if (delta == 1 || delta == -1) {
       if (delta == -last_dir_ && t_since_ < kBounceSec) {
         // Boundary bounce: undo, and poison the last interval so the stale
@@ -114,24 +122,41 @@ public:
       interval_ = t_since_;
       t_since_ = 0.0f;
     } else if (delta != 0) {
-      // Skipped sector(s): noise burst or a transition missed while stalled.
-      // Resync to reality but don't feed the interval estimator garbage.
+      // Skipped sector(s). Two very different causes share this signature:
+      //  - SPINNING: noise masked a transition, the next read lands 2 away.
+      //    Freezing here means stuck commutation = braking (2026-07-30), so
+      //    resync to the reading.
+      //  - PARKED: sustained DC phase current biases a hall line past its
+      //    threshold long enough to pass the debounce (2026-08-06: ~22 A of
+      //    stalled iq flipped the read ~3 sectors, the drive angle followed,
+      //    and the transient fired the DRV VDS OCP). The rotor demonstrably
+      //    is not moving, so an N-sector jump is impossible — HOLD the last
+      //    validated sector, which is still where the rotor is.
+      // Discriminate on time since the last validated transition: recent
+      // (< kResyncSec) means the rotor was really turning. 0.25 s maps to
+      // ~0.45 mech rpm — below that, "parked" is the right model.
       glitches_++;
-      sector_ = sec;
-      steps_ += (delta > 0) ? 1 : -1; // bound the damage to one step
-      t_since_ = 0.0f;
-      interval_ = 0.0f;
+      if (t_since_ < kResyncSec) {
+        sector_ = sec;
+        steps_ += (delta > 0) ? 1 : -1; // bound the damage to one step
+        t_since_ = 0.0f;
+        interval_ = 0.0f;
+      } else {
+        rejected_++; // held; visible in `hs` — a rising count under stall
+                     // current is the hall-noise signature, not motion
+      }
     }
   }
 
   int sector() const { return sector_; }
   int steps() const { return steps_; }
   uint8_t raw_state() const { return stable_state_; }
-  float interval_s() const { return interval_; }  // last validated sector time
-  float since_s() const { return t_since_; }      // time since last transition
+  float interval_s() const { return interval_; } // last validated sector time
+  float since_s() const { return t_since_; }     // time since last transition
   uint32_t glitches() const { return glitches_; }
   uint32_t illegals() const { return illegal_; }
   uint32_t bounces() const { return bounces_; }
+  uint32_t rejects() const { return rejected_; }
 
 private:
   uint8_t read_state() const {
@@ -146,7 +171,7 @@ private:
   int last_dir_{0};
   float t_since_{0.0f};
   float interval_{0.0f};
-  uint32_t glitches_{0}, illegal_{0}, bounces_{0};
+  uint32_t glitches_{0}, illegal_{0}, bounces_{0}, rejected_{0};
 };
 
 class HallDrive {
@@ -169,7 +194,8 @@ public:
     const int sec = h.sector();
     const int steps = h.steps();
     since_ += dt;
-    if (sec < 0) return; // no legal state seen yet: hold
+    if (sec < 0)
+      return; // no legal state seen yet: hold
     if (!seeded_ || sec_ < 0) {
       seeded_ = true;
       last_steps_ = steps;
@@ -187,9 +213,11 @@ public:
       const float dir = dth >= 0.0f ? 1.0f : -1.0f;
       const float iv = h.interval_s();
       float w = omega_;
-      if (dir * omega_ < 0.0f) w = 0.0f; // real reversals pass through zero speed;
-                                         // a fast opposite-dir interval is noise
-      else if (iv > 0.0002f && iv < 2.0f) w = dir * kSectorRad / iv;
+      if (dir * omega_ < 0.0f)
+        w = 0.0f; // real reversals pass through zero speed;
+                  // a fast opposite-dir interval is noise
+      else if (iv > 0.0002f && iv < 2.0f)
+        w = dir * kSectorRad / iv;
       omega_ = std::clamp(w, -kMaxOmegaE, kMaxOmegaE);
       // Rotor is at the boundary it just crossed: half a sector behind center.
       theta_ = wrap_2pi(center_[sec] - dir * kSectorRad * 0.5f);
@@ -200,13 +228,16 @@ public:
       // Between transitions: the true angle can't have left the sector, so a
       // speed that claims it did is stale — shrink it to "one sector per
       // elapsed time", and to zero after the stall cutoff.
-      if (since_ > kStallSec) omega_ = 0.0f;
+      if (since_ > kStallSec)
+        omega_ = 0.0f;
       else if (since_ > 0.02f && std::fabs(omega_) * since_ > kSectorRad)
         omega_ = (omega_ >= 0 ? 1.0f : -1.0f) * kSectorRad / since_;
       theta_ = wrap_2pi(theta_ + omega_ * dt);
       const float lead = wrap_pi(theta_ - center_[sec_]);
-      if (lead > kLeadLimit) theta_ = wrap_2pi(center_[sec_] + kLeadLimit);
-      if (lead < -kLeadLimit) theta_ = wrap_2pi(center_[sec_] - kLeadLimit);
+      if (lead > kLeadLimit)
+        theta_ = wrap_2pi(center_[sec_] + kLeadLimit);
+      if (lead < -kLeadLimit)
+        theta_ = wrap_2pi(center_[sec_] - kLeadLimit);
     }
     // Filtered mechanical rpm for the speed loop (~50 ms time constant).
     rpm_f_ += (dt / (0.05f + dt)) * (omega_ / rpm_to_omega_e_ - rpm_f_);
@@ -241,7 +272,8 @@ public:
       cal_n_[sec]++;
       left--;
     }
-    if (cal_fwd_left_ == 0 && cal_rev_left_ == 0) return cal_finish() ? 1 : -1;
+    if (cal_fwd_left_ == 0 && cal_rev_left_ == 0)
+      return cal_finish() ? 1 : -1;
     return 0;
   }
 
@@ -254,7 +286,8 @@ public:
   /// while the drive angle sweeps — can produce a plausible-looking but wrong
   /// table (it did: +3 A drove the rotor BACKWARD on the dyno, 2026-07-30).
   bool cal_finish() {
-    for (int s = 0; s < 6; s++) last_n_[s] = cal_n_[s]; // keep for the report
+    for (int s = 0; s < 6; s++)
+      last_n_[s] = cal_n_[s]; // keep for the report
     for (int s = 0; s < 6; s++)
       if (cal_n_[s] < kCalMinPerSector) {
         cal_reset();
@@ -274,14 +307,14 @@ public:
     std::copy(tmp, tmp + 6, sorted);
     std::sort(sorted, sorted + 6);
     for (int s = 0; s < 6; s++) {
-      const float gap =
-          (s == 5) ? (sorted[0] + kTwoPi - sorted[5]) : (sorted[s + 1] - sorted[s]);
+      const float gap = (s == 5) ? (sorted[0] + kTwoPi - sorted[5]) : (sorted[s + 1] - sorted[s]);
       if (gap < 35.0f * kPi / 180.0f || gap > 85.0f * kPi / 180.0f) {
         cal_reset();
         return false;
       }
     }
-    for (int s = 0; s < 6; s++) center_[s] = tmp[s];
+    for (int s = 0; s < 6; s++)
+      center_[s] = tmp[s];
     cal_reset();
     seeded_ = false; // re-seed the interpolator on the new table
     cal_.store(true, std::memory_order_relaxed);
@@ -299,8 +332,20 @@ public:
   /// Global trim (console `hofs <deg>`): rotate the whole table.
   void add_offset_deg(float deg) {
     const float r = deg * kPi / 180.0f;
-    for (int s = 0; s < 6; s++) center_[s] = wrap_2pi(center_[s] + r);
+    for (int s = 0; s < 6; s++)
+      center_[s] = wrap_2pi(center_[s] + r);
     seeded_ = false;
+  }
+
+  /// Restore a previously captured table (console `hset`, values from `hs`).
+  /// The table is RAM-only, so a VM power-cycle + reboot loses it — and
+  /// re-running `hcal` needs an I/f spin that a brake-loaded rotor can't do.
+  /// Marks the drive calibrated; caller is trusting the values it saved.
+  void set_centers_deg(const float deg[6]) {
+    for (int s = 0; s < 6; s++)
+      center_[s] = wrap_2pi(deg[s] * kPi / 180.0f);
+    seeded_ = false;
+    cal_.store(true, std::memory_order_relaxed);
   }
 
 private:
@@ -316,8 +361,8 @@ private:
   float rpm_to_omega_e_{1.0f};
   // Uncalibrated default: sector index * 60 deg. NOT trustworthy for drive —
   // `hcal` replaces it with measured values; hall modes are gated on cal_.
-  float center_[6] = {0.0f,          kSectorRad,        2.0f * kSectorRad,
-                      3.0f * kSectorRad, 4.0f * kSectorRad, 5.0f * kSectorRad};
+  float center_[6] = {
+      0.0f, kSectorRad, 2.0f * kSectorRad, 3.0f * kSectorRad, 4.0f * kSectorRad, 5.0f * kSectorRad};
   std::atomic<bool> cal_{false};
 
   bool seeded_{false};
@@ -330,7 +375,7 @@ private:
 
   float cal_c_[6] = {}, cal_s_[6] = {};
   int cal_n_[6] = {};
-  int last_n_[6] = {}; // counts at the last cal_finish, for the report
+  int last_n_[6] = {};                         // counts at the last cal_finish, for the report
   uint32_t cal_fwd_left_{0}, cal_rev_left_{0}; // per-direction tick budgets
 };
 

@@ -48,3 +48,13 @@ logs/
 # machine/manager version and were a constant source of merge conflicts
 # between in-flight branches. CI resolves dependencies from the manifests.
 dependencies.lock
+
+# Editor-local settings.
+.vscode/
+
+# Claude Code MCP server registration. Kept local: the `bench` server is
+# launched by absolute path, and the dyno stand it drives only exists on the
+# machine physically wired to it. Copy .mcp.json from bench/README.md to
+# register it elsewhere.
+.mcp.json
+.DS_Store
