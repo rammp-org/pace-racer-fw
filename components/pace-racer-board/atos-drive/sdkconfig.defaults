@@ -1,0 +1,72 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+CONFIG_FREERTOS_HZ=1000
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
+
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=6144
+
+# Ethernet (WIZnet W5500 on the SPI expansion header), brought up at runtime by
+# the 'eth' console command. The BSP drives it through espp::Ethernet, whose
+# W5500 support is compiled in only when this option is set.
+CONFIG_ETH_ENABLED=y
+CONFIG_ESPP_ETHERNET_W5500=y
+
+CONFIG_SPI_MASTER_IN_IRAM=y
+CONFIG_MCPWM_CTRL_FUNC_IN_IRAM=y
+
+# lwIP tcpip task affinity: LEFT AT THE DEFAULT (unpinned) DELIBERATELY.
+#
+# The obvious move is to pin the network stack to CPU0 to "keep it off the
+# control core". That is wrong here, and measurably so. The FOC *task* is on
+# CPU1, but the sampling ISR is NOT: g_sampler.init() is called from app_main,
+# which is pinned to CPU0 (CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0), and ESP-IDF
+# allocates the interrupt on the calling core. So CPU0 is where the timing-
+# critical acquisition lives, and pinning lwIP there piles contention onto
+# exactly the wrong core.
+#
+# Controlled A/B/C, 4x10 s windows each, ethernet up and idle, motor idle
+# (2026-08-03) — identical builds except this one flag:
+#   unpinned (default) : late 2.33%  coalesce 1.00  cmax 200-238 us
+#   pinned CPU0        : late 3.28%  coalesce 1.01  cmax 188-213 us
+#   pinned CPU1        : late 3.08%  coalesce 1.00  cmax 138-164 us
+#
+# Unpinned wins on late%, which is the current-sample quality metric that
+# network load actually degrades. Pinning to CPU1 is the alternative worth
+# revisiting if FOC compute headroom (cmax) ever becomes the binding constraint
+# instead — it was clearly best on that axis. Pinning to CPU0 is simply worse on
+# both counts; do not do it.
+
+# Puts the adc_oneshot HAL in IRAM. The sampler runs it from the MCPWM timer ISR
+# once per PWM period, and the sample has to land inside a null window only a few
+# microseconds wide — a flash cache miss on that path is jitter we can't afford.
+CONFIG_ADC_ONESHOT_CTRL_FUNC_IN_IRAM=y
+
+# Double the instruction cache, 16 KB -> 32 KB (the S3 maximum).
+#
+# The sampling ISR is NOT IRAM-resident (see MCPWM_ISR_IRAM_SAFE below), so it
+# runs with the flash cache enabled and its timing is sensitive to cache
+# pressure. Measured 2026-08-04: adding the RTPS component grew the binary by
+# 89 KB and cost +2.6 pp of sampler late% with the feature never even started —
+# pure cache pressure. A larger I-cache attacks that directly.
+#
+# Cost: the cache is carved out of the same internal SRAM as IRAM/DRAM, so this
+# trades 16 KB of usable RAM for hit rate.
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+
+# NOT ISR-IRAM-safe, unlike current-control: the sampling ISR's overcurrent trip
+# calls espp's BldcDriver::set_pwm(), which is a flash-resident header inline.
+# Safe because nothing writes flash while the motor is spinning (an IRAM-safe
+# ISR only matters while the cache is disabled); if that ever changes, this and
+# the trip path both have to be revisited.
+CONFIG_MCPWM_ISR_IRAM_SAFE=n
+
+# Make the native USB (USB-Serial-JTAG) port the primary console so it is
+# bidirectional: the TUI can write commands to firmware stdin, not just read
+# output. Default config binds stdin to UART0, which isn't on the USB port.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
