@@ -932,6 +932,16 @@ IRAM_ATTR void foc_task_fn(void *) {
 
 void drv_check(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd, const char *where);
 
+// DRV8353 VSENSE overcurrent protection (SEN_OCP), runtime-settable by 'sen'.
+// configure_drv honours it so that 'clr' and the boot retry do not re-arm a
+// protection the operator has deliberately turned off. SEN_OCP trips on the SP
+// pin exceeding SEN_LVL (0.25 V) which across the 1 mOhm shunt is ~250 A, so it
+// cannot fire legitimately; VDS OCP and the software trip are the real limits.
+// Default OFF: measured 2026-09-23, enabling it trips SA_OC instantly on this
+// board with no motor attached and no current flowing, which latches the whole
+// bridge off and blocks every operation. Re-enable with 'sen 1' to investigate.
+std::atomic<bool> g_sense_ocp{false};
+
 // Write the DRV8353's protection and sense configuration, then read it back.
 // Shared by boot, boot's retry loop, and 'clr'. It has to be re-runnable: an
 // ENABLE reset pulse longer than the device's reset window puts it through
@@ -958,8 +968,10 @@ bool configure_drv(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd,
        gd->set_vds_level(GD::VdsLevel::V_0_06, ec); // ~17-22 A hardware backstop
   if (trace)
     drv_check(gd, "w ocp/vds");
-  ok = ok && gd->set_sense_overcurrent_enabled(true, ec) &&
+  const bool want_sen = g_sense_ocp.load();
+  ok = ok && gd->set_sense_overcurrent_enabled(want_sen, ec) &&
        gd->set_sense_level(GD::SenseLevel::V_0_25, ec) && gd->set_csa_gain(GD::CsaGain::GAIN_20, ec);
+  gd->clear_faults(ec); // the CSA write itself can trip SEN_OCP; clear after it
   if (trace)
     drv_check(gd, "w csa");
   gd->clear_faults(ec);
@@ -969,8 +981,8 @@ bool configure_drv(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd,
   return ok && !ec && !dcv.coast() && !dcv.brake() &&
          ocp.ocp_mode() == GD::OcpMode::LATCHED_SHUTDOWN &&
          ocp.deglitch() == GD::OcpDeglitch::US_4 && ocp.vds_level() == GD::VdsLevel::V_0_06 &&
-         !csa.sense_overcurrent_disabled() && csa.sense_level() == GD::SenseLevel::V_0_25 &&
-         csa.gain() == GD::CsaGain::GAIN_20;
+         csa.sense_overcurrent_disabled() != want_sen &&
+         csa.sense_level() == GD::SenseLevel::V_0_25 && csa.gain() == GD::CsaGain::GAIN_20;
 }
 
 // Read and print the DRV8353 fault + VGS status with a label. Boot drives the
@@ -1589,6 +1601,28 @@ extern "C" void app_main(void) {
       }
       if (!named)
         fmt::print("#  boot was clean — the fault latches after boot\n");
+    } else if (strncmp(line, "sen", 3) == 0) {
+      // sen <0|1> — turn the DRV8353 VSENSE overcurrent protection (SEN_OCP)
+      // off or on. It trips when the SP pin exceeds the SEN_LVL threshold
+      // (0.25 V), which across this board's 1 mOhm shunt is ~250 A, so it can
+      // never fire legitimately: a latched SA_OC/SB_OC/SC_OC with the motor
+      // stationary is spurious. Turning it off leaves VDS OCP (~17-22 A), the
+      // sampler's software trip and the supply current limit all in place.
+      int en = 1;
+      if (sscanf(line, "sen %d", &en) != 1) {
+        fmt::print("! sen <0|1>\n");
+      } else {
+        std::error_code sec;
+        g_sense_ocp.store(en != 0);
+        bsp.gate_driver()->set_sense_overcurrent_enabled(en != 0, sec);
+        bsp.gate_driver()->clear_faults(sec);
+        auto csa2 = bsp.gate_driver()->read_csa_control(sec);
+        if (sec)
+          fmt::print("! sen: SPI failed: {}\n", sec.message());
+        else
+          fmt::print("#sen {} (csa=0x{:04x}) — VDS OCP and the software trip still armed\n",
+                     csa2.sense_overcurrent_disabled() ? "OFF" : "ON", csa2.raw);
+      }
     } else if (strncmp(line, "clr", 3) == 0) {
       // clr — reset the DRV8353's latched faults without a VM power cycle:
       // ENABLE reset pulse, re-apply the config (a pulse that overshoots into
@@ -1643,6 +1677,12 @@ extern "C" void app_main(void) {
           fmt::print(" GDUV");
         if (vgs.raw & (1u << 7))
           fmt::print(" OTW");
+        if (vgs.raw & (1u << 8))
+          fmt::print(" SC_OC");
+        if (vgs.raw & (1u << 9))
+          fmt::print(" SB_OC");
+        if (vgs.raw & (1u << 10))
+          fmt::print(" SA_OC");
         fmt::print("\n  live fault: do NOT drive. Scope the named gate, or retry with the "
                    "motor disconnected to split board from motor.\n");
       }
