@@ -59,6 +59,7 @@
 #include <type_traits>
 
 #include "driver/gpio.h"
+#include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -88,7 +89,7 @@ static constexpr float kTwoPi = 6.28318530718f;
 // commanded-voltage model is only right when this is the real bus voltage.
 // (24 V was the bring-up value; 48 V doubles ripple to ~6-7 App on 94 uH —
 // watch the LM75s. Re-zero with 'z' after changing supplies.)
-static constexpr float kBusVoltage = 48.0f;
+static constexpr float kBusVoltage = motor::kBusVoltage;
 // Lowered from 15 A during stage-3 bring-up: the I/f ramp was running the current
 // away to ~22 A before the hardware OCP caught it. 10 A trips a runaway early
 // (real commands are <=6 A + a few A of hunting overshoot) and spares the FETs.
@@ -106,7 +107,7 @@ static constexpr float kMaxTargetAmps = 8.0f; // console clamp at boot; raise li
 // GAIN_20 with a centered zero) — the trip is blind past it.
 static constexpr float kHardMaxTargetAmps = 30.0f; // raised for the 500 W campaign 2026-08-20
 static constexpr float kHardMaxTripAmps = 45.0f;   // raised 35->45 2026-08-26: phantom phase-C spikes (clamp-verified <35 A real); DRV VDS OCP still backstops
-static constexpr float kHardMaxVolts = 26.0f;      // 'vl' ceiling: ~0.94 * 48/sqrt(3),
+static constexpr float kHardMaxVolts = motor::kMaxPhaseVolts; // 'vl' ceiling, 0.94 * vbus/sqrt(3),
                                                    // the SVPWM linear-region edge
 // Board thermal guard: any LM75 above the limit while driving -> the same
 // gentle STOPPING path as 'stop', with the data intact. Raised deliberately
@@ -166,16 +167,15 @@ static constexpr float kPwmPeriodUs = 50.0f; // espp BldcDriver is fixed at 20 k
 // dq current-loop voltage limit. The loop output is a voltage; this caps it so a
 // bad command or gain can't slam the full bus. 8 V into ~0.15 ohm is ~50 A DC,
 // but the loop is regulating current, so this is just the ceiling — start here.
-static constexpr float kVoltageLimit = 8.0f;
+static constexpr float kVoltageLimit = motor::kDefaultVoltLimit;
 
-// Current-loop PI gains. Halved from current-control's tuning: that fit the
-// series A->B pair (2R, 2L); the dq plant is a single phase (R, L). 169 rad/s
-// bandwidth (auto-tuner's verified-overdamped crossover for the NineBot S):
-// kp = 169*336uH = 0.0568, ki = kp*R/L = 0.0568*961 = 54.5.
-static constexpr float kDefaultKp = 0.0568f; // V/A
-static constexpr float kDefaultKi = 54.5f;   // V/(A*s)
+// Current-loop PI gains, per motor (motor_params.hpp). 169 rad/s bandwidth,
+// ki = kp*R/L; the NineBot values are the auto-tuner's verified-overdamped
+// crossover, the hub's are those scaled by its R and L.
+static constexpr float kDefaultKp = motor::kDefaultKp; // V/A
+static constexpr float kDefaultKi = motor::kDefaultKi; // V/(A*s)
 
-// I/f open-loop startup (stage 2b). 15 pole pairs (measured: 90 hall edges/rev).
+// I/f open-loop startup (stage 2b). Pole pairs from motor_params.hpp.
 static constexpr int kPolePairs = motor::kPolePairs;
 static constexpr float kAlignMs = 300.0f; // DC-align time before the ramp
 // Gentle first-spin defaults (override with `run <amps> <rpm> <ramp_s>`).
@@ -930,6 +930,96 @@ IRAM_ATTR void foc_task_fn(void *) {
   }
 }
 
+void drv_check(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd, const char *where);
+
+// Write the DRV8353's protection and sense configuration, then read it back.
+// Shared by boot, boot's retry loop, and 'clr'. It has to be re-runnable: an
+// ENABLE reset pulse longer than the device's reset window puts it through
+// sleep, and every register comes back at its power-on default.
+bool configure_drv(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd,
+                   espp::PaceRacerBoard::GateDriver::OcpControl &ocp,
+                   espp::PaceRacerBoard::GateDriver::CsaControl &csa,
+                   espp::PaceRacerBoard::GateDriver::DriverControl &dcv, bool trace = false) {
+  using GD = espp::PaceRacerBoard::GateDriver;
+  std::error_code ec;
+  gd->clear_faults(ec);
+  if (trace)
+    drv_check(gd, "after clr_flt");
+  // Force-write DRIVER_CONTROL rather than read-modify-write, so a poisoned
+  // COAST bit from an old binary cannot survive.
+  GD::DriverControl drv_ctl{.raw = 0x0000};
+  // Traced write by write on the first pass: if a specific register write is
+  // what asserts the fault, this names it instead of leaving it to inference.
+  bool ok = gd->write_driver_control(drv_ctl, ec);
+  if (trace)
+    drv_check(gd, "w driver_ctl");
+  ok = ok && gd->set_ocp_mode(GD::OcpMode::LATCHED_SHUTDOWN, ec) &&
+       gd->set_ocp_deglitch(GD::OcpDeglitch::US_4, ec) &&
+       gd->set_vds_level(GD::VdsLevel::V_0_06, ec); // ~17-22 A hardware backstop
+  if (trace)
+    drv_check(gd, "w ocp/vds");
+  ok = ok && gd->set_sense_overcurrent_enabled(true, ec) &&
+       gd->set_sense_level(GD::SenseLevel::V_0_25, ec) && gd->set_csa_gain(GD::CsaGain::GAIN_20, ec);
+  if (trace)
+    drv_check(gd, "w csa");
+  gd->clear_faults(ec);
+  ocp = gd->read_ocp_control(ec);
+  csa = gd->read_csa_control(ec);
+  dcv = gd->read_driver_control(ec);
+  return ok && !ec && !dcv.coast() && !dcv.brake() &&
+         ocp.ocp_mode() == GD::OcpMode::LATCHED_SHUTDOWN &&
+         ocp.deglitch() == GD::OcpDeglitch::US_4 && ocp.vds_level() == GD::VdsLevel::V_0_06 &&
+         !csa.sense_overcurrent_disabled() && csa.sense_level() == GD::SenseLevel::V_0_25 &&
+         csa.gain() == GD::CsaGain::GAIN_20;
+}
+
+// Read and print the DRV8353 fault + VGS status with a label. Boot drives the
+// gates in several distinct steps (enable, each set_pwm, zero-cal, set_edge,
+// sampler enable) and the periodic poll only looks every 5 s, so without this
+// a fault latched anywhere in boot just shows up as "fault at 4.9 s" with no
+// idea which step caused it. Two SPI reads, boot-only, no timing cost.
+struct DrvCheck {
+  const char *where;
+  uint16_t f1, vgs;
+  bool spi_ok;
+};
+// Buffered, because boot prints are lost in the USB re-enumeration gap after a
+// flash (see the note in the DRV config retry loop). 'bootlog' replays them.
+std::array<DrvCheck, 12> g_drv_checks{};
+size_t g_drv_check_n = 0;
+
+void drv_check(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd, const char *where) {
+  std::error_code ec;
+  auto fs = gd->fault_status(ec);
+  auto vgs = gd->vgs_status(ec);
+  if (g_drv_check_n < g_drv_checks.size())
+    g_drv_checks[g_drv_check_n++] = {where, fs.raw, vgs.raw, !ec};
+  if (ec) {
+    fmt::print("#drvchk {:<16} SPI read failed: {}\n", where, ec.message());
+    return;
+  }
+  fmt::print("#drvchk {:<16} fault1=0x{:04x} vgs2=0x{:04x}{}\n", where, fs.raw, vgs.raw,
+             (fs.raw || vgs.raw) ? "  <-- FAULT APPEARED HERE" : "");
+}
+
+// Fault-reset pulse on the DRV8353 ENABLE pin. The datasheet's reset window is
+// a low pulse of tens of microseconds: long enough to drop the latches, short
+// enough not to enter sleep. 50 us sits in that window.
+//
+// Deliberately NOT BldcDriver::disable()/enable(): those stop and restart the
+// MCPWM timer, and the current sampler runs off that timer's ISR, so the
+// control loop would go dark and trip its own overrun guard. Driving the pin
+// leaves PWM running; the gates go Hi-Z for the pulse, which is what we want.
+void drv_reset_pulse() {
+  // GPIO_NUM_47 = BSP MOTOR_ENABLE_PIN (protected there, so spelled out, as the
+  // 'enc p' handler does for the encoder MISO pin).
+  gpio_set_level(GPIO_NUM_47, 0);
+  esp_rom_delay_us(50);
+  gpio_set_level(GPIO_NUM_47, 1);
+  // Datasheet wake time from a reset pulse is ~1 ms; give it margin before SPI.
+  std::this_thread::sleep_for(5ms);
+}
+
 } // namespace
 
 extern "C" void app_main(void) {
@@ -965,37 +1055,19 @@ extern "C" void app_main(void) {
   g_driver = driver;
   g_encoder = bsp.encoder();
 
-  {
-    std::error_code ec;
-    // ESP32 reboot does NOT power-cycle the DRV8353 — clear any latched faults.
-    bsp.gate_driver()->clear_faults(ec);
-    if (ec)
-      logger.error("Failed to clear DRV8353 faults: {}", ec.message());
-  }
+  // What the gate driver looked like before we wrote anything: separates a
+  // fault inherited from power-on from one our own config writes provoke.
+  drv_check(bsp.gate_driver(), "virgin pre-cfg");
 
-  // Hardware protection + known-good driver state. Force-write DRIVER_CONTROL
-  // (not read-modify-write, so a poisoned COAST bit can't survive), CSA GAIN_20.
+  // Hardware protection + known-good driver state. An ESP32 reboot does NOT
+  // power-cycle the DRV8353, so this also clears whatever was latched before.
   {
     using GD = Bsp::GateDriver;
-    std::error_code ec;
+    GD::OcpControl ocp{};
+    GD::CsaControl csa{};
+    GD::DriverControl dcv{};
     auto gd = bsp.gate_driver();
-    GD::DriverControl drv_ctl{.raw = 0x0000};
-    bool ok = gd->write_driver_control(drv_ctl, ec) &&
-              gd->set_ocp_mode(GD::OcpMode::LATCHED_SHUTDOWN, ec) &&
-              gd->set_ocp_deglitch(GD::OcpDeglitch::US_4, ec) &&
-              gd->set_vds_level(GD::VdsLevel::V_0_06, ec) && // ~17-22 A hardware backstop
-              gd->set_sense_overcurrent_enabled(true, ec) &&
-              gd->set_sense_level(GD::SenseLevel::V_0_25, ec) &&
-              gd->set_csa_gain(GD::CsaGain::GAIN_20, ec);
-    gd->clear_faults(ec);
-    auto ocp = gd->read_ocp_control(ec);
-    auto csa = gd->read_csa_control(ec);
-    auto dcv = gd->read_driver_control(ec);
-    if (!ok || ec || dcv.coast() || dcv.brake() ||
-        ocp.ocp_mode() != GD::OcpMode::LATCHED_SHUTDOWN ||
-        ocp.deglitch() != GD::OcpDeglitch::US_4 || ocp.vds_level() != GD::VdsLevel::V_0_06 ||
-        csa.sense_overcurrent_disabled() || csa.sense_level() != GD::SenseLevel::V_0_25 ||
-        csa.gain() != GD::CsaGain::GAIN_20) {
+    if (!configure_drv(gd, ocp, csa, dcv, /*trace=*/true)) {
       // Do NOT return into a silent console: a one-shot error is lost in the
       // USB re-enumeration gap after reset, and "board totally mute" cost two
       // long debug detours (2026-07-30). Keep shouting; retry so flipping VM
@@ -1005,30 +1077,14 @@ extern "C" void app_main(void) {
                    "on? Retrying in 2 s\n",
                    ocp.raw, csa.raw, dcv.raw);
         std::this_thread::sleep_for(2s);
-        std::error_code rec;
-        gd->clear_faults(rec);
-        ok = gd->write_driver_control(drv_ctl, rec) &&
-             gd->set_ocp_mode(GD::OcpMode::LATCHED_SHUTDOWN, rec) &&
-             gd->set_ocp_deglitch(GD::OcpDeglitch::US_4, rec) &&
-             gd->set_vds_level(GD::VdsLevel::V_0_06, rec) &&
-             gd->set_sense_overcurrent_enabled(true, rec) &&
-             gd->set_sense_level(GD::SenseLevel::V_0_25, rec) &&
-             gd->set_csa_gain(GD::CsaGain::GAIN_20, rec);
-        gd->clear_faults(rec);
-        ocp = gd->read_ocp_control(rec);
-        csa = gd->read_csa_control(rec);
-        dcv = gd->read_driver_control(rec);
-        if (ok && !rec && !dcv.coast() && !dcv.brake() &&
-            ocp.ocp_mode() == GD::OcpMode::LATCHED_SHUTDOWN &&
-            ocp.deglitch() == GD::OcpDeglitch::US_4 && ocp.vds_level() == GD::VdsLevel::V_0_06 &&
-            !csa.sense_overcurrent_disabled() && csa.sense_level() == GD::SenseLevel::V_0_25 &&
-            csa.gain() == GD::CsaGain::GAIN_20) {
+        if (configure_drv(gd, ocp, csa, dcv)) {
           fmt::print("#DRV8353 recovered — continuing boot\n");
           break;
         }
       }
     }
     logger.info("DRV8353 armed: CSA GAIN_20, VDS 0.06 V (~17-22 A), SEN 0.25 V, latched");
+    drv_check(gd, "after config");
   }
 
   if (!g_sampler.init({.bsp = &bsp,
@@ -1052,20 +1108,27 @@ extern "C" void app_main(void) {
   g_sampler.set_notify_task(g_foc_task);
 
   driver->enable();
+  drv_check(bsp.gate_driver(), "after enable");
   driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+  drv_check(bsp.gate_driver(), "after pwm center");
 
   if (!g_sampler.zero_calibrate(logger)) {
     logger.error("Zero-current reading is noisy or railed — sensing broken, not running");
     return;
   }
+  drv_check(bsp.gate_driver(), "after zero cal");
   driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
 
   if (!g_sampler.set_edge(true /*TEP*/, logger))
     return;
+  drv_check(bsp.gate_driver(), "after set_edge");
   driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
   // Enabling the sampler starts the FOC task's control loop. With Id*=Iq*=0 the
   // loop commands 0 V -> centered duties -> no current, so this is safe.
   g_sampler.enable();
+  drv_check(bsp.gate_driver(), "after sampler on");
+  std::this_thread::sleep_for(200ms);
+  drv_check(bsp.gate_driver(), "sampler +200ms");
 
   // Measure phases A and B, reconstruct C (its sense is noisy under rotation).
   g_sampler.set_phases(0, 1);
@@ -1078,6 +1141,7 @@ extern "C" void app_main(void) {
   g_hall_poller.init(kHallA, kHallB, kHallC);
   g_hall_drive.init(kRpmToOmegaE);
   g_hall_ready.store(true); // publish AFTER init — the FOC task gates on this
+  drv_check(bsp.gate_driver(), "after halls");
 
   // ---- ATOS: provisioning, supervisor, link -----------------------------------
   //
@@ -1221,7 +1285,12 @@ extern "C" void app_main(void) {
       .state_fn = []() { return g_sup->state(); },
       .hostname = std::string("pace-racer-") + axiscfg::axis_name(g_axis.axis_id),
   });
-  if (!g_link->start(bsp, logger)) {
+  // Only touch the W5500 once this board knows which wheel it is. An
+  // unprovisioned board is on the bench, where bringing up a second device on
+  // the gate driver's SPI bus buys nothing and costs control-loop headroom.
+  if (!g_axis.assigned()) {
+    logger.info("atos: axis unassigned — ethernet and RTPS stay down ('axis <n>', then reboot)");
+  } else if (!g_link->start(bsp, logger)) {
     logger.error("atos: link start failed; console only");
   }
 
@@ -1405,7 +1474,7 @@ extern "C" void app_main(void) {
   setvbuf(stdin, nullptr, _IONBF, 0);
   fmt::print(
       "#ready bus={:.1f}V pwm=20kHz. ATOS-DRIVE: MotorCommand in, MotorState out.\n"
-      "#  ATOS: axis [<0..3>|clear] | atos\n"
+      "#  ATOS: axis [<0..3>|clear] | atos | clr (DRV fault reset) | bootlog\n"
       "#  HALL: hcal (after: ho 9999 45 1 | run 2 30 5) then\n"
       "#        hrun <A> <rpm> [ramp] | sine <A> <rpm_amp> <period_s> | hiq <A>\n"
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
@@ -1505,6 +1574,78 @@ extern "C" void app_main(void) {
                  (int)st.state, (int)st.mode, (int)st.fault_code, st.cmd_age_ms, st.last_cmd_seq,
                  st.clear_fault_ack, st.position, st.velocity, st.torque_est, st.torque_limit_eff,
                  st.vel_limit_eff, st.accel_limit_eff);
+    } else if (strcmp(line, "bootlog") == 0) {
+      // Replay the boot-time DRV fault checks. The first line with a nonzero
+      // fault1/vgs2 names the boot step that latched it.
+      fmt::print("#bootlog {} checks\n", (int)g_drv_check_n);
+      bool named = false;
+      for (size_t i = 0; i < g_drv_check_n; i++) {
+        const auto &c = g_drv_checks[i];
+        const bool bad = c.f1 || c.vgs;
+        fmt::print("#  {:<16} fault1=0x{:04x} vgs2=0x{:04x}{}{}\n", c.where, c.f1, c.vgs,
+                   c.spi_ok ? "" : " (SPI FAILED)", (bad && !named) ? "  <-- FIRST FAULT" : "");
+        if (bad)
+          named = true;
+      }
+      if (!named)
+        fmt::print("#  boot was clean — the fault latches after boot\n");
+    } else if (strncmp(line, "clr", 3) == 0) {
+      // clr — reset the DRV8353's latched faults without a VM power cycle:
+      // ENABLE reset pulse, re-apply the config (a pulse that overshoots into
+      // sleep resets every register), then report what is still asserted.
+      // A fault that comes straight back is live, not a leftover latch.
+      using GD = Bsp::GateDriver;
+      g_mode.store(HOLD);
+      g_id_target.store(0);
+      g_iq_target.store(0);
+      g_hall_iq.store(0);
+      g_reset_pi.store(true);
+      driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+
+      auto gd = bsp.gate_driver();
+      GD::OcpControl ocp{};
+      GD::CsaControl csa{};
+      GD::DriverControl dcv{};
+      drv_reset_pulse();
+      const bool cfg_ok = configure_drv(gd, ocp, csa, dcv);
+
+      std::error_code fec;
+      auto fs = gd->fault_status(fec);
+      auto vgs = gd->vgs_status(fec);
+      if (fec) {
+        fmt::print("! clr: SPI read failed: {}\n", fec.message());
+      } else if (fs.raw == 0 && vgs.raw == 0) {
+        fmt::print("#clr OK — faults cleared (fault1=0x0000 vgs2=0x0000), config {}\n",
+                   cfg_ok ? "verified" : "FAILED");
+      } else {
+        fmt::print("! clr: fault1=0x{:04x} vgs2=0x{:04x} still asserted after reset pulse "
+                   "(config {}) —",
+                   fs.raw, vgs.raw, cfg_ok ? "verified" : "FAILED");
+        if (fs.gate_driver_fault())
+          fmt::print(" GDF");
+        if (fs.vds_ocp_fault())
+          fmt::print(" VDS_OCP");
+        if (fs.undervoltage_lockout())
+          fmt::print(" UVLO");
+        if (fs.overtemperature_shutdown())
+          fmt::print(" OTSD");
+        if (fs.any_vds_fault())
+          fmt::print(" VDS[{}{}{}{}{}{}]", fs.vds_high_side_a() ? "HA" : "",
+                     fs.vds_low_side_a() ? "LA" : "", fs.vds_high_side_b() ? "HB" : "",
+                     fs.vds_low_side_b() ? "LB" : "", fs.vds_high_side_c() ? "HC" : "",
+                     fs.vds_low_side_c() ? "LC" : "");
+        fmt::print(" | vgs:");
+        static constexpr const char *kVgsNames[6] = {"LC", "HC", "LB", "HB", "LA", "HA"};
+        for (int i = 0; i < 6; i++)
+          if (vgs.raw & (1u << i))
+            fmt::print(" {}", kVgsNames[i]);
+        if (vgs.raw & (1u << 6))
+          fmt::print(" GDUV");
+        if (vgs.raw & (1u << 7))
+          fmt::print(" OTW");
+        fmt::print("\n  live fault: do NOT drive. Scope the named gate, or retry with the "
+                   "motor disconnected to split board from motor.\n");
+      }
     } else if (strncmp(line, "run", 3) == 0) {
       // run [<amps> <rpm> <ramp_s>] — I/f open-loop spin. Defaults are gentle.
       float amps = kSpinAmps, rpm = kSpinRpm, ramp = kSpinRampS;

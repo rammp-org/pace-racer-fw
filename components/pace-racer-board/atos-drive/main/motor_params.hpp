@@ -32,7 +32,23 @@ inline constexpr float kHoldAmps = 10.0f; // HOLDING cap: ~23 N.m, holds a 10 de
                                           // the measured warm thermal limit.
 inline constexpr float kObsR = 0.7f;      // ohm, datasheet; confirm line-line vs phase
 inline constexpr float kObsL = 1.885e-3f; // H, datasheet
-inline constexpr float kObsLambda = 0.0f; // Wb, unknown; the observer is unused here
+// Wb. Derived: lambda = Kt / (1.5 * pp) = 2.3 / 30. Cross-checks against the
+// datasheet Ke: 1.5 * sqrt(3) * pp * lambda = 0.278 V/rpm line-line peak vs
+// 0.262 +/-10% stated. The same identity on the NineBot gives 0.585 vs 0.60
+// measured, so the 1.5*pp*lambda torque convention holds for this drive.
+// NOT zero: the observer fail-safe band is 0.35*lambda..3*lambda, which with
+// lambda = 0 can never be satisfied.
+inline constexpr float kObsLambda = 0.077f;
+// Bench supply, V. SVPWM scales duties by this, so it must be the real bus or
+// every commanded volt lands short.
+inline constexpr float kBusVoltage = 45.0f;
+// Current-loop PI. Same closed-loop bandwidth as the validated NineBot tune
+// (Kp/L = 169 rad/s, Ki/Kp = R/L): Kp scales with L, Ki with R.
+inline constexpr float kDefaultKp = 0.32f; // V/A
+inline constexpr float kDefaultKi = 118.0f; // V/(A*s)
+// 'vl' boot default. Back-EMF is omega_e * lambda = 4.8 V at 30 rpm and 9.6 V
+// at 60, so the NineBot's 8 V clamp would stall the I/f spin outright.
+inline constexpr float kDefaultVoltLimit = 16.0f;
 #else
 // NineBot S on the dyno: 15 pp, Kt 0.60 N.m/A measured (report fig 5), 520 rpm
 // speed clamp from the 1 kW campaign, 30 A hard target ceiling.
@@ -44,8 +60,17 @@ inline constexpr float kMaxAmps = 30.0f;
 inline constexpr float kHoldAmps = 8.0f; // ~4.8 N.m; a bench number, no slope to hold
 inline constexpr float kObsR = 0.323f;
 inline constexpr float kObsL = 336.0e-6f;
-inline constexpr float kObsLambda = 0.026f;
+inline constexpr float kObsLambda = 0.026f; // measured
+inline constexpr float kBusVoltage = 48.0f;
+inline constexpr float kDefaultKp = 0.0568f; // V/A, tuned on the dyno
+inline constexpr float kDefaultKi = 54.5f;   // V/(A*s)
+inline constexpr float kDefaultVoltLimit = 8.0f;
 #endif
+
+// 'vl' hard ceiling: the most phase voltage SVPWM can synthesize from the bus,
+// with margin. Derived so it follows kBusVoltage instead of being a stale
+// literal from whatever supply was on the bench that day.
+inline constexpr float kMaxPhaseVolts = 0.94f * kBusVoltage / 1.7320508f;
 
 // SAFE_STOP ramp when the command's accel_limit is 0. The one place 0 does not
 // mean "step": a step to zero rpm under load is a jolt on the stop path.
