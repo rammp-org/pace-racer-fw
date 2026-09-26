@@ -10,6 +10,9 @@
 //            wrong offset is the detent-lock mistake from the hall bring-up.
 //   hall     the six hall sector angles, deg ('hcal' result / 'hset'). NaN =
 //            uncalibrated. Restored at boot so a chair never needs 'hcal'.
+//   fb       which sensor commutates and measures the shaft: HALL (default,
+//            the chair has no encoder) or ENCODER (the dyno). Arming requires
+//            the selected source to be calibrated; the other one is ignored.
 //
 // One NVS namespace, one key per field, all plain reads and writes; nothing
 // here is timing critical. Saves happen from the console task only.
@@ -31,11 +34,16 @@ inline constexpr const char *kNamespace = "atos";
 inline constexpr const char *kKeyAxis = "axis_id";
 inline constexpr const char *kKeyEncOfs = "enc_ofs";
 inline constexpr const char *kKeyHall = "hall_deg";
+inline constexpr const char *kKeyFeedback = "fb";
+
+enum class Feedback : uint8_t { HALL = 0, ENCODER = 1 };
+inline const char *feedback_name(Feedback f) { return f == Feedback::ENCODER ? "enc" : "hall"; }
 
 struct AxisConfig {
   rammp::AxisId axis_id{rammp::AxisId::UNASSIGNED};
   float enc_ofs_rad{NAN};
   std::array<float, 6> hall_deg{NAN, NAN, NAN, NAN, NAN, NAN};
+  Feedback feedback{Feedback::HALL};
 
   bool assigned() const { return axis_id != rammp::AxisId::UNASSIGNED; }
   bool enc_calibrated() const { return !std::isnan(enc_ofs_rad); }
@@ -44,6 +52,10 @@ struct AxisConfig {
       if (std::isnan(d))
         return false;
     return true;
+  }
+  /// The source the drive will commutate on is calibrated.
+  bool feedback_calibrated() const {
+    return feedback == Feedback::ENCODER ? enc_calibrated() : hall_calibrated();
   }
 };
 
@@ -94,6 +106,10 @@ inline bool load(AxisConfig &cfg, espp::Logger &logger) {
   if (nvs_get_blob(h, kKeyHall, hall.data(), &len) == ESP_OK && len == sizeof(hall)) {
     cfg.hall_deg = hall;
   }
+  uint8_t fb = 0;
+  if (nvs_get_u8(h, kKeyFeedback, &fb) == ESP_OK && fb <= (uint8_t)Feedback::ENCODER) {
+    cfg.feedback = static_cast<Feedback>(fb);
+  }
   nvs_close(h);
   return true;
 }
@@ -131,6 +147,11 @@ inline bool save_enc_ofs(float ofs_rad, espp::Logger &logger) {
 inline bool save_hall(const std::array<float, 6> &deg, espp::Logger &logger) {
   return detail::write(
       logger, [&](nvs_handle_t h) { return nvs_set_blob(h, kKeyHall, deg.data(), sizeof(deg)); });
+}
+
+inline bool save_feedback(Feedback fb, espp::Logger &logger) {
+  return detail::write(logger,
+                       [&](nvs_handle_t h) { return nvs_set_u8(h, kKeyFeedback, (uint8_t)fb); });
 }
 
 /// Forget everything: back to factory. 'axis clear' on the console.

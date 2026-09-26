@@ -47,13 +47,15 @@ struct Measured {
   uint16_t drv_status{0};  ///< raw DRV8353 fault bits from the last poll
   bool coasting{false};    ///< gate driver is in Hi-Z
   bool sampler_enabled{true};
-  bool enc_calibrated{true}; ///< encoder offset known; arming is refused without it
+  bool fb_calibrated{true};  ///< the selected feedback source is calibrated; arming is refused without it
   /// Guard events since the last tick. The FOC side has already reacted
   /// (unload + coast); the supervisor only names the fault.
   bool soft_trip{false};   ///< phase current over the trip level
   bool thermal{false};     ///< a board temperature over its limit
   bool overrun{false};     ///< sampler persistently late, disabled itself
   bool drv_fault{false};   ///< DRV8353 reported a fault (drv_status has the bits)
+  bool hall_fault{false};  ///< hall inputs illegal while driving (FOC side already stopped)
+  bool stall{false};       ///< no motion at the torque cap for 0.5 s (FOC side already stopped)
 };
 
 struct Hooks {
@@ -61,10 +63,13 @@ struct Hooks {
   std::function<void()> coast;
   /// Release Hi-Z so a drive command takes effect. Idempotent.
   std::function<void()> uncoast;
-  /// Direct torque current in the encoder frame. `cap_amps` is |iq| ceiling.
-  std::function<void(float iq_amps, float cap_amps)> torque;
-  /// Speed loop: setpoint rpm, setpoint ramp rpm/s, iq ceiling.
-  std::function<void(float rpm, float ramp_rpm_s, float cap_amps)> velocity;
+  /// Direct torque current. `cap_amps` is the |iq| ceiling; `max_rpm` is the
+  /// speed above which the drive rolls torque off in the direction of motion
+  /// (the command's vel_limit, so it means the same thing in every mode).
+  std::function<void(float iq_amps, float cap_amps, float max_rpm)> torque;
+  /// Speed loop: setpoint rpm, setpoint ramp rpm/s, iq ceiling, hard speed
+  /// cap rpm (torque rolls off above it, whatever the loop asks).
+  std::function<void(float rpm, float ramp_rpm_s, float cap_amps, float max_rpm)> velocity;
   /// Position loop on the rotor accumulator: target deg, speed clamp rpm, iq ceiling.
   /// `fresh` = new target, re-seed the derivative.
   std::function<void(float rotor_deg, float max_rpm, float cap_amps, bool fresh)> position;
@@ -135,6 +140,10 @@ public:
       enter_fault_locked(FaultCode::OVERTEMP, false);
     else if (m.overrun)
       enter_fault_locked(FaultCode::SAMPLER, false);
+    else if (m.hall_fault)
+      enter_fault_locked(FaultCode::HALL, false);
+    else if (m.stall)
+      enter_fault_locked(FaultCode::STALL, false);
     else if (m.drv_fault)
       enter_fault_locked((m.drv_status & 0x0200u) ? FaultCode::VDS_OCP : FaultCode::DRV_FAULT,
                          false);
@@ -181,8 +190,8 @@ public:
         break;
       case RequestedState::ARMED:
         if (state_.state == BoardState::DISARMED || state_.state == BoardState::HOLDING) {
-          if (!m.enc_calibrated) {
-            enter_fault_locked(FaultCode::ENCODER, false);
+          if (!m.fb_calibrated) {
+            enter_fault_locked(FaultCode::ENCODER, false); // "feedback": halls or encoder
           } else if (!m.sampler_enabled) {
             enter_fault_locked(FaultCode::SAMPLER, false);
           } else {
@@ -203,7 +212,7 @@ public:
       break;
     case BoardState::SAFE_STOPPING:
       if (hooks_.velocity)
-        hooks_.velocity(0.0f, safe_stop_ramp_, safe_stop_cap_);
+        hooks_.velocity(0.0f, safe_stop_ramp_, safe_stop_cap_, vel_rpm_limit_locked());
       if (std::fabs(m.velocity_rad_s * motor::kRadSToRpm) < motor::kStoppedRpm) {
         hold_deg_ = m.position_rad * motor::kRadToDeg;
         set_state_locked(BoardState::HOLDING);
@@ -315,9 +324,16 @@ private:
   }
 
   float ramp_rpm_s_locked() {
+    // 0 = step, unless the motor profile has an acceleration ceiling: then 0
+    // means the ceiling and a larger request is clamped to it, like the other
+    // limits. The reported effective value is what the drive will do.
     const float lim = have_cmd_ ? cmd_.accel_limit : 0.0f;
-    state_.accel_limit_eff = lim > 0 ? lim : 0.0f;
-    return lim > 0 ? lim * motor::kRadSToRpm : 1.0e6f; // 0 = step
+    const float ceiling = motor::kMaxAccelRpmS * motor::kRpmToRadS; // rad/s^2, 0 = none
+    float eff = lim;
+    if (ceiling > 0 && (lim <= 0 || lim > ceiling))
+      eff = ceiling;
+    state_.accel_limit_eff = eff > 0 ? eff : 0.0f;
+    return eff > 0 ? eff * motor::kRadSToRpm : 1.0e6f;
   }
 
   void apply_mode_locked(const Measured &m) {
@@ -343,13 +359,13 @@ private:
       if (hooks_.uncoast)
         hooks_.uncoast();
       if (hooks_.torque)
-        hooks_.torque(std::clamp(cmd_.torque / motor::kKt, -cap, cap), cap);
+        hooks_.torque(std::clamp(cmd_.torque / motor::kKt, -cap, cap), cap, vmax);
       break;
     case ControlMode::VELOCITY:
       if (hooks_.uncoast)
         hooks_.uncoast();
       if (hooks_.velocity)
-        hooks_.velocity(std::clamp(cmd_.velocity * motor::kRadSToRpm, -vmax, vmax), ramp, cap);
+        hooks_.velocity(std::clamp(cmd_.velocity * motor::kRadSToRpm, -vmax, vmax), ramp, cap, vmax);
       break;
     case ControlMode::POSITION:
       if (hooks_.uncoast)

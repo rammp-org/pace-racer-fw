@@ -58,3 +58,7 @@ dependencies.lock
 # register it elsewhere.
 .mcp.json
 .DS_Store
+
+# per-profile ESP-IDF build dirs and host tool builds
+build-*/
+components/pace-racer-board/atos-drive/tests/host_mib/build/

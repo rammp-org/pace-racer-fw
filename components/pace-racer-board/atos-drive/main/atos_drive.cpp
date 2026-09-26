@@ -144,8 +144,13 @@ static constexpr uint32_t kCooldownTicks = 10000;  // 500 ms after revert/abort:
 // Outer speed loop, active only in CLOSED: rpm setpoint (ramped at the run's
 // ramp rate) -> iq command, clamped to ±run amps (amps = torque ceiling).
 // Few-Hz loop around a 400 rad/s current loop — decades of separation.
-static constexpr float kSpeedKp = 0.05f; // A per rpm
+static constexpr float kSpeedKp = 0.05f; // A per rpm (encoder feedback, dyno tune)
 static constexpr float kSpeedKi = 0.2f;  // A per rpm-second
+// Hall feedback: half the encoder gains. The hall speed comes through a 5 Hz
+// tracking loop, and at the dyno gains the loop sat too close to it and
+// limit-cycled (vel 3 rad/s: +/-1.5; at half gains +/-0.18, 2026-09-25).
+static constexpr float kHallSpeedKp = 0.025f;
+static constexpr float kHallSpeedKi = 0.1f;
 // Fail-safe: while the observer has authority, |rotor flux| leaving this band
 // around lambda_pm for ~40 ms means the estimate is lost — coast, don't fight.
 static constexpr float kFluxFailLo = 0.35f;
@@ -338,6 +343,12 @@ std::atomic<int> g_mode{HOLD};
 enum HallSub { HALL_SPEED = 0, HALL_SINE = 1, HALL_TORQUE = 2, HALL_POS = 3 };
 std::atomic<int> g_hall_sub{HALL_SPEED};
 std::atomic<float> g_hall_amps{0.0f};  // iq clamp = torque ceiling in HALL
+// HALL_TORQUE speed governor (mech rpm, 0 = off). Torque in the direction of
+// motion is scaled by (vmax - |rpm|) / band and goes negative above vmax, so a
+// torque command can never run the wheel past the velocity limit; below
+// vmax - band it is untouched. band = 20% of vmax, at least 5 rpm: wider than
+// the hall speed noise at chair speeds, so the roll-off is a slope, not a bang.
+std::atomic<float> g_hall_vmax{0.0f};
 std::atomic<float> g_hall_rpm{0.0f};   // hrun setpoint (mech rpm)
 std::atomic<float> g_hall_ramp{50.0f}; // setpoint ramp, rpm/s
 
@@ -351,6 +362,10 @@ static constexpr float kEncToElec = (float)kPolePairs / kEncGear; // = 6.0 exact
 static constexpr float kEncCntToRad = 6.28318530718f / 16384.0f;
 static constexpr float kEncRpmTau = 0.05f; // LPF on encoder-derived rotor rpm
 std::atomic<int> g_theta_src{0};           // HALL-mode angle source: 0 = hall table, 1 = encoder
+// ATOS feedback source (NVS 'fb'): true = the drive commutates and measures on
+// the halls, false = on the encoder. The console spin commands still pick their
+// own source; this only decides what the supervisor's hooks ask for.
+std::atomic<bool> g_fb_hall{true};
 std::atomic<float> g_enc_ofs{0.0f};        // elec rad: th = kEncToElec*enc + ofs
 std::atomic<bool> g_enc_cal{false};        // offset known — gates erun/eiq
 
@@ -420,8 +435,40 @@ axiscfg::AxisConfig g_axis;
 std::unique_ptr<atoslink::Link> g_link;
 std::unique_ptr<supervisor::Supervisor> g_sup;
 std::atomic<float> g_enc_rpm_pub{0.0f};   // filtered encoder rotor rpm, for telemetry
+
+// Shaft position and speed from the selected feedback source. Hall position is
+// the ISR-validated step accumulator: one step per electrical sector, so
+// 360/(6*pp) mech degrees per step (4 deg on the NineBot, 3 on the hub motor).
+// Coarse, but multiturn and live whether or not the bridge is driving.
+static constexpr float kHallStepRad = 6.28318530718f / (6.0f * (float)kPolePairs);
+inline float shaft_position_rad() {
+  if (g_fb_hall.load(std::memory_order_relaxed))
+    return (float)g_hall_poller.steps() * kHallStepRad;
+  return g_encoder ? g_encoder->get_radians() / kEncGear : 0.0f;
+}
+/// Speed-loop gains follow the feedback source unless 'sg' overrode them.
+inline void apply_feedback_gains() {
+  if (g_fb_hall.load(std::memory_order_relaxed)) {
+    g_spd_kp.store(kHallSpeedKp);
+    g_spd_ki.store(kHallSpeedKi);
+  } else {
+    g_spd_kp.store(kSpeedKp);
+    g_spd_ki.store(kSpeedKi);
+  }
+}
+inline float shaft_rpm() {
+  if (g_fb_hall.load(std::memory_order_relaxed))
+    return g_hall_drive.rpm_filtered();
+  return g_enc_rpm_pub.load(std::memory_order_relaxed);
+}
 std::atomic<uint16_t> g_drv_status{0};    // last DRV8353 fault poll, raw
 std::atomic<bool> g_ev_soft_trip{false};  // guard events for the supervisor, edge-triggered
+std::atomic<bool> g_ev_hall_fault{false}; // hall inputs illegal while driving on them
+std::atomic<bool> g_ev_stall{false};      // no motion at the torque cap for 0.5 s
+// Detector budgets, FOC ticks at 20 kHz.
+static constexpr int kHallIllegalTicks = 1000; // 50 ms of 000/111
+static constexpr int kStallTicks = 10000;      // 0.5 s at the cap with no motion
+static constexpr float kStallMinSetRpm = 10.0f; // below this a stopped rotor is the plan
 std::atomic<bool> g_ev_thermal{false};
 std::atomic<bool> g_ev_overrun{false};
 std::atomic<bool> g_ev_drv_fault{false};
@@ -751,10 +798,17 @@ IRAM_ATTR void foc_task_fn(void *) {
           h_set = target; // sine IS the profile — no extra rate limit on top
           mstate = 'W';
         } else if (sub == HALL_POS) {
-          // Position P(D) on the encoder accumulator -> rpm setpoint.
-          const float pos_deg =
-              g_encoder ? g_encoder->get_radians() / kEncGear * (180.0f / 3.14159265f) : 0.0f;
-          const float perr = g_pos_target.load(std::memory_order_relaxed) - pos_deg;
+          // Position P(D) on the shaft accumulator (encoder or hall steps) -> rpm setpoint.
+          const float pos_deg = shaft_position_rad() * (180.0f / 3.14159265f);
+          float perr = g_pos_target.load(std::memory_order_relaxed) - pos_deg;
+          // On halls the position is quantized to one step, so an error inside
+          // one step is not an error: treat it as zero and let the speed
+          // integrator bleed off instead of winding up against the detent.
+          if (g_fb_hall.load(std::memory_order_relaxed) &&
+              std::fabs(perr) <= kHallStepRad * (180.0f / 3.14159265f)) {
+            perr = 0.0f;
+            h_integ -= h_integ * std::min(1.0f, dt / 0.5f);
+          }
           static float perr_prev = 0.0f;
           if (g_pos_kick.exchange(false, std::memory_order_relaxed))
             perr_prev = perr; // no derivative kick on a fresh setpoint
@@ -776,9 +830,70 @@ IRAM_ATTR void foc_task_fn(void *) {
             std::clamp(h_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt, -amps, amps);
         iqref = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + h_integ, -amps, amps);
       }
+      // Speed governor (see g_hall_vmax): torque in the direction of motion
+      // rolls off to zero across a band and goes negative beyond it, whatever
+      // the sub-mode asked for. Symmetric, so reverse runaway is caught too.
+      // TORQUE: the band sits BELOW the limit, so a torque command settles
+      // under it. Speed/position: the band sits ABOVE the limit, so the loop
+      // can reach its (already clamped) setpoint and only a released stall or
+      // a wound integrator gets cut. Measured 2026-09-25: a stalled speed loop
+      // released at the 10 A cap hit 18.5 rad/s against a 6.3 rad/s limit.
+      {
+        const float vmax = g_hall_vmax.load(std::memory_order_relaxed);
+        if (vmax > 0.0f) {
+          const float band = std::max(0.2f * vmax, 5.0f);
+          const float edge = sub == HALL_TORQUE ? vmax - band : vmax;
+          const float fwd_cap = amps * std::clamp((edge + band - rpm_meas) / band, -1.0f, 1.0f);
+          const float rev_cap = -amps * std::clamp((edge + band + rpm_meas) / band, -1.0f, 1.0f);
+          iqref = std::clamp(iqref, rev_cap, fwd_cap);
+        }
+      }
       // Frame continuity for STOPPING (trip/'stop'/thermal all exit through it).
       sp_theta = th;
       sp_omega = esrc ? rpm_meas * kRpmToOmegaE : g_hall_drive.omega_e();
+
+      // Feedback guards, only while commutating on the halls. Both exit like a
+      // trip: unload through STOPPING, Hi-Z coast, and the supervisor names it.
+      //   HALL:  an illegal input state (000/111) for 50 ms. A legal-but-wrong
+      //          state from one bad line is caught by the stall guard instead.
+      //   STALL: speed or position sub-mode asking for motion, the speed
+      //          integrator past half the cap (pushing hard, and smooth
+      //          unlike iq, which chatters 6..10 A at a stalled sector edge),
+      //          and no net hall progress over 0.5 s (a hand-held wheel
+      //          bounces +/-1 step). A blocked wheel, or halls that stopped
+      //          reporting. Torque sub-mode is exempt: pushing on a wall at a
+      //          commanded torque is legitimate.
+      static int hall_illegal_ticks = 0, stall_ticks = 0, stall_ref_steps = 0;
+      if (!esrc) {
+        const uint8_t hs = g_hall_poller.raw_state();
+        hall_illegal_ticks = (hs == 0 || hs == 7) ? hall_illegal_ticks + 1 : 0;
+        const int steps_now = g_hall_poller.steps();
+        const bool wants_motion = sub != HALL_TORQUE && std::fabs(h_set) > kStallMinSetRpm;
+        const bool pushing = amps > 0.0f && std::fabs(h_integ) >= 0.5f * amps;
+        bool stalled = false;
+        if (wants_motion && pushing) {
+          if (stall_ticks == 0)
+            stall_ref_steps = steps_now;
+          if (++stall_ticks >= kStallTicks) {
+            stalled = std::abs(steps_now - stall_ref_steps) <= 2;
+            stall_ticks = 0; // next window
+          }
+        } else {
+          stall_ticks = 0;
+        }
+        if (hall_illegal_ticks >= kHallIllegalTicks || stalled) {
+          if (hall_illegal_ticks >= kHallIllegalTicks)
+            g_ev_hall_fault.store(true);
+          else
+            g_ev_stall.store(true);
+          hall_illegal_ticks = stall_ticks = 0;
+          g_hall_iq.store(0.0f);
+          g_hall_rpm.store(0.0f);
+          g_mode.store(STOPPING); // takes effect next tick, like a trip
+        }
+      } else {
+        hall_illegal_ticks = stall_ticks = 0;
+      }
     } else if (mode == RLV) {
       // R/L identification: the branch only counts down; the actual voltage
       // step is injected after the PI (see below) so the loops can't fight it.
@@ -1167,7 +1282,11 @@ extern "C" void app_main(void) {
   if (g_axis.hall_calibrated()) {
     g_hall_drive.set_centers_deg(g_axis.hall_deg.data());
   }
-  logger.info("axis: {} | enc ofs {} | hall table {} | motor {}", axiscfg::axis_name(g_axis.axis_id),
+  g_fb_hall.store(g_axis.feedback == axiscfg::Feedback::HALL);
+  apply_feedback_gains();
+  logger.info("axis: {} | feedback {} ({}) | enc ofs {} | hall table {} | motor {}",
+              axiscfg::axis_name(g_axis.axis_id), axiscfg::feedback_name(g_axis.feedback),
+              g_axis.feedback_calibrated() ? "calibrated" : "NOT CALIBRATED, cannot arm",
               g_axis.enc_calibrated() ? "restored" : "UNKNOWN ('ecal')",
               g_axis.hall_calibrated() ? "restored" : "UNKNOWN ('hcal')", motor::kName);
 
@@ -1203,29 +1322,32 @@ extern "C" void app_main(void) {
       g_reset_pi.store(true);
     }
   };
-  hooks.torque = [](float iq, float cap) {
+  hooks.torque = [](float iq, float cap, float max_rpm) {
     g_hall_amps.store(std::clamp(cap, 0.0f, g_max_target.load()));
+    g_hall_vmax.store(std::clamp(max_rpm, 0.0f, motor::kMaxRpm));
     g_hall_iq.store(iq);
     g_hall_sub.store(HALL_TORQUE);
-    g_theta_src.store(1);
+    g_theta_src.store(g_fb_hall.load() ? 0 : 1);
     g_mode.store(HALL);
   };
-  hooks.velocity = [](float rpm, float ramp, float cap) {
+  hooks.velocity = [](float rpm, float ramp, float cap, float max_rpm) {
     g_hall_amps.store(std::clamp(cap, 0.0f, g_max_target.load()));
+    g_hall_vmax.store(std::clamp(max_rpm, 0.0f, motor::kMaxRpm));
     g_hall_rpm.store(std::clamp(rpm, -motor::kMaxRpm, motor::kMaxRpm));
     g_hall_ramp.store(ramp);
     g_hall_sub.store(HALL_SPEED);
-    g_theta_src.store(1);
+    g_theta_src.store(g_fb_hall.load() ? 0 : 1);
     g_mode.store(HALL);
   };
   hooks.position = [](float deg, float maxrpm, float cap, bool fresh) {
     g_pos_target.store(deg);
     g_pos_maxrpm.store(std::clamp(maxrpm, 1.0f, motor::kMaxRpm));
+    g_hall_vmax.store(std::clamp(maxrpm, 0.0f, motor::kMaxRpm));
     g_hall_amps.store(std::clamp(cap, 0.0f, g_max_target.load()));
     if (fresh)
       g_pos_kick.store(true);
     g_hall_sub.store(HALL_POS);
-    g_theta_src.store(1);
+    g_theta_src.store(g_fb_hall.load() ? 0 : 1);
     g_mode.store(HALL);
   };
   hooks.idle = []() {
@@ -1244,8 +1366,8 @@ extern "C" void app_main(void) {
   hooks.measure = []() {
     supervisor::Measured m;
     const auto sn = g_foc.read();
-    m.position_rad = g_encoder ? g_encoder->get_radians() / kEncGear : 0.0f;
-    m.velocity_rad_s = g_enc_rpm_pub.load() * motor::kRpmToRadS;
+    m.position_rad = shaft_position_rad();
+    m.velocity_rad_s = shaft_rpm() * motor::kRpmToRadS;
     m.iq = sn.iq;
     m.id = sn.id;
     m.vd = sn.vd;
@@ -1254,11 +1376,13 @@ extern "C" void app_main(void) {
     m.drv_status = g_drv_status.load();
     m.coasting = g_coasting.load();
     m.sampler_enabled = g_sampler.is_enabled();
-    m.enc_calibrated = g_encoder && g_enc_cal.load();
+    m.fb_calibrated = g_fb_hall.load() ? g_hall_drive.calibrated() : (g_encoder && g_enc_cal.load());
     m.soft_trip = g_ev_soft_trip.exchange(false);
     m.thermal = g_ev_thermal.exchange(false);
     m.overrun = g_ev_overrun.exchange(false);
     m.drv_fault = g_ev_drv_fault.exchange(false);
+    m.hall_fault = g_ev_hall_fault.exchange(false);
+    m.stall = g_ev_stall.exchange(false);
     return m;
   };
   g_sup = std::make_unique<supervisor::Supervisor>(std::move(hooks), g_axis.axis_id);
@@ -1486,7 +1610,7 @@ extern "C" void app_main(void) {
   setvbuf(stdin, nullptr, _IONBF, 0);
   fmt::print(
       "#ready bus={:.1f}V pwm=20kHz. ATOS-DRIVE: MotorCommand in, MotorState out.\n"
-      "#  ATOS: axis [<0..3>|clear] | atos | clr (DRV fault reset) | bootlog\n"
+      "#  ATOS: axis [<0..3>|clear] | fb [hall|enc] | atos | clr (DRV fault reset) | bootlog\n"
       "#  HALL: hcal (after: ho 9999 45 1 | run 2 30 5) then\n"
       "#        hrun <A> <rpm> [ramp] | sine <A> <rpm_amp> <period_s> | hiq <A>\n"
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
@@ -1568,12 +1692,41 @@ extern "C" void app_main(void) {
         if (axiscfg::clear(logger))
           fmt::print("#axis cleared: unassigned, calibration forgotten; reboot\n");
       } else {
-        fmt::print("#axis {} ({}) | enc ofs {} | hall table {} | motor {} | api v{} fw 0x{:08x}\n",
+        fmt::print("#axis {} ({}) | fb {}{} | enc ofs {} | hall table {} | motor {} | api v{} fw "
+                   "0x{:08x}\n",
                    (int)g_axis.axis_id, axiscfg::axis_name(g_axis.axis_id),
+                   axiscfg::feedback_name(g_axis.feedback),
+                   g_axis.feedback_calibrated() ? "" : " (NOT CALIBRATED)",
                    g_axis.enc_calibrated() ? "saved" : "NONE",
                    g_axis.hall_calibrated() ? "saved" : "NONE", motor::kName,
                    RAMMP_MOTOR_API_VERSION, motor::kFwVersion);
       }
+    } else if (strncmp(line, "fb", 2) == 0 && (line[2] == ' ' || line[2] == 0)) {
+      // fb hall|enc — which sensor the ATOS drive commutates and measures on.
+      // Takes effect immediately for the next command and is saved for boot.
+      // Arming needs the chosen source calibrated: hcal for halls, ecal for enc.
+      axiscfg::Feedback fb = g_axis.feedback;
+      if (strcmp(line, "fb hall") == 0)
+        fb = axiscfg::Feedback::HALL;
+      else if (strcmp(line, "fb enc") == 0)
+        fb = axiscfg::Feedback::ENCODER;
+      else if (line[2] != 0) {
+        fmt::print("! fb hall | fb enc\n");
+        continue;
+      }
+      if (line[2] != 0 && axiscfg::save_feedback(fb, logger))
+        g_axis.feedback = fb;
+      g_fb_hall.store(g_axis.feedback == axiscfg::Feedback::HALL);
+      apply_feedback_gains();
+      fmt::print("#fb {} ({}) | pos {:.3f} rad rpm {:.1f} | speed gains kp={} ki={} | hall pll {:.1f} Hz\n",
+                 axiscfg::feedback_name(g_axis.feedback),
+                 g_axis.feedback_calibrated() ? "calibrated" : "NOT CALIBRATED, cannot arm",
+                 shaft_position_rad(), shaft_rpm(), g_spd_kp.load(), g_spd_ki.load(),
+                 g_hall_drive.pll_hz());
+    } else if (sscanf(line, "hpll %f", &a) == 1) {
+      // hpll <hz> — hall speed tracking-loop bandwidth (see HallDrive).
+      g_hall_drive.set_pll_hz(a);
+      fmt::print("#hall pll {:.1f} Hz\n", g_hall_drive.pll_hz());
     } else if (strcmp(line, "atos") == 0) {
       // Link and state-machine status in one line.
       const auto st = g_sup->state();
@@ -1767,6 +1920,7 @@ extern "C" void app_main(void) {
         amps = std::clamp(amps, -g_max_target.load(), g_max_target.load());
         g_hall_iq.store(amps);
         g_hall_amps.store(g_max_target.load());
+        g_hall_vmax.store(0.0f); // console torque: no governor
         g_hall_sub.store(HALL_TORQUE);
         g_theta_src.store(0);
         uncoast();
@@ -1806,6 +1960,7 @@ extern "C" void app_main(void) {
         amps = std::clamp(amps, -g_max_target.load(), g_max_target.load());
         g_hall_iq.store(amps);
         g_hall_amps.store(g_max_target.load());
+        g_hall_vmax.store(0.0f); // console torque: no governor
         g_hall_sub.store(HALL_TORQUE);
         g_theta_src.store(1);
         uncoast();

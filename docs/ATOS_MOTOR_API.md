@@ -68,6 +68,10 @@ verification, Risks. Not yet implemented.
 | D30 | MIB command rate contract: 10 Hz <= rate <= 50 Hz. Lower bound is the 200 ms watchdog; upper bound is the S3 packet budget (~100 pps total incl. 20 Hz telemetry). Ceiling to be measured on the bench with the stand-in before the MIB team fixes its loop rate. | |
 | D31 | A host-side Python MIB stand-in is an explicit, separate deliverable (publishes `MotorCommand`, decodes `MotorState`, in the `tests/rtps_sub.py` style). | Testable on the dyno before the P4 exists; reference for the MIB engineer. |
 | D32 | `vbus` / `ibus_est` stay in `MotorState`; `vbus` reports the compiled constant until hardware gains a VM divider, flagged by `vbus_measured = 0`. No BUS_OVERVOLT/UNDERVOLT fault codes in v1. | Wire format stable across the hardware rev; a consumer cannot mistake the constant for a reading. |
+| D33 | Feedback source is per-board NVS (`fb hall|enc`), default hall. The arm gate checks the selected source's calibration. Position on halls is the step accumulator (4 deg on 15 pp); hold has a one-step deadband. | The chair has no encoder; the dyno does. One firmware, one switch, no build flag. |
+| D34 | `vel_limit` binds in every mode as a torque governor: in TORQUE the roll-off band is the top 20 % below the limit; in VELOCITY/POSITION/SAFE_STOP the band sits above the limit, so the loop reaches its clamped setpoint but a released stall or wound integrator is cut and braked. | A torque command must never be able to run a wheel away; 20 % is wider than the hall speed noise at chair speeds. |
+| D35 | A motor profile may carry an acceleration ceiling (`kMaxAccelRpmS`); where it does, `accel_limit` 0 or larger means the ceiling (D19 still holds where it is 0). The flatbot profile sets 120 rpm/s, 60 rpm, 10 A, 4 A hold. | Office ceilings the MIB cannot raise; raising them is a deliberate reflash. |
+| D36 | Feedback guards raise `HALL` (illegal input 50 ms) and `STALL` (speed integrator past half the cap and no net hall steps over 0.5 s, speed/position modes only). Both exit through the unload-then-coast path. Verified physically 2026-09-25. | A lost hall line or a blocked wheel must be a named fault, not a hot motor. |
 
 
 ## Wire types
@@ -86,7 +90,7 @@ Source of truth: `rammp-rtps` `components/rammp_rtps_messages/include/messages/m
 enum class RequestedState : uint8_t { DISARMED, ARMED, SAFE_STOP, ESTOP };
 enum class ControlMode    : uint8_t { COAST, TORQUE, VELOCITY, POSITION, HOLD };
 enum class BoardState     : uint8_t { DISARMED, ARMED, SAFE_STOPPING, HOLDING, FAULT };
-enum class FaultCode      : uint8_t { NONE, WATCHDOG, OVERCURRENT, VDS_OCP, OVERTEMP,
+enum class FaultCode      : uint8_t { NONE, WATCHDOG, OVERCURRENT, VDS_OCP, OVERTEMP,   // + HALL = 9, STALL = 10 (2026-09-25)
                                       ENCODER, DRV_FAULT, UNASSIGNED_AXIS };
 
 struct MotorCommand {            // 28 B on the wire, 10..50 Hz
@@ -137,7 +141,7 @@ HOLDING   --ARMED-------------------> ARMED (resumes running `mode`)
 | --- | --- | --- |
 | `torque_limit` | firmware hard ceiling (Kt x trip current) | compile-time ceiling |
 | `vel_limit` | firmware speed clamp (+/-520 rpm today) | compile-time ceiling |
-| `accel_limit` | **no ramp** (reference steps) | compile-time ceiling |
+| `accel_limit` | **no ramp** (reference steps), or the profile's accel ceiling where one exists (flatbot: 12.6 rad/s^2) | compile-time ceiling |
 
 Effective values are echoed in `MotorState.*_limit_eff`.
 

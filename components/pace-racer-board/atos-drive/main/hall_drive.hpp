@@ -185,6 +185,23 @@ public:
   static constexpr float kMaxOmegaE = 2400.0f; // el rad/s ~ 1500 rpm at 15 pp
   static constexpr float kStallSec = 0.3f;     // no transition this long -> speed 0
   static constexpr int kCalMinPerSector = 50;  // ticks per sector for a valid cal
+  // Speed for the LOOP and telemetry comes from a tracking loop (PLL) on the
+  // step-quantized mechanical position, not from transition intervals. The
+  // per-interval estimate had a 64% spread at 14 rpm and flipped sign 8% of
+  // the time (2026-09-25); a full-electrical-rev window fixed the noise but
+  // its 140 ms lag at 28 rpm made the speed loop limit-cycle. The PLL's
+  // bandwidth sets both: 5 Hz is ~30 ms of lag and ~0.2 rad/s ripple from
+  // the 4-deg steps at 14 rpm, shrinking with speed. Critically damped.
+  // The per-interval omega_ stays for angle interpolation only.
+  static constexpr float kPllHzDefault = 5.0f;
+  /// Tracking-loop bandwidth, Hz ('hpll'). Critically damped (zeta 0.7).
+  void set_pll_hz(float hz) {
+    const float wn = 2.0f * kPi * std::clamp(hz, 0.5f, 50.0f);
+    pll_kp_ = 2.0f * 0.7f * wn;
+    pll_ki_ = wn * wn;
+    pll_hz_ = hz;
+  }
+  float pll_hz() const { return pll_hz_; }
 
   void init(float rpm_to_omega_e) { rpm_to_omega_e_ = rpm_to_omega_e; }
 
@@ -239,8 +256,21 @@ public:
       if (lead < -kLeadLimit)
         theta_ = wrap_2pi(center_[sec_] - kLeadLimit);
     }
-    // Filtered mechanical rpm for the speed loop (~50 ms time constant).
-    rpm_f_ += (dt / (0.05f + dt)) * (omega_ / rpm_to_omega_e_ - rpm_f_);
+    // Tracking loop on the quantized mechanical position (rad). The speed
+    // state is the integrator, which is what makes it smooth: the proportional
+    // term only steers the position estimate. A stall settles to zero on its
+    // own as the estimate overshoots the frozen measurement.
+    const float step_mech = kSectorRad * (kTwoPi / 60.0f) / rpm_to_omega_e_;
+    const float th_m = (float)steps * step_mech;
+    if (!pll_seeded_) {
+      pll_seeded_ = true;
+      pll_th_ = th_m;
+      pll_w_ = 0.0f;
+    }
+    const float e = std::clamp(th_m - pll_th_, -0.5f, 0.5f);
+    pll_w_ += pll_ki_ * e * dt;
+    pll_th_ += (pll_w_ + pll_kp_ * e) * dt;
+    rpm_f_ = pll_w_ * (60.0f / kTwoPi);
   }
 
   float theta() const { return theta_; }
@@ -372,6 +402,11 @@ private:
   float omega_{0.0f};
   float rpm_f_{0.0f};
   float since_{0.0f};
+  bool pll_seeded_{false};
+  float pll_hz_{kPllHzDefault};
+  float pll_kp_{2.0f * 0.7f * 2.0f * kPi * kPllHzDefault};
+  float pll_ki_{(2.0f * kPi * kPllHzDefault) * (2.0f * kPi * kPllHzDefault)};
+  float pll_th_{0.0f}, pll_w_{0.0f}; // tracking-loop position (mech rad) and speed (mech rad/s)
 
   float cal_c_[6] = {}, cal_s_[6] = {};
   int cal_n_[6] = {};

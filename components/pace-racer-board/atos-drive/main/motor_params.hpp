@@ -5,10 +5,11 @@
 // wire (rad, rad/s, N.m at the shaft) and the FOC atomics (rpm, amps, rotor
 // degrees), reads from here.
 //
-// Two motors: the NineBot S on the dyno, which the whole FOC stack was validated
-// on, and the wheelchair hub motor the chair ships with. Select with the
-// ATOS_MOTOR_HUB20 compile definition (CMake option ATOS_MOTOR=hub20); default is
-// the dyno motor so the API can be validated on the existing rig first.
+// Three profiles: the NineBot S on the dyno (default), which the whole FOC
+// stack was validated on; the same motor with office ceilings for the flatbot
+// rover (ATOS_MOTOR=flatbot); and the wheelchair hub motor the chair ships with
+// (ATOS_MOTOR=hub20). The profile is a compile-time choice on purpose: a
+// MotorCommand can only lower these limits, never raise them.
 //
 // Hub motor numbers are from its datasheet (2026-09-16) and NOT yet measured on
 // this board: R/L via 'rl', Kt via a torque-sensor sweep, and the current-loop
@@ -18,7 +19,26 @@
 
 namespace motor {
 
-#ifdef ATOS_MOTOR_HUB20
+#if defined(ATOS_MOTOR_FLATBOT)
+// The office rover: two NineBot S wheels, no encoder, halls only. Same motor
+// as the dyno block below but with ceilings the MIB cannot raise: walking
+// pace, a tenth of the current, and a ramp on every velocity change. Raising
+// any of these is a reflash on purpose. 60 rpm on the 267 mm wheel is 0.84 m/s.
+inline constexpr const char *kName = "flatbot";
+inline constexpr int kPolePairs = 15;
+inline constexpr float kKt = 0.60f;
+inline constexpr float kMaxRpm = 60.0f;   // vel_limit = 0 and hard ceiling
+inline constexpr float kMaxAmps = 10.0f;  // torque_limit = 0 and hard ceiling (6 N.m)
+inline constexpr float kHoldAmps = 4.0f;  // HOLDING cap, ~2.4 N.m
+inline constexpr float kMaxAccelRpmS = 120.0f; // accel ceiling: 0 to 60 rpm in 0.5 s
+inline constexpr float kObsR = 0.323f;
+inline constexpr float kObsL = 336.0e-6f;
+inline constexpr float kObsLambda = 0.026f;
+inline constexpr float kBusVoltage = 48.0f;
+inline constexpr float kDefaultKp = 0.0568f;
+inline constexpr float kDefaultKi = 54.5f;
+inline constexpr float kDefaultVoltLimit = 8.0f; // back-EMF at 60 rpm is 2.5 V, 3x margin
+#elif defined(ATOS_MOTOR_HUB20)
 // Wheelchair hub motor: 48 V, 17 N.m / 7.5 A rated, 51 N.m / 22 A peak, 150 rpm
 // rated / 180 rpm peak, R 0.7 ohm, L 1.885 mH (+/-10%), Ke 0.262 V/rpm,
 // 4096 CPR quadrature encoder (A/B differential), halls.
@@ -49,6 +69,7 @@ inline constexpr float kDefaultKi = 118.0f; // V/(A*s)
 // 'vl' boot default. Back-EMF is omega_e * lambda = 4.8 V at 30 rpm and 9.6 V
 // at 60, so the NineBot's 8 V clamp would stall the I/f spin outright.
 inline constexpr float kDefaultVoltLimit = 16.0f;
+inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: 0 = step (D24)
 #else
 // NineBot S on the dyno: 15 pp, Kt 0.60 N.m/A measured (report fig 5), 520 rpm
 // speed clamp from the 1 kW campaign, 30 A hard target ceiling.
@@ -65,6 +86,7 @@ inline constexpr float kBusVoltage = 48.0f;
 inline constexpr float kDefaultKp = 0.0568f; // V/A, tuned on the dyno
 inline constexpr float kDefaultKi = 54.5f;   // V/(A*s)
 inline constexpr float kDefaultVoltLimit = 8.0f;
+inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: 0 = step (D24)
 #endif
 
 // 'vl' hard ceiling: the most phase voltage SVPWM can synthesize from the bus,
