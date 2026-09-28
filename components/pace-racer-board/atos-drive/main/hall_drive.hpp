@@ -193,7 +193,7 @@ public:
   // bandwidth sets both: 5 Hz is ~30 ms of lag and ~0.2 rad/s ripple from
   // the 4-deg steps at 14 rpm, shrinking with speed. Critically damped.
   // The per-interval omega_ stays for angle interpolation only.
-  static constexpr float kPllHzDefault = 5.0f;
+  static constexpr float kPllHzDefault = 10.0f;
   /// Tracking-loop bandwidth, Hz ('hpll'). Critically damped (zeta 0.7).
   void set_pll_hz(float hz) {
     const float wn = 2.0f * kPi * std::clamp(hz, 0.5f, 50.0f);

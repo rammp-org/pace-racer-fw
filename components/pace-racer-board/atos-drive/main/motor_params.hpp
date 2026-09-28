@@ -22,15 +22,16 @@ namespace motor {
 #if defined(ATOS_MOTOR_FLATBOT)
 // The office rover: two NineBot S wheels, no encoder, halls only. Same motor
 // as the dyno block below but with ceilings the MIB cannot raise: walking
-// pace, a tenth of the current, and a ramp on every velocity change. Raising
+// pace and two thirds of the current. No acceleration ceiling: the planner
+// streams setpoints and owns the ramp through accel_limit (0 = step). Raising
 // any of these is a reflash on purpose. 60 rpm on the 267 mm wheel is 0.84 m/s.
 inline constexpr const char *kName = "flatbot";
 inline constexpr int kPolePairs = 15;
 inline constexpr float kKt = 0.60f;
 inline constexpr float kMaxRpm = 60.0f;   // vel_limit = 0 and hard ceiling
-inline constexpr float kMaxAmps = 10.0f;  // torque_limit = 0 and hard ceiling (6 N.m)
+inline constexpr float kMaxAmps = 20.0f;  // torque_limit = 0 and hard ceiling (12 N.m)
 inline constexpr float kHoldAmps = 4.0f;  // HOLDING cap, ~2.4 N.m
-inline constexpr float kMaxAccelRpmS = 120.0f; // accel ceiling: 0 to 60 rpm in 0.5 s
+inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: accel_limit 0 = step
 inline constexpr float kObsR = 0.323f;
 inline constexpr float kObsL = 336.0e-6f;
 inline constexpr float kObsLambda = 0.026f;

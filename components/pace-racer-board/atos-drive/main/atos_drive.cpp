@@ -146,11 +146,13 @@ static constexpr uint32_t kCooldownTicks = 10000;  // 500 ms after revert/abort:
 // Few-Hz loop around a 400 rad/s current loop — decades of separation.
 static constexpr float kSpeedKp = 0.05f; // A per rpm (encoder feedback, dyno tune)
 static constexpr float kSpeedKi = 0.2f;  // A per rpm-second
-// Hall feedback: half the encoder gains. The hall speed comes through a 5 Hz
-// tracking loop, and at the dyno gains the loop sat too close to it and
-// limit-cycled (vel 3 rad/s: +/-1.5; at half gains +/-0.18, 2026-09-25).
-static constexpr float kHallSpeedKp = 0.025f;
-static constexpr float kHallSpeedKi = 0.1f;
+// Hall feedback: trajectory-follower gains (2026-09-27). The planner sends a
+// new setpoint every tick and expects the last one reached, so a 40 rpm error
+// must saturate the current cap at once and the integrator corner sits near
+// 8 rad/s. Needs the 10 Hz tracking loop in hall_drive.hpp; at 5 Hz and the
+// old 0.025/0.1 the loop was a 3 A/s integrator crawl.
+static constexpr float kHallSpeedKp = 0.25f;
+static constexpr float kHallSpeedKi = 2.0f;
 // Fail-safe: while the observer has authority, |rotor flux| leaving this band
 // around lambda_pm for ~40 ms means the estimate is lost — coast, don't fight.
 static constexpr float kFluxFailLo = 0.35f;
@@ -410,8 +412,9 @@ std::atomic<int> g_hcal_result{0}; // 0 idle, 1 ok -> report, -1 failed -> repor
 // rewrite it directly.
 std::atomic<float> g_hofs_pending{0.0f};
 // Speed-loop error clamp in HALL mode: one garbage rpm sample (hall edge
-// bounce) must produce a bounded nudge, not an iq slam to the rail.
-static constexpr float kHallErrClampRpm = 30.0f;
+// bounce) must produce a bounded nudge, not an iq slam to the rail. Wide
+// enough that a full-scale step still reaches the current cap through Kp.
+static constexpr float kHallErrClampRpm = 120.0f;
 // Handoff parameters ('ho <engage_rpm> <revert_rpm> <decay_A_per_s>').
 std::atomic<float> g_ho_engage{kHoEngageRpm};
 std::atomic<float> g_ho_revert{kHoRevertRpm};

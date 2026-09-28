@@ -16,6 +16,7 @@ encoder commutation, guards and console are the parent's. Added:
 | `main/hall_drive.hpp` | hall commutation; the speed for the loop comes from a 5 Hz tracking loop on the step count |
 | `main/atos_drive.cpp` | the parent app plus hooks, the supervisor task, feedback guards, and the ATOS console commands |
 | `tests/host_mib/` | host-side MIB stand-in: a native RTPS participant that streams commands and prints state |
+| `tools/provision.py` | plug in a board over USB: flash, set axis and feedback, hall-calibrate, report |
 
 ## Build
 
@@ -33,7 +34,19 @@ purpose. A `MotorCommand` can lower the limits, never raise them.
 
 ## Provision a board
 
-Once per board, on the console:
+With the board on USB and `build-flatbot` built:
+
+```
+tools/provision.py            # finds the board by MAC, flashes, sets axis + fb hall, hcal if needed
+tools/provision.py --list     # what is plugged in
+```
+
+The axis comes from the `ROSTER` table at the top of the script (MAC -> wheel);
+`--axis N` overrides it. Boards in `BLOCKLIST` are never touched. The hall
+calibration step asks for the wheel to be free and the supply on, then spins
+it 30 rpm each way for ~15 s and checks the table saved.
+
+By hand, once per board, on the console:
 
 ```
 axis 2          # 0 front_caster_left, 1 front_caster_right, 2 drive_left, 3 drive_right
