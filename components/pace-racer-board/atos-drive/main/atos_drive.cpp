@@ -149,15 +149,14 @@ static constexpr uint32_t kCooldownTicks = 10000;  // 500 ms after revert/abort:
 // Few-Hz loop around a 400 rad/s current loop — decades of separation.
 static constexpr float kSpeedKp = 0.05f; // A per rpm (encoder feedback, dyno tune)
 static constexpr float kSpeedKi = 0.2f;  // A per rpm-second
-// Hall feedback: proportional only (Alex, 2026-09-28). The planner streams
-// setpoints and reads the velocity back, so it owns the steady-state error;
-// 0.125 A/rpm means 8 rpm of droop per amp of load. 0.25/2.0 hit setpoints
-// but was too lively on the rover. No integrator means the STALL guard
-// (keyed on the speed integrator) cannot fire; the overcurrent trip and the
-// DRV thermal guard are what is left for a blocked wheel. Needs the 10 Hz
-// tracking loop in hall_drive.hpp.
-static constexpr float kHallSpeedKp = 0.125f;
-static constexpr float kHallSpeedKi = 0.0f;
+// Hall feedback (2026-09-28). The planner streams setpoints and reads the
+// velocity back. P alone cannot start a loaded wheel: the current it can ask
+// for is Kp * setpoint, and 0.125 A/rpm at 30 rpm (3.75 A) did not break the
+// rover loose. The integrator supplies the breakaway current; 2.0 wound
+// 20 A/s per 10 rpm and was too lively, 0.5 builds 5 A in a second. Needs
+// the 10 Hz tracking loop in hall_drive.hpp.
+static constexpr float kHallSpeedKp = 0.25f;
+static constexpr float kHallSpeedKi = 0.5f;
 // Fail-safe: while the observer has authority, |rotor flux| leaving this band
 // around lambda_pm for ~40 ms means the estimate is lost — coast, don't fight.
 static constexpr float kFluxFailLo = 0.35f;
