@@ -141,7 +141,9 @@ def wait_for_console(port, secs=8):
             except Exception:
                 pass
         time.sleep(0.3)
-    die(f"{port}: console did not answer after reset")
+    die(f"{port}: console did not answer after reset. Either the app is not booting (wrong "
+        "partition layout: reflash from a build whose app offset matches its table) or this build "
+        "does not put the console on USB-Serial-JTAG (CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG).")
 
 
 def reset(port):
@@ -152,19 +154,38 @@ def reset(port):
 
 # ---------------------------------------------------------------- steps
 def flash(port, build):
-    bins = [("0x0", "bootloader/bootloader.bin"),
-            ("0x8000", "partition_table/partition-table.bin"),
-            ("0x10000", "pace_racer_atos_drive.bin")]
+    """Flash exactly what the build says: offsets and flash settings come from
+    flasher_args.json, never from here. A build whose app is not at the
+    offset the bootloader expects would brick the board (2026-09-28: a
+    partition table with the app at 0x20000 was written at 0x10000)."""
+    import json
+    fa_path = os.path.join(build, "flasher_args.json")
+    if not os.path.exists(fa_path):
+        die(f"{fa_path} missing; build first: idf.py -B {os.path.basename(build)} -DATOS_MOTOR=flatbot build")
+    fa = json.load(open(fa_path))
+    fs = fa["flash_settings"]
+    files = sorted(fa["flash_files"].items(), key=lambda kv: int(kv[0], 16))
     args = []
-    for off, rel in bins:
-        p = os.path.join(build, rel)
-        if not os.path.exists(p):
-            die(f"{p} missing; build first: idf.py -B {os.path.basename(build)} -DATOS_MOTOR=flatbot build")
-        args += [off, p]
-    say(f"flashing {os.path.basename(build)} -> {port}")
+    for off, rel in files:
+        pth = os.path.join(build, rel)
+        if not os.path.exists(pth):
+            die(f"{pth} missing; rebuild")
+        args += [off, pth]
+    app_off = fa.get("app", {}).get("offset")
+    # The app must land inside an app partition of the table being flashed.
+    pt = os.path.join(build, fa["partition-table"]["file"])
+    gen = os.path.expanduser("~/esp/esp-idf/components/partition_table/gen_esp32part.py")
+    if app_off and os.path.exists(gen):
+        r = subprocess.run([PY, gen, pt], capture_output=True, text=True)
+        rows = [ln.split(",") for ln in r.stdout.splitlines() if "," in ln and not ln.startswith("#")]
+        apps = [row for row in rows if len(row) > 3 and row[1].strip() == "app"]
+        if not any(int(row[3], 16) == int(app_off, 16) for row in apps):
+            die(f"build puts the app at {app_off} but the partition table has app partitions at "
+                f"{[row[3].strip() for row in apps]}; refusing to flash a board that would not boot")
+    say(f"flashing {build} -> {port} ({fs['flash_size']}, app at {app_off})")
     rc, out = esptool(port, "-b", "460800", "--before", "default-reset", "--after", "hard-reset",
-                      "write-flash", "--flash-mode", "dio", "--flash-size", "2MB", "--flash-freq", "80m", *args,
-                      timeout=300)
+                      "write-flash", "--flash-mode", fs["flash_mode"], "--flash-size", fs["flash_size"],
+                      "--flash-freq", fs["flash_freq"], *args, timeout=300)
     if rc != 0 or "Hash of data verified" not in out:
         die(f"flash failed:\n{out[-2000:]}")
     say("flash verified")
