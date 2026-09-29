@@ -60,6 +60,7 @@
 
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -78,6 +79,8 @@
 #include "axis_config.hpp"
 #include "drive_supervisor.hpp"
 #include "motor_params.hpp"
+
+#include "demo_link.hpp" // native USB: telemetry, console, OTA, reset, core dump
 
 using namespace std::chrono_literals;
 
@@ -146,13 +149,15 @@ static constexpr uint32_t kCooldownTicks = 10000;  // 500 ms after revert/abort:
 // Few-Hz loop around a 400 rad/s current loop — decades of separation.
 static constexpr float kSpeedKp = 0.05f; // A per rpm (encoder feedback, dyno tune)
 static constexpr float kSpeedKi = 0.2f;  // A per rpm-second
-// Hall feedback: trajectory-follower gains (2026-09-27). The planner sends a
-// new setpoint every tick and expects the last one reached, so a 40 rpm error
-// must saturate the current cap at once and the integrator corner sits near
-// 8 rad/s. Needs the 10 Hz tracking loop in hall_drive.hpp; at 5 Hz and the
-// old 0.025/0.1 the loop was a 3 A/s integrator crawl.
-static constexpr float kHallSpeedKp = 0.25f;
-static constexpr float kHallSpeedKi = 2.0f;
+// Hall feedback: proportional only (Alex, 2026-09-28). The planner streams
+// setpoints and reads the velocity back, so it owns the steady-state error;
+// 0.125 A/rpm means 8 rpm of droop per amp of load. 0.25/2.0 hit setpoints
+// but was too lively on the rover. No integrator means the STALL guard
+// (keyed on the speed integrator) cannot fire; the overcurrent trip and the
+// DRV thermal guard are what is left for a blocked wheel. Needs the 10 Hz
+// tracking loop in hall_drive.hpp.
+static constexpr float kHallSpeedKp = 0.125f;
+static constexpr float kHallSpeedKi = 0.0f;
 // Fail-safe: while the observer has authority, |rotor flux| leaving this band
 // around lambda_pm for ~40 ms means the estimate is lost — coast, don't fight.
 static constexpr float kFluxFailLo = 0.35f;
@@ -353,6 +358,21 @@ std::atomic<float> g_hall_amps{0.0f};  // iq clamp = torque ceiling in HALL
 std::atomic<float> g_hall_vmax{0.0f};
 std::atomic<float> g_hall_rpm{0.0f};   // hrun setpoint (mech rpm)
 std::atomic<float> g_hall_ramp{50.0f}; // setpoint ramp, rpm/s
+std::atomic<float> g_hall_set_pub{0.0f};
+std::atomic<bool> g_spd_gains_custom{false}; // 'sg' was used: hv must not overwrite the tune // the ramped speed reference the loop is tracking, for the stream
+
+// Console-driven setpoints ('hv'): a browser or script nudging the speed
+// target while the drive runs. Fixed ramp, a demo ceiling well under the
+// profile's, and a heartbeat watchdog ('wd <ms>'): if no console line arrives
+// within the window while the drive is live, it takes the same gentle
+// unload-then-coast path as 'stop'. A closed tab must not leave a wheel
+// spinning. 0 = off (the default: a human at a terminal has no heartbeat).
+static constexpr float kHvMaxRpm = 100.0f;
+static constexpr float kHvRampRpmS = 50.0f;
+static constexpr float kHvDefaultAmps = 12.0f; // ~7 N.m on the NineBot: more than the bench's 5 N.m brake cap
+std::atomic<uint32_t> g_console_wd_ms{0};
+std::unique_ptr<demo::DemoLink> g_demo_link;
+std::atomic<int64_t> g_console_last_us{0};
 
 // Encoder commutation (MT6701 through the bench's 2.5:1 gearing). 15 pp over
 // a 2.5 encoder-turns-per-rotor-turn gear makes elec = EXACTLY 6 x the encoder
@@ -828,6 +848,7 @@ IRAM_ATTR void foc_task_fn(void *) {
           h_set += std::clamp(target - h_set, -step, step);
           mstate = 'L';
         }
+        g_hall_set_pub.store(h_set, std::memory_order_relaxed);
         const float serr = std::clamp(h_set - rpm_meas, -kHallErrClampRpm, kHallErrClampRpm);
         h_integ =
             std::clamp(h_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt, -amps, amps);
@@ -1443,8 +1464,9 @@ extern "C" void app_main(void) {
   // vd/vq are the current-loop PI outputs (host derives P = 1.5*(vd*id+vq*iq),
   // bus current, |v|/vlim saturation, and the vd/id copper-R proxy from them).
   // t0..t3 are the LM75s, refreshed at 2 Hz, NaN when a read fails.
+  // rpm_set is the ramped speed reference while a hall speed loop runs, else 0.
   fmt::print("%t, mode, id, iq, iqref, vd, vq, aerr, rpm_drive, rpm_est, rpm_hall, flux, "
-             "t0, t1, t2, t3\n");
+             "t0, t1, t2, t3, rpm_set\n");
   auto stream_fn = [&](std::mutex &m, std::condition_variable &cv) {
     static auto start = std::chrono::steady_clock::now();
     static int tick = 0;
@@ -1458,7 +1480,7 @@ extern "C" void app_main(void) {
     // late-rejection covers it). The thermal guard fires the same gentle
     // STOPPING path as 'stop' — never a brake — so an unattended soak ends as a
     // clean unload + coast with the stream still telling the story.
-    if (tick % 5 == 0 && bsp.temperature_sensors_initialized()) {
+    if (tick % 10 == 0 && bsp.temperature_sensors_initialized()) {
       Bsp::TemperatureErrors terrs;
       auto tr = bsp.board_temperatures_c(terrs);
       int hot = -1;
@@ -1561,7 +1583,7 @@ extern "C" void app_main(void) {
     // DRV fault poll every ~5 s: the SPI transaction briefly stalls the sampling
     // ISR on CPU0 (the sampler's late-rejection handles the resulting late
     // samples, but keeping it infrequent means fewer to reject).
-    if (tick % 50 == 0) {
+    if (tick % 100 == 0) {
       std::error_code fec;
       auto fs = bsp.gate_driver()->fault_status(fec);
       if (!fec)
@@ -1574,6 +1596,25 @@ extern "C" void app_main(void) {
         g_iq_target.store(0);
         driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
         fmt::print("! DRV8353 fault 0x{:04x} — disarmed (power-cycle VM to clear)\n", fs.raw);
+      }
+    }
+
+    // Console heartbeat watchdog ('wd <ms>'). Same exit as 'stop'; one-shot,
+    // so the operator sees exactly one line and the drive stays down until a
+    // fresh command (which also re-arms the timestamp).
+    if (const uint32_t wd = g_console_wd_ms.load(std::memory_order_relaxed); wd > 0) {
+      const int64_t age_us = esp_timer_get_time() - g_console_last_us.load(std::memory_order_relaxed);
+      const int md = g_mode.load(std::memory_order_relaxed);
+      const bool live = g_sampler.is_enabled() && md != HOLD && md != STOPPING;
+      if (live && age_us > (int64_t)wd * 1000) {
+        g_console_wd_ms.store(0);
+        g_hall_rpm.store(0);
+        g_hall_iq.store(0);
+        g_id_target.store(0);
+        g_iq_target.store(0);
+        g_mode.store(STOPPING);
+        fmt::print("! watchdog: no console line for {} ms — unloading, then Hi-Z coast\n",
+                   (int)(age_us / 1000));
       }
     }
 
@@ -1595,16 +1636,102 @@ extern "C" void app_main(void) {
       // serial open/close: data in flight when the macOS CDC endpoint closes
       // is the prime suspect for the console wedge that only a USB replug
       // clears (2026-08-20 — esptool can't even reach the ROM afterwards).
-      if (!g_stream_quiet.load(std::memory_order_relaxed))
+      const bool speed_loop = g_mode.load(std::memory_order_relaxed) == HALL &&
+                              g_hall_sub.load(std::memory_order_relaxed) != HALL_TORQUE;
+      const float rpm_set = speed_loop ? g_hall_set_pub.load(std::memory_order_relaxed) : 0.0f;
+      if (g_demo_link) {
+        const std::array<float, 13> sample{rpm_set, rpm_hall, sn.iq, sn.iqref, sn.id, sn.vd,
+                                           sn.vq, temps[0], temps[1], temps[2], temps[3],
+                                           static_cast<float>(sn.state),
+                                           g_enc_rpm_pub.load(std::memory_order_relaxed)};
+        g_demo_link->emit(sample);
+      }
+      if (!g_stream_quiet.load(std::memory_order_relaxed) && tick % 2 == 0)
         fmt::print("{:.2f}, {}, {:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.0f}, {:.0f}, {:.0f}, "
-                   "{:.0f}, {:.4f}, {:.1f}, {:.1f}, {:.1f}, {:.1f}\n",
+                   "{:.0f}, {:.4f}, {:.1f}, {:.1f}, {:.1f}, {:.1f}, {:.1f}\n",
                    seconds, sn.state, sn.id, sn.iq, sn.iqref, sn.vd, sn.vq, aerr, sn.rpm_drive,
-                   sn.rpm_est, rpm_hall, sn.flux_mag, temps[0], temps[1], temps[2], temps[3]);
+                   sn.rpm_est, rpm_hall, sn.flux_mag, temps[0], temps[1], temps[2], temps[3],
+                   rpm_set);
     }
     std::unique_lock<std::mutex> lk(m);
-    cv.wait_for(lk, 100ms);
+    cv.wait_for(lk, 50ms); // 20 Hz: telemetry every tick, CSV every other
     return false;
   };
+  // Native USB link. before_ota: flash writes disable the cache, and the
+  // sampling ISR is not IRAM-resident (MCPWM_ISR_IRAM_SAFE=n), so the drive
+  // must be unloaded and the sampler off before the first DATA frame lands.
+  g_demo_link = std::make_unique<demo::DemoLink>(demo::DemoLink::Config{
+      .product = "PACE RACER",
+      .serial = "pace-racer-dyno",
+      .pid = 0x0d41,
+      .channels = {"rpm_set", "rpm_hall", "iq", "iqref", "id", "vd", "vq", "t0", "t1", "t2", "t3",
+                   "mode", "rpm_enc"},
+      .before_ota =
+          [&]() {
+            g_console_wd_ms.store(0);
+            g_hall_rpm.store(0);
+            g_hall_iq.store(0);
+            g_id_target.store(0);
+            g_iq_target.store(0);
+            if (g_sampler.is_enabled() && g_mode.load() != HOLD) {
+              g_mode.store(STOPPING); // gentle unload, then the FOC task requests coast
+              std::this_thread::sleep_for(400ms);
+            }
+            g_sampler.disable();
+            g_mode.store(HOLD);
+            driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+            g_request_coast.store(true);
+            fmt::print("#ota: drive unloaded, sampler off\n");
+          },
+  });
+  if (std::error_code usb_ec; !g_demo_link->start(usb_ec))
+    logger.error("USB link failed: {}", usb_ec.message());
+
+  // Capture module (0x30) on the vendor stream: the capture ring, binary and
+  // reliable. 'capdump' prints 3000 rows through stdout, and the stdout mirror
+  // on the vendor stream is best-effort (drops when the FIFO is full), so a
+  // browser reading a 20 kHz R/L trace needs request/reply instead:
+  //   0x01 META            -> 0x81 [n u32][every u32][mode u8][want u32][fs_hz f32]
+  //   0x02 READ [off u32][count u16] -> 0x82 [off u32][rows: 3 x f32 each]  (count <= 340)
+  g_demo_link->worker().register_module(
+      0x30,
+      [](const espp::stream_frame::Frame &f) {
+        if (f.is_reply())
+          return;
+        std::vector<uint8_t> p;
+        auto put_u32 = [&](uint32_t v) {
+          for (int i = 0; i < 4; i++)
+            p.push_back((v >> (8 * i)) & 0xff);
+        };
+        auto put_f32 = [&](float v) {
+          uint32_t u;
+          memcpy(&u, &v, 4);
+          put_u32(u);
+        };
+        if (f.type == 0x01) {
+          put_u32((uint32_t)g_cap_n.load());
+          put_u32((uint32_t)g_cap_every.load());
+          p.push_back((uint8_t)g_cap_mode.load());
+          put_u32((uint32_t)g_cap_want.load());
+          put_f32(20000.0f);
+          g_demo_link->reply(espp::stream_frame::build_frame(true, 0x30, 0x81, p));
+        } else if (f.type == 0x02 && f.payload.size() >= 6) {
+          uint32_t off = f.payload[0] | (f.payload[1] << 8) | (f.payload[2] << 16) |
+                         ((uint32_t)f.payload[3] << 24);
+          uint32_t count = f.payload[4] | (f.payload[5] << 8);
+          const uint32_t n = (uint32_t)g_cap_n.load();
+          if (off > n)
+            off = n;
+          count = std::min<uint32_t>({count, 340u, n - off});
+          put_u32(off);
+          for (uint32_t i = 0; i < count; i++)
+            for (int c = 0; c < 3; c++)
+              put_f32(g_cap_buf[off + i][c]);
+          g_demo_link->reply(espp::stream_frame::build_frame(true, 0x30, 0x82, p));
+        }
+      },
+      {.name = "Capture", .app = "", .description = "Binary readout of the 20 kHz capture ring"});
+
   auto stream_task = espp::Task({.callback = stream_fn,
                                  .task_config = {.name = "stream", .stack_size_bytes = 8 * 1024},
                                  .log_level = espp::Logger::Verbosity::WARN});
@@ -1616,6 +1743,7 @@ extern "C" void app_main(void) {
       "#  ATOS: axis [<0..3>|clear] | fb [hall|enc] | atos | clr (DRV fault reset) | bootlog\n"
       "#  HALL: hcal (after: ho 9999 45 1 | run 2 30 5) then\n"
       "#        hrun <A> <rpm> [ramp] | sine <A> <rpm_amp> <period_s> | hiq <A>\n"
+      "#        hv <rpm> [A] (nudge setpoint, 100 rpm cap) | wd <ms> (console heartbeat, 0 off)\n"
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
@@ -1632,8 +1760,10 @@ extern "C" void app_main(void) {
   char line[128];
   size_t len = 0;
   while (true) {
-    int ch = getchar();
-    if (ch == EOF) {
+    int ch = g_demo_link ? g_demo_link->getc() : -1; // CDC terminal or a WebUSB console frame
+    if (ch < 0)
+      ch = getchar(); // UART0 console (idf.py monitor)
+    if (ch < 0) {
       std::this_thread::sleep_for(50ms);
       continue;
     }
@@ -1646,6 +1776,7 @@ extern "C" void app_main(void) {
       continue;
     line[len] = '\0';
     len = 0;
+    g_console_last_us.store(esp_timer_get_time(), std::memory_order_relaxed);
 
     // Any drive command must first release a hardware Hi-Z coast.
     auto uncoast = [&]() {
@@ -1665,7 +1796,8 @@ extern "C" void app_main(void) {
     // look, provision and stop, but not drive. 'stop' and 'f' stay allowed.
     {
       static constexpr const char *kDrives[] = {"run",  "hrun", "sine", "hiq", "erun", "eiq",
-                                                "epos", "rl",   "ecal", "id ", "iq ",  "th "};
+                                                "epos", "rl",   "ecal", "id ", "iq ",  "th ",
+                                                "hv"};
       bool drives = false;
       for (const char *d : kDrives)
         if (strncmp(line, d, strlen(d)) == 0)
@@ -1876,6 +2008,68 @@ extern "C" void app_main(void) {
         g_request_coast.store(true);
         fmt::print("#stop\n");
       }
+    } else if (strncmp(line, "hv", 2) == 0 && (line[2] == ' ' || line[2] == '\0')) {
+      // hv <rpm> [<amps>] — nudge the hall speed setpoint. Starts the hall speed
+      // loop if it is not already running; otherwise only the target moves, at
+      // a fixed ramp, so a stream of small steps from a UI behaves like one
+      // smooth command instead of restarting the run each time. Clamped to
+      // kHvMaxRpm regardless of the profile.
+      float rpm = 0.0f, amps = -1.0f;
+      const int n = sscanf(line, "hv %f %f", &rpm, &amps);
+      const bool running = g_mode.load() == HALL && g_hall_sub.load() == HALL_SPEED;
+      const bool use_enc = g_encoder && g_enc_cal.load(); // erun when possible, hrun otherwise
+      if (n < 1) {
+        fmt::print("#hv set={:.1f} ref={:.1f} rpm | {} | source {} | ceiling {:.0f} rpm | wd {} ms\n",
+                   g_hall_rpm.load(), running ? g_hall_set_pub.load() : 0.0f,
+                   running ? "speed loop running" : "not running", use_enc ? "encoder" : "halls",
+                   kHvMaxRpm, g_console_wd_ms.load());
+      } else if (!use_enc && !g_hall_drive.calibrated()) {
+        fmt::print("! hall table uncalibrated — run: ho 9999 45 1 | run 2 30 5 | hcal, "
+                   "then retry\n");
+      } else if (!g_sampler.is_enabled()) {
+        fmt::print("! sampler disabled — 'e 1' first\n");
+      } else {
+        rpm = std::clamp(rpm, -kHvMaxRpm, kHvMaxRpm);
+        if (amps < 0.0f)
+          amps = running ? g_hall_amps.load() : kHvDefaultAmps;
+        amps = std::clamp(amps, 0.0f, g_max_target.load());
+        g_hall_amps.store(amps);
+        g_hall_rpm.store(rpm);
+        g_hall_ramp.store(kHvRampRpmS);
+        if (!running) {
+          // Encoder commutation when the offset is known (erun): the angle stays
+          // live between hall edges, which is what makes low speed smooth on the
+          // dyno. Speed gains follow the source, as 'fb' would set them.
+          if (!g_spd_gains_custom.load()) { // a characterization 'sg' wins over the per-source defaults
+            g_spd_kp.store(use_enc ? kSpeedKp : kHallSpeedKp);
+            g_spd_ki.store(use_enc ? kSpeedKi : kHallSpeedKi);
+          }
+          g_hall_sub.store(HALL_SPEED);
+          g_theta_src.store(use_enc ? 1 : 0);
+          uncoast();
+          g_mode.store(HALL);
+        }
+        fmt::print("#hv {:.1f} rpm @ {:.0f} rpm/s, torque ceiling {:.1f}A{}\n", rpm, kHvRampRpmS,
+                   amps, running ? "" : (use_enc ? " (encoder speed loop started)" : " (hall speed loop started)"));
+      }
+    } else if (strcmp(line, "mi") == 0) {
+      // Motor / build constants in one machine-readable line, for a host that
+      // characterizes the motor and wants to compare against what is compiled in.
+      fmt::print("#mi name={} pp={} gear={:.2f} kt={:.3f} r={:.4f} l_uh={:.1f} lambda={:.4f} "
+                 "vbus={:.1f} kp={:.4f} ki={:.2f} vlim={:.1f} maxrpm={:.0f} maxamps={:.1f} "
+                 "spd_kp={:.4f} spd_ki={:.4f} enc_cal={} hall_cal={}\n",
+                 motor::kName, kPolePairs, kEncGear, motor::kKt, g_obs_r.load(),
+                 g_obs_l.load() * 1e6f, g_obs_lambda.load(), kBusVoltage, g_kp.load(),
+                 g_ki.load(), g_vlim.load(), motor::kMaxRpm, g_max_target.load(),
+                 g_spd_kp.load(), g_spd_ki.load(), g_enc_cal.load() ? 1 : 0,
+                 g_hall_drive.calibrated() ? 1 : 0);
+    } else if (strcmp(line, "hb") == 0) {
+      // Heartbeat: nothing but the timestamp update above. Silent on purpose,
+      // so a UI can keep 'wd' fed without flooding its own console view.
+    } else if (sscanf(line, "wd %d", &x) == 1) {
+      g_console_wd_ms.store(x < 0 ? 0u : (uint32_t)x);
+      g_console_last_us.store(esp_timer_get_time());
+      fmt::print("#wd {}\n", x > 0 ? fmt::format("{} ms", x) : std::string("off"));
     } else if (strncmp(line, "hrun", 4) == 0 || strncmp(line, "sine", 4) == 0 ||
                strncmp(line, "hiq", 3) == 0) {
       // Hall-drive modes. All gated on a completed hcal — driving on the
@@ -2230,6 +2424,7 @@ extern "C" void app_main(void) {
       fmt::print("#handoff engage={:.0f}rpm revert={:.0f}rpm decay={:.2g}A/s\n", en, rv,
                  g_ho_decay.load());
     } else if (sscanf(line, "sg %f %f", &a, &b) == 2) {
+      g_spd_gains_custom.store(true);
       g_spd_kp.store(a);
       g_spd_ki.store(b);
       fmt::print("#speed gains kp={:.4g} A/rpm ki={:.4g} A/rpm-s\n", a, b);
