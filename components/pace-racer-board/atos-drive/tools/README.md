@@ -13,13 +13,14 @@ tools/provision.py --list         # which boards are plugged in, and what the ro
 tools/provision.py --axis 3       # override the roster for this board
 tools/provision.py --hcal         # redo the hall table even if one is saved
 tools/provision.py --no-flash     # keep the firmware on the board; NVS and calibration only
-tools/provision.py --port /dev/cu.usbmodem2101   # several boards plugged in
+tools/provision.py --port /dev/cu.usbmodem2101   # several boards plugged in (Linux /dev/ttyACM0, Windows COM5)
 tools/provision.py --build build-hub20           # another profile's build dir
 ```
 
 ## What it does
 
-1. **Identify.** Every `/dev/cu.usbmodem*` is asked for its MAC with esptool.
+1. **Identify.** Every serial port with a PACE (1209:0d41, 1209:0d32) or
+   Espressif (303a) USB id is asked for its MAC with esptool.
    `ROSTER` at the top of the script maps MAC to wheel; `BLOCKLIST` names
    boards that are never touched (other projects sharing the laptop). Anything
    not in the roster needs `--axis`.
@@ -53,7 +54,30 @@ ROSTER = {
 ## Needs
 
 pyserial and esptool. The system python is tried first, then the ESP-IDF
-venv under `~/.espressif/python_env/`. No `export.sh` needed.
+venv under `~/.espressif/python_env/`. No `export.sh` needed. The partition
+check uses `$IDF_PATH`, else `~/esp/esp-idf`.
+
+## Linux and Windows
+
+Developed on macOS; the tools also run on Linux and Windows (new
+2026-10-19, not yet tried on either, so report what breaks).
+
+- **Windows:** run every script through Python, e.g.
+  `python tools\provision.py --list`. WebUSB needs no driver: the board
+  asks Windows for WinUSB itself. `usb_reset.py` (pyusb) also needs
+  `libusb-1.0.dll` on the PATH, or `pip install libusb-package`.
+- **Linux:** install the udev rule so Chrome, pyusb and the serial port
+  work without sudo, then replug the board:
+
+  ```
+  sudo cp tools/99-pace-racer.rules /etc/udev/rules.d/
+  sudo udevadm control --reload-rules && sudo udevadm trigger
+  ```
+
+  pyusb needs `libusb-1.0-0` (apt). Over ssh, join the `dialout` group for
+  the serial port.
+- **Ethernet on either:** see [ETHERNET_DASHBOARD.md](ETHERNET_DASHBOARD.md)
+  for the bench DHCP server per OS and the firewall note.
 
 ## If it stops
 
@@ -88,7 +112,7 @@ roll back, reset, and a free-form console. Styled per alex-style-guide.
 Two ways in:
 
 ```
-open tools/dashboard.html          # WebUSB: board on the laptop, Chrome, pick "PACE RACER" in the dialog
+open tools/dashboard.html          # WebUSB: board on the laptop, Chrome or Edge (any OS), pick "PACE RACER"
 tools/eth_bridge.py                # Ethernet: serves the page at http://localhost:8765/ and relays
                                    # its WebSocket to the board's tcp :5555; "Find boards" lists the LAN
 ```

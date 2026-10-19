@@ -5,13 +5,15 @@ board is sealed inside a wheel and only ethernet reaches it. The page is
 `tools/dashboard.html`; `tools/eth_bridge.py` serves it and relays it to the
 board's service stream on tcp :5555.
 
-All commands run from `components/pace-racer-board/atos-drive`.
+All commands run from `components/pace-racer-board/atos-drive`. On Windows,
+run the scripts through Python (`python tools\eth_bridge.py`) instead of
+calling them directly.
 
 ## Before you start
 
-- **A laptop running macOS.** The tools read `ifconfig` / `ipconfig` output
-  in the macOS format; on Linux or Windows discovery and the bridge do not
-  work yet.
+- **macOS, Linux or Windows.** Developed on macOS; Linux and Windows support
+  is new (2026-10-19) and not yet tried on a real machine, so report what
+  breaks.
 - **Python 3.** Standard library only, nothing to install.
 - **The board already runs ethernet-capable firmware** (2026-10-15 or later).
   A board's first flash has to go over USB (`tools/provision.py`); the chair's
@@ -34,16 +36,22 @@ The image to flash is `build-hub20/pace_racer_atos_drive.bin`.
 the DHCP server; nothing else to do.
 
 **On a bench, without a MIB:** plug the laptop and the board into the same
-switch and run the stand-in DHCP server on the laptop's ethernet adapter:
+switch and run the stand-in DHCP server on the laptop's ethernet adapter. It
+leases 169.254.50.10 and up, and the adapter needs its own address first
+(the script says so and exits if it has none). `--list` shows the names:
 
 ```
-networksetup -listallhardwareports     # find the adapter, e.g. en7
-python3 tools/mock_mib_dhcp.py en7     # leave it running; no root needed
+python3 tools/mock_mib_dhcp.py --list             # adapters with an IPv4 address
 ```
 
-It leases 169.254.50.10 and up. Wait for the adapter to have its own
-169.254 address first (it says so and exits if it has none). Power the
-board after the server is running, or wait for its next DHCP retry.
+| OS | adapter address | run it |
+| --- | --- | --- |
+| macOS | self-assigned 169.254 once the cable is in | `python3 tools/mock_mib_dhcp.py en7` |
+| Linux | add one: `sudo ip addr add 169.254.50.1/16 dev eth0` (and tell NetworkManager to leave the adapter alone, or it removes it) | `sudo python3 tools/mock_mib_dhcp.py eth0` (port 67 needs root) |
+| Windows | self-assigned 169.254 (APIPA) after about a minute without DHCP | `python tools\mock_mib_dhcp.py "Ethernet 2"`, and allow it through the firewall |
+
+Leave it running. Power the board after the server is running, or wait for
+its next DHCP retry.
 
 ## 3. Start the bridge and open the page
 
@@ -85,13 +93,22 @@ network (step 2), power-cycle the board, and flash again.
 
 ## If Find boards finds nothing
 
+Run `tools/eth_link.py list` in a terminal first. It does the same lookup as
+the button and prints errors the page hides.
+
 - **No DHCP server.** The most common cause: on a bench, is
   `mock_mib_dhcp.py` running on the right adapter?
 - **Wrong adapter.** The laptop's ethernet adapter needs an IPv4 address on
-  the board's subnet (`ifconfig en7`).
-- **Tailscale.** It claims the 169.254 range and silently drops the traffic.
-  The tools bind to the physical adapter to get around it, but if in doubt,
-  turn Tailscale off.
+  the board's subnet. `python3 tools/mock_mib_dhcp.py --list` shows the
+  adapters the tools can see; virtual ones (Docker, WSL, Hyper-V, Tailscale)
+  are skipped on purpose.
+- **Firewall.** Discovery broadcasts to udp :5556 and the board answers by
+  unicast to the laptop's sending port, which a firewall does not see as a
+  reply. Windows Firewall and some Linux setups (ufw, firewalld) drop it:
+  allow Python to receive inbound UDP. Typing the board's IP skips discovery.
+- **Tailscale.** On macOS it claims the 169.254 range and silently drops
+  the traffic. The tools pin their sockets to the physical adapter to get
+  around it, but if in doubt, turn Tailscale off.
 - **"bridge refused"** in the page: `eth_bridge.py` is not running, or the
   board IP is wrong.
 - **Old firmware.** A board flashed before 2026-10-15 does not answer on

@@ -16,7 +16,7 @@ Over ethernet (a board inside a wheel; needs firmware with the service stream):
     tools/provision.py --host list                      # who answers on the LAN
 
 Steps, each reported as it goes:
-  1. find the board. USB: every /dev/cu.usbmodem* is asked for its MAC with
+  1. find the board. USB: every PACE / Espressif serial port is asked for its MAC with
      esptool; boards on the blocklist below are never touched; with several
      plugged in, pass --port. Ethernet: a "PACE?" broadcast; the board
      reports its MAC so the same roster applies.
@@ -73,7 +73,10 @@ def die(msg):
 # ---------------------------------------------------------------- tooling
 def find_python():
     """A python that imports esptool and serial: this one, else the IDF venv."""
-    for exe in [sys.executable] + sorted(glob.glob(os.path.expanduser("~/.espressif/python_env/*/bin/python"))):
+    venvs = os.path.expanduser("~/.espressif/python_env")
+    cands = glob.glob(os.path.join(venvs, "*", "bin", "python")) + \
+        glob.glob(os.path.join(venvs, "*", "Scripts", "python.exe"))  # Windows venv layout
+    for exe in [sys.executable] + sorted(cands):
         r = subprocess.run([exe, "-c", "import esptool, serial, usb.core"], capture_output=True)
         if r.returncode == 0:
             return exe
@@ -95,8 +98,24 @@ def read_mac(port):
     return m.group(1).lower() if rc == 0 and m else None
 
 
+# USB ids a PACE board shows up with: the app's own (pid.codes VID, the PIDs
+# atos-drive and the dyno demo use) and Espressif's (ROM download mode and
+# USB-Serial-JTAG builds, i.e. a blank or older board).
+PACE_USB_IDS = {(0x1209, 0x0D41), (0x1209, 0x0D32)}
+ESPRESSIF_VID = 0x303A
+
+
 def candidate_ports():
-    return sorted(glob.glob("/dev/cu.usbmodem*"))
+    """Serial ports that look like a PACE board, on any OS (/dev/cu.usbmodem*,
+    /dev/ttyACM*, COM*)."""
+    from serial.tools import list_ports
+    return sorted(p.device for p in list_ports.comports()
+                  if p.vid == ESPRESSIF_VID or (p.vid, p.pid) in PACE_USB_IDS)
+
+
+def port_present(port):
+    from serial.tools import list_ports
+    return any(p.device == port for p in list_ports.comports())
 
 
 # ---------------------------------------------------------------- console
@@ -145,7 +164,7 @@ def wait_for_console(port, secs=8):
     """After a reset the USB-Serial-JTAG port disappears and comes back."""
     t0 = time.time()
     while time.time() - t0 < secs:
-        if os.path.exists(port):
+        if port_present(port):
             time.sleep(1.5)
             try:
                 c = Console(port)
@@ -197,7 +216,8 @@ def flash(port, build):
     app_off = fa.get("app", {}).get("offset")
     # The app must land inside an app partition of the table being flashed.
     pt = os.path.join(build, fa["partition-table"]["file"])
-    gen = os.path.expanduser("~/esp/esp-idf/components/partition_table/gen_esp32part.py")
+    idf = os.environ.get("IDF_PATH") or os.path.expanduser(os.path.join("~", "esp", "esp-idf"))
+    gen = os.path.join(idf, "components", "partition_table", "gen_esp32part.py")
     if app_off and os.path.exists(gen):
         r = subprocess.run([PY, gen, pt], capture_output=True, text=True)
         rows = [ln.split(",") for ln in r.stdout.splitlines() if "," in ln and not ln.startswith("#")]
@@ -365,7 +385,8 @@ def main():
 
     ports = [a.port] if a.port else candidate_ports()
     if not ports:
-        die("no /dev/cu.usbmodem* ports; plug the board in")
+        die("no PACE board on USB (no serial port with VID 1209:0d41/0d32 or 303a); plug the board in"
+            + ("; on Linux check the udev rule in tools/README.md" if sys.platform.startswith("linux") else ""))
     boards = []
     for p in ports:
         mac = read_mac(p)

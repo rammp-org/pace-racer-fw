@@ -1,32 +1,42 @@
 #!/usr/bin/env python3
 """Tiny DHCP server standing in for the MIB on the bench switch.
 
-Runs unprivileged on macOS (UDP 67 is bindable without root). Binds the socket
-to one interface with IP_BOUND_IF so offers go out the bench dongle and not the
-Wi-Fi default route. Leases 169.254.50.10+ /16 so clients land next to the
-Mac's own self-assigned 169.254 address on the same interface.
+Leases 169.254.50.10+ /16, so boards land next to the laptop's own 169.254
+address on the bench interface. The interface needs an IPv4 address first:
+macOS and Windows self-assign one; on Linux add it yourself
+(`sudo ip addr add 169.254.50.1/16 dev eth0`).
 
-    python3 mock_mib_dhcp.py [iface]      # default en7
+    python3 mock_mib_dhcp.py [iface]   # macOS: en7 (default). Linux: eth0, enp3s0...
+                                       # Windows: the adapter name, e.g. "Ethernet 2"
+    python3 mock_mib_dhcp.py --list    # interfaces with an IPv4 address
+
+Per OS: macOS runs unprivileged and pins the socket to the interface
+(IP_BOUND_IF) so offers go out the bench dongle, not the Wi-Fi default route.
+Linux needs root for port 67 (sudo, or CAP_NET_BIND_SERVICE) and pins with
+SO_BINDTODEVICE. Windows binds the interface's address; allow it through the
+firewall when asked.
 """
-import socket, struct, sys, time, subprocess
+import os, socket, struct, sys, time
 
-IFACE = sys.argv[1] if len(sys.argv) > 1 else "en7"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import eth_link  # noqa: E402  (interface list per OS)
+
 POOL_BASE = (169, 254, 50, 10)
 MASK = bytes([255, 255, 0, 0])
 LEASE_S = 3600
-IP_BOUND_IF = 25
+IFACES = eth_link._ifaces()
 
-
-def iface_ip(name):
-    out = subprocess.run(["ipconfig", "getifaddr", name], capture_output=True, text=True).stdout.strip()
-    if not out:
-        sys.exit(f"{name} has no IPv4 address yet")
-    return out
-
-
-SERVER_IP = iface_ip(IFACE)
+if "--list" in sys.argv:
+    for name, ip, mask in IFACES:
+        print(f"{name:24s} {ip:16s} {mask}")
+    sys.exit(0)
+IFACE = sys.argv[1] if len(sys.argv) > 1 else ("en7" if sys.platform == "darwin" else None)
+if not IFACE:
+    sys.exit("name the bench interface: " + ", ".join(n for n, _, _ in IFACES) + " (--list for addresses)")
+SERVER_IP = next((ip for n, ip, _ in IFACES if n == IFACE), None)
+if not SERVER_IP:
+    sys.exit(f"{IFACE} has no IPv4 address yet (have: {', '.join(n for n, _, _ in IFACES) or 'none'})")
 server_ip_b = socket.inet_aton(SERVER_IP)
-if_index = socket.if_nametoindex(IFACE)
 
 leases = {}  # mac -> ip bytes
 
@@ -34,7 +44,11 @@ leases = {}  # mac -> ip bytes
 def lease_for(mac):
     if mac not in leases:
         n = len(leases)
-        leases[mac] = bytes([POOL_BASE[0], POOL_BASE[1], POOL_BASE[2] + (POOL_BASE[3] + n) // 256, (POOL_BASE[3] + n) % 256])
+        ip = bytes([POOL_BASE[0], POOL_BASE[1], POOL_BASE[2] + (POOL_BASE[3] + n) // 256, (POOL_BASE[3] + n) % 256])
+        if ip == server_ip_b:  # never hand out our own address
+            n += 1
+            ip = bytes([POOL_BASE[0], POOL_BASE[1], POOL_BASE[2] + (POOL_BASE[3] + n) // 256, (POOL_BASE[3] + n) % 256])
+        leases[mac] = ip
     return leases[mac]
 
 
@@ -73,8 +87,14 @@ def build_reply(req, msg_type, yiaddr):
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-s.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, if_index)
-s.bind(("", 67))
+try:
+    if sys.platform.startswith("win"):
+        s.bind((SERVER_IP, 67))  # Windows delivers the interface's broadcasts to its address
+    else:
+        eth_link._pin_to_iface(s, IFACE)
+        s.bind(("", 67))
+except PermissionError:
+    sys.exit("port 67 needs root here: run it with sudo")
 print(f"mock MIB DHCP on {IFACE} ({SERVER_IP}), pool from 169.254.50.10", flush=True)
 
 while True:

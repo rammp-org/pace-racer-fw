@@ -1,0 +1,16 @@
+# Linux: let the logged-in user open PACE RACER boards without sudo, for
+# Chrome's WebUSB (tools/dashboard.html), pyusb (tools/usb_reset.py) and the
+# serial console (tools/provision.py).
+#
+#   sudo cp tools/99-pace-racer.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+#   then unplug and replug the board.
+#
+# Over ssh (no local login session) uaccess does not apply: add yourself to
+# the dialout group for the serial port instead.
+
+# atos-drive and the dyno demo (pid.codes VID, their own PIDs)
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0d41", MODE="0660", TAG+="uaccess"
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0d32", MODE="0660", TAG+="uaccess"
+# Espressif: ROM download mode and USB-Serial-JTAG builds (a blank or older board)
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="303a", MODE="0660", TAG+="uaccess"

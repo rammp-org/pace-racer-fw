@@ -21,7 +21,8 @@ Also importable: provision.py uses discover(), EthConsole, flash(), reset().
 
 Transport notes: 169.254/16 targets are reached from a socket bound to the
 physical interface that owns that range, because Tailscale's utun claims the
-whole range on this Mac and would blackhole the traffic otherwise.
+whole range on macOS and would blackhole the traffic otherwise. Interfaces come
+from ifconfig (macOS), ip (Linux) or Get-NetIPAddress (Windows).
 """
 import argparse
 import json
@@ -54,21 +55,80 @@ class LinkError(RuntimeError):
 
 
 # ---------------------------------------------------------------- interfaces
-def _ifaces():
-    """[(name, ipv4, netmask)] of physical interfaces with an IPv4 address."""
+_SKIP_IFACES = ("utun", "lo", "bridge", "awdl", "llw", "docker", "veth", "virbr", "tailscale",
+                "Loopback", "vEthernet", "Tailscale")
+
+
+def _ifaces_macos():
     out = subprocess.run(["ifconfig"], capture_output=True, text=True).stdout
     found, name = [], None
     for ln in out.splitlines():
         if ln and not ln[0].isspace():
             name = ln.split(":")[0]
-        elif name and not name.startswith(("utun", "lo", "bridge", "awdl", "llw")) and "inet " in ln:
+        elif name and "inet " in ln:
             parts = ln.split()
-            ip = parts[1]
             mask = "255.255.255.255"
             if "netmask" in parts:
                 mask = socket.inet_ntoa(int(parts[parts.index("netmask") + 1], 16).to_bytes(4, "big"))
-            found.append((name, ip, mask))
+            found.append((name, parts[1], mask))
     return found
+
+
+def _prefix_to_mask(bits):
+    return socket.inet_ntoa(((0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF).to_bytes(4, "big"))
+
+
+def _ifaces_linux():
+    # "2: eth0    inet 169.254.50.1/16 brd 169.254.255.255 scope link eth0\ ..."
+    out = subprocess.run(["ip", "-4", "-o", "addr", "show"], capture_output=True, text=True).stdout
+    found = []
+    for ln in out.splitlines():
+        parts = ln.split()
+        if "inet" in parts:
+            ip, bits = parts[parts.index("inet") + 1].split("/")
+            found.append((parts[1], ip, _prefix_to_mask(int(bits))))
+    return found
+
+
+def _ifaces_windows():
+    ps = ("Get-NetIPAddress -AddressFamily IPv4 | "
+          "Select-Object InterfaceAlias,IPAddress,PrefixLength | ConvertTo-Json -Compress")
+    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                         capture_output=True, text=True).stdout.strip()
+    rows = json.loads(out) if out else []
+    if isinstance(rows, dict):  # one address: PowerShell returns an object, not a list
+        rows = [rows]
+    return [(r["InterfaceAlias"], r["IPAddress"], _prefix_to_mask(int(r["PrefixLength"]))) for r in rows]
+
+
+def _ifaces():
+    """[(name, ipv4, netmask)] of physical interfaces with an IPv4 address.
+    Empty if the OS tool is missing or its output is not understood: callers
+    then fall back to the OS's own routing."""
+    try:
+        if sys.platform == "darwin":
+            found = _ifaces_macos()
+        elif sys.platform.startswith("win"):
+            found = _ifaces_windows()
+        else:
+            found = _ifaces_linux()
+    except (OSError, ValueError, KeyError, IndexError):
+        return []
+    return [(n, ip, m) for n, ip, m in found
+            if not n.startswith(_SKIP_IFACES) and not ip.startswith("127.")]
+
+
+def _pin_to_iface(sock, name):
+    """Best-effort: keep the socket's traffic on one interface, so a VPN that
+    claims the same range (Tailscale's utun takes 169.254/16 on macOS) cannot
+    swallow it. Unsupported or unprivileged: silently routed by the OS."""
+    try:
+        if sys.platform == "darwin":
+            sock.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, socket.if_nametoindex(name))
+        elif sys.platform.startswith("linux") and hasattr(socket, "SO_BINDTODEVICE"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, name.encode())
+    except OSError:
+        pass
 
 
 def _same_subnet(ip, net_ip, mask):
@@ -81,11 +141,7 @@ def _bind_for(sock, target_ip):
     for name, ip, mask in _ifaces():
         if _same_subnet(target_ip, ip, mask):
             sock.bind((ip, 0))
-            if sys.platform == "darwin":
-                try:
-                    sock.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, socket.if_nametoindex(name))
-                except OSError:
-                    pass
+            _pin_to_iface(sock, name)
             return name
     return None
 
@@ -94,23 +150,26 @@ def _bind_for(sock, target_ip):
 def discover(timeout=1.5, ifaces=None):
     """Broadcast "PACE?" from every physical interface; return [info dict] with 'ip'."""
     socks = []
-    for name, ip, mask in ifaces or _ifaces():
+    # No interface list (unknown OS tool): one unbound socket, the OS picks the route.
+    for name, ip, mask in (ifaces or _ifaces() or [(None, "0.0.0.0", "0.0.0.0")]):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind((ip, 0))
-            if sys.platform == "darwin":
-                s.setsockopt(socket.IPPROTO_IP, IP_BOUND_IF, socket.if_nametoindex(name))
         except OSError:
             s.close()
             continue
+        if name:
+            _pin_to_iface(s, name)
         s.setblocking(False)
         socks.append(s)
-        ipn = int.from_bytes(socket.inet_aton(ip), "big")
-        mn = int.from_bytes(socket.inet_aton(mask), "big")
-        directed = socket.inet_ntoa(((ipn & mn) | (~mn & 0xFFFFFFFF)).to_bytes(4, "big"))
-        for dst in {"255.255.255.255", directed}:
+        dsts = {"255.255.255.255"}
+        if name:
+            ipn = int.from_bytes(socket.inet_aton(ip), "big")
+            mn = int.from_bytes(socket.inet_aton(mask), "big")
+            dsts.add(socket.inet_ntoa(((ipn & mn) | (~mn & 0xFFFFFFFF)).to_bytes(4, "big")))
+        for dst in dsts:
             try:
                 s.sendto(b"PACE?", (dst, DISCOVERY_PORT))
             except OSError:
@@ -120,7 +179,7 @@ def discover(timeout=1.5, ifaces=None):
         for s in socks:
             try:
                 data, (ip, _) = s.recvfrom(2048)
-            except (BlockingIOError, OSError):
+            except OSError:  # BlockingIOError, and Windows' WSAECONNRESET after an ICMP unreachable
                 continue
             try:
                 info = json.loads(data.decode())
