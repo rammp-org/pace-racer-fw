@@ -4,3 +4,11 @@ dependencies:
   # RTPS/DDS participant: MotorCommand in, MotorState out, over the typed
   # pub/sub layer (espp::Publisher/Subscriber) of the embeddedRTPS-backed 1.2.
   espp/rtps: '>=1.2.0'
+  # Native USB (WebUSB) link for the dyno demo: vendor + CDC device, framed
+  # stream multiplexer, OTA over the stream, telemetry, flash core dump.
+  espp/usb_device: '>=1.3.5'
+  espp/ota: '>=1.3.5'
+  espp/dispatcher: '>=1.3.5'
+  espp/telemetry: '>=1.3.5'
+  espp/coredump: '>=1.3.5'
+  espp/stream_frame: '>=1.3.5'

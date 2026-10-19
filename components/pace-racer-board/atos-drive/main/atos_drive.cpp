@@ -81,6 +81,7 @@
 #include "motor_params.hpp"
 
 #include "demo_link.hpp" // native USB: telemetry, console, OTA, reset, core dump
+#include "eth_link.hpp"  // the same service stream over TCP: OTA, console, reset
 
 using namespace std::chrono_literals;
 
@@ -371,6 +372,7 @@ static constexpr float kHvRampRpmS = 50.0f;
 static constexpr float kHvDefaultAmps = 12.0f; // ~7 N.m on the NineBot: more than the bench's 5 N.m brake cap
 std::atomic<uint32_t> g_console_wd_ms{0};
 std::unique_ptr<demo::DemoLink> g_demo_link;
+std::unique_ptr<demo::EthLink> g_eth_link;
 std::atomic<int64_t> g_console_last_us{0};
 
 // Encoder commutation (MT6701 through the bench's 2.5:1 gearing). 15 pp over
@@ -438,9 +440,12 @@ static constexpr float kHallErrClampRpm = 120.0f;
 std::atomic<float> g_ho_engage{kHoEngageRpm};
 std::atomic<float> g_ho_revert{kHoRevertRpm};
 std::atomic<float> g_ho_decay{kHoDecayAps};
-// Speed-loop gains ('sg <kp> <ki>').
+// Speed-loop gains ('sg <kp> <ki>', or a MotorTuning over ATOS).
 std::atomic<float> g_spd_kp{kSpeedKp};
 std::atomic<float> g_spd_ki{kSpeedKi};
+// A MotorTuning asked for `persist`: the stream task writes the live gains to
+// NVS on its next tick. The supervisor tick must not block on flash.
+std::atomic<bool> g_tune_save_pending{false};
 // Escalation limits ('lim', 'vl', 'tl') — see the hard-ceiling constants.
 std::atomic<float> g_max_target{kMaxTargetAmps};
 std::atomic<float> g_vlim{kVoltageLimit};
@@ -1307,11 +1312,21 @@ extern "C" void app_main(void) {
   }
   g_fb_hall.store(g_axis.feedback == axiscfg::Feedback::HALL);
   apply_feedback_gains();
-  logger.info("axis: {} | feedback {} ({}) | enc ofs {} | hall table {} | motor {}",
+  // A tune saved over ATOS (MotorTuning.persist) or 'tune save' overrides the
+  // per-source defaults, and 'hv' must not put them back.
+  if (g_axis.tuning_saved()) {
+    g_spd_kp.store(std::clamp(g_axis.spd_kp, motor::kTuneKpMinRpm, motor::kTuneKpMaxRpm));
+    g_spd_ki.store(std::clamp(g_axis.spd_ki, motor::kTuneKiMinRpm, motor::kTuneKiMaxRpm));
+    g_spd_gains_custom.store(true);
+  }
+  if (!std::isnan(g_axis.pll_hz))
+    g_hall_drive.set_pll_hz(g_axis.pll_hz);
+  logger.info("axis: {} | feedback {} ({}) | enc ofs {} | hall table {} | motor {} | tune {}",
               axiscfg::axis_name(g_axis.axis_id), axiscfg::feedback_name(g_axis.feedback),
               g_axis.feedback_calibrated() ? "calibrated" : "NOT CALIBRATED, cannot arm",
               g_axis.enc_calibrated() ? "restored" : "UNKNOWN ('ecal')",
-              g_axis.hall_calibrated() ? "restored" : "UNKNOWN ('hcal')", motor::kName);
+              g_axis.hall_calibrated() ? "restored" : "UNKNOWN ('hcal')", motor::kName,
+              g_axis.tuning_saved() ? "restored from NVS" : "compiled defaults");
 
   // The hooks are the only way the supervisor reaches the FOC atomics. Each is
   // idempotent: the supervisor re-applies the active one every 10 ms tick, so a
@@ -1406,7 +1421,21 @@ extern "C" void app_main(void) {
     m.drv_fault = g_ev_drv_fault.exchange(false);
     m.hall_fault = g_ev_hall_fault.exchange(false);
     m.stall = g_ev_stall.exchange(false);
+    m.speed_kp_rpm = g_spd_kp.load();
+    m.speed_ki_rpm = g_spd_ki.load();
+    m.pll_hz = g_hall_drive.pll_hz();
     return m;
+  };
+  // Outer-loop tune from the wire, already clamped by the supervisor. Live: the
+  // integrator keeps its state, only the slope changes. Marked custom so 'hv'
+  // does not revert it; the flash write, if asked for, happens on the stream task.
+  hooks.tuning = [](float kp_rpm, float ki_rpm, float pll_hz, bool persist) {
+    g_spd_gains_custom.store(true);
+    g_spd_kp.store(kp_rpm);
+    g_spd_ki.store(ki_rpm);
+    g_hall_drive.set_pll_hz(pll_hz);
+    if (persist)
+      g_tune_save_pending.store(true);
   };
   g_sup = std::make_unique<supervisor::Supervisor>(std::move(hooks), g_axis.axis_id);
   if (!g_axis.assigned())
@@ -1438,20 +1467,20 @@ extern "C" void app_main(void) {
 
   // DHCP ethernet + RTPS. With the axis unassigned the link brings ethernet up
   // and stops there; 'axis <n>' followed by a reboot joins the topics.
+  // Ethernet comes up regardless of the axis: once a board is inside a wheel
+  // the service stream on tcp :5555 (EthLink, below) is the only way to
+  // provision it, and the coexistence measurements showed an idle W5500 costs
+  // the control loop nothing.
   g_link = std::make_unique<atoslink::Link>(atoslink::Config{
       .axis = g_axis.axis_id,
       .on_command = [](const rammp::MotorCommand &c) { g_sup->on_command(c); },
+      .on_tuning = [](const rammp::MotorTuning &t) { g_sup->on_tuning(t); },
       .state_fn = []() { return g_sup->state(); },
       .hostname = std::string("pace-racer-") + axiscfg::axis_name(g_axis.axis_id),
   });
-  // Only touch the W5500 once this board knows which wheel it is. An
-  // unprovisioned board is on the bench, where bringing up a second device on
-  // the gate driver's SPI bus buys nothing and costs control-loop headroom.
-  if (!g_axis.assigned()) {
-    logger.info("atos: axis unassigned — ethernet and RTPS stay down ('axis <n>', then reboot)");
-  } else if (!g_link->start(bsp, logger)) {
+  const bool eth_up = g_link->start(bsp, logger);
+  if (!eth_up)
     logger.error("atos: link start failed; console only");
-  }
 
   // 10 Hz CSV stream + periodic DRV fault poll, silent while disarmed. Raw
   // angle columns are gone on purpose: at spin speeds the electrical period
@@ -1473,6 +1502,18 @@ extern "C" void app_main(void) {
     // the two transports must carry an identical sample to be comparable.
     auto &temps = g_temps;
     ++tick;
+
+    // A MotorTuning with persist set: write the live gains here, off the
+    // supervisor tick. Rare, and a few ms on this task costs nothing.
+    if (g_tune_save_pending.exchange(false)) {
+      const float kp = g_spd_kp.load(), ki = g_spd_ki.load(), hz = g_hall_drive.pll_hz();
+      if (axiscfg::save_tuning(kp, ki, hz, logger)) {
+        g_axis.spd_kp = kp;
+        g_axis.spd_ki = ki;
+        g_axis.pll_hz = hz;
+        fmt::print("#tune saved kp={:.4g} ki={:.4g} A/rpm pll={:.1f} Hz (ATOS persist)\n", kp, ki, hz);
+      }
+    }
 
     // Board temperatures every 5th tick (2 Hz — LM75 conversion is ~100 ms and
     // the I2C traffic, like the DRV fault poll, briefly delays the sampling ISR;
@@ -1659,32 +1700,66 @@ extern "C" void app_main(void) {
   // Native USB link. before_ota: flash writes disable the cache, and the
   // sampling ISR is not IRAM-resident (MCPWM_ISR_IRAM_SAFE=n), so the drive
   // must be unloaded and the sampler off before the first DATA frame lands.
+  // Shared by the USB and ethernet OTA services.
+  std::function<void()> before_ota = [&]() {
+    g_console_wd_ms.store(0);
+    g_hall_rpm.store(0);
+    g_hall_iq.store(0);
+    g_id_target.store(0);
+    g_iq_target.store(0);
+    if (g_sampler.is_enabled() && g_mode.load() != HOLD) {
+      g_mode.store(STOPPING); // gentle unload, then the FOC task requests coast
+      std::this_thread::sleep_for(400ms);
+    }
+    g_sampler.disable();
+    g_mode.store(HOLD);
+    driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+    g_request_coast.store(true);
+    fmt::print("#ota: drive unloaded, sampler off\n");
+  };
   g_demo_link = std::make_unique<demo::DemoLink>(demo::DemoLink::Config{
       .product = "PACE RACER",
       .serial = "pace-racer-dyno",
       .pid = 0x0d41,
       .channels = {"rpm_set", "rpm_hall", "iq", "iqref", "id", "vd", "vq", "t0", "t1", "t2", "t3",
                    "mode", "rpm_enc"},
-      .before_ota =
-          [&]() {
-            g_console_wd_ms.store(0);
-            g_hall_rpm.store(0);
-            g_hall_iq.store(0);
-            g_id_target.store(0);
-            g_iq_target.store(0);
-            if (g_sampler.is_enabled() && g_mode.load() != HOLD) {
-              g_mode.store(STOPPING); // gentle unload, then the FOC task requests coast
-              std::this_thread::sleep_for(400ms);
-            }
-            g_sampler.disable();
-            g_mode.store(HOLD);
-            driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
-            g_request_coast.store(true);
-            fmt::print("#ota: drive unloaded, sampler off\n");
-          },
+      .before_ota = before_ota,
+      // Never self-confirm on uptime alone: a wheel board is reached over
+      // ethernet only, so EthLink confirms once the network is really up.
+      .self_verify_after_s = 0,
   });
   if (std::error_code usb_ec; !g_demo_link->start(usb_ec))
     logger.error("USB link failed: {}", usb_ec.message());
+
+  // The same service stream over TCP (:5555) plus a UDP "PACE?" responder
+  // (:5556): flash, console, reset and rollback for a board whose USB port is
+  // inside a wheel. Console lines land in DemoLink's queue, so the loop below
+  // serves both transports; stdout is teed to the connected client.
+  if (eth_up) {
+    g_eth_link = std::make_unique<demo::EthLink>(
+        demo::EthLink::Config{
+            .product = "PACE RACER",
+            .before_ota = before_ota,
+            .on_line = [](std::string_view l) { g_demo_link->push_line(l); },
+            .info_json =
+                []() {
+                  return fmt::format(
+                      "\"axis\":{},\"axis_name\":\"{}\",\"fb\":\"{}\",\"hall_cal\":{},"
+                      "\"enc_cal\":{},\"motor\":\"{}\",\"api\":{}",
+                      (int)g_axis.axis_id, axiscfg::axis_name(g_axis.axis_id),
+                      axiscfg::feedback_name(g_axis.feedback),
+                      g_axis.hall_calibrated() ? "true" : "false",
+                      g_axis.enc_calibrated() ? "true" : "false", motor::kName,
+                      RAMMP_MOTOR_API_VERSION);
+                },
+            .ip_fn = []() { return g_link ? g_link->ip() : std::string{}; },
+        },
+        g_demo_link->ota());
+    if (g_eth_link->start())
+      g_demo_link->set_log_sink([](std::span<const uint8_t> b) { g_eth_link->log_sink(b); });
+    else
+      logger.error("ethernet service stream failed to start");
+  }
 
   // Capture module (0x30) on the vendor stream: the capture ring, binary and
   // reliable. 'capdump' prints 3000 rows through stdout, and the stdout mirror
@@ -1861,18 +1936,46 @@ extern "C" void app_main(void) {
       // hpll <hz> — hall speed tracking-loop bandwidth (see HallDrive).
       g_hall_drive.set_pll_hz(a);
       fmt::print("#hall pll {:.1f} Hz\n", g_hall_drive.pll_hz());
+    } else if (strncmp(line, "tune", 4) == 0 && (line[4] == ' ' || line[4] == 0)) {
+      // tune            the outer-loop tune in force, in both unit systems, and what NVS holds
+      // tune save       keep the live values across reboots (what MotorTuning.persist does)
+      // tune clear      back to the compiled per-source defaults at the next boot
+      const float kp = g_spd_kp.load(), ki = g_spd_ki.load(), hz = g_hall_drive.pll_hz();
+      if (strcmp(line, "tune save") == 0) {
+        if (axiscfg::save_tuning(kp, ki, hz, logger)) {
+          g_axis.spd_kp = kp;
+          g_axis.spd_ki = ki;
+          g_axis.pll_hz = hz;
+        }
+      } else if (strcmp(line, "tune clear") == 0) {
+        if (axiscfg::clear_tuning(logger)) {
+          g_axis.spd_kp = g_axis.spd_ki = g_axis.pll_hz = NAN;
+        }
+      } else if (line[4] != 0) {
+        fmt::print("! tune | tune save | tune clear  (live values: sg <kp> <ki>, hpll <hz>)\n");
+        continue;
+      }
+      const auto st = g_sup->state();
+      fmt::print("#tune live kp={:.4g} ki={:.4g} A/rpm pll={:.1f} Hz | wire kp={:.4g} A/(rad/s) "
+                 "ki={:.4g} A/rad ack={} | nvs {}{}\n",
+                 kp, ki, hz, st.speed_kp, st.speed_ki, st.tuning_ack,
+                 g_axis.tuning_saved() ? fmt::format("kp={:.4g} ki={:.4g}", g_axis.spd_kp, g_axis.spd_ki)
+                                       : std::string("none"),
+                 std::isnan(g_axis.pll_hz) ? "" : fmt::format(" pll={:.1f}", g_axis.pll_hz));
     } else if (strcmp(line, "atos") == 0) {
       // Link and state-machine status in one line.
       const auto st = g_sup->state();
       const auto &c = g_link->counters();
       fmt::print("#atos link={} ip={} rx={} tx={}/{} overrun={} matched cmd={} state={} | "
                  "state={} mode={} fault={} cmd_age={}ms seq={} ack={} | pos={:.3f} rad vel={:.3f} "
-                 "rad/s tq={:.2f} Nm lim tq={:.1f} vel={:.1f} acc={:.1f}\n",
+                 "rad/s tq={:.2f} Nm lim tq={:.1f} vel={:.1f} acc={:.1f} | tune rx={} ack={} "
+                 "kp={:.3g} ki={:.3g} pll={:.1f}\n",
                  g_link->up() ? "up" : "down", g_link->ip(), c.rx.load(), c.tx_ok.load(),
                  c.tx_fail.load(), c.overrun.load(), c.cmd_matched.load(), c.state_matched.load(),
                  (int)st.state, (int)st.mode, (int)st.fault_code, st.cmd_age_ms, st.last_cmd_seq,
                  st.clear_fault_ack, st.position, st.velocity, st.torque_est, st.torque_limit_eff,
-                 st.vel_limit_eff, st.accel_limit_eff);
+                 st.vel_limit_eff, st.accel_limit_eff, c.rx_tune.load(), st.tuning_ack, st.speed_kp,
+                 st.speed_ki, st.hall_pll_hz);
     } else if (strcmp(line, "bootlog") == 0) {
       // Replay the boot-time DRV fault checks. The first line with a nonzero
       // fault1/vgs2 names the boot step that latched it.

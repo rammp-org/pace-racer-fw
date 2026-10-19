@@ -66,7 +66,35 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 # the trip path both have to be revisited.
 CONFIG_MCPWM_ISR_IRAM_SAFE=n
 
-# Make the native USB (USB-Serial-JTAG) port the primary console so it is
-# bidirectional: the TUI can write commands to firmware stdin, not just read
-# output. Default config binds stdin to UART0, which isn't on the USB port.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# The native USB port belongs to TinyUSB (espp::UsbDevice: WebUSB vendor + CDC
+# interfaces, see main/demo_link.hpp). USB-Serial-JTAG shares that one PHY, so
+# the primary console goes to UART0 (the tx/rx header) and USB-Serial-JTAG only
+# carries early-boot output until TinyUSB comes up. At runtime stdout is also
+# mirrored to the CDC port and the WebUSB console module, and both feed stdin.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# TinyUSB classes and FIFOs sized for whole 4 KiB protocol frames.
+CONFIG_TINYUSB_VENDOR_COUNT=1
+CONFIG_TINYUSB_CDC_ENABLED=y
+CONFIG_TINYUSB_CDC_COUNT=1
+CONFIG_TINYUSB_HID_COUNT=1
+CONFIG_TINYUSB_VENDOR_RX_BUFSIZE=4096
+CONFIG_TINYUSB_VENDOR_TX_BUFSIZE=8192
+CONFIG_TINYUSB_CDC_TX_BUFSIZE=4096
+
+# The board has 16 MB of flash (esptool flash-id, 2026-09-28). Two 3 MB OTA
+# slots + otadata + a core dump partition; updates arrive over WebUSB and roll
+# back on the next reset unless confirmed.
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+
+# Ethernet service stream (main/eth_link.hpp): a TCP listener, one client and
+# a UDP discovery responder on top of the RTPS participant's sockets.
+CONFIG_LWIP_MAX_SOCKETS=16

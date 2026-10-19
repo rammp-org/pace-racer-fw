@@ -13,9 +13,15 @@
 //   fb       which sensor commutates and measures the shaft: HALL (default,
 //            the chair has no encoder) or ENCODER (the dyno). Arming requires
 //            the selected source to be calibrated; the other one is ignored.
+//   spd_kp, spd_ki, pll_hz
+//            speed-loop gains (A/rpm, A/rpm-s) and hall tracking-loop
+//            bandwidth (Hz) saved by a MotorTuning with `persist`, or 'tune
+//            save' on the console. NaN = not saved: the compiled defaults for
+//            the feedback source apply. Restored at boot over the defaults.
 //
 // One NVS namespace, one key per field, all plain reads and writes; nothing
-// here is timing critical. Saves happen from the console task only.
+// here is timing critical. Saves happen from the console and stream tasks,
+// never from the supervisor tick (a flash write is milliseconds).
 
 #include <array>
 #include <cmath>
@@ -35,6 +41,9 @@ inline constexpr const char *kKeyAxis = "axis_id";
 inline constexpr const char *kKeyEncOfs = "enc_ofs";
 inline constexpr const char *kKeyHall = "hall_deg";
 inline constexpr const char *kKeyFeedback = "fb";
+inline constexpr const char *kKeySpdKp = "spd_kp";
+inline constexpr const char *kKeySpdKi = "spd_ki";
+inline constexpr const char *kKeyPllHz = "pll_hz";
 
 enum class Feedback : uint8_t { HALL = 0, ENCODER = 1 };
 inline const char *feedback_name(Feedback f) { return f == Feedback::ENCODER ? "enc" : "hall"; }
@@ -44,7 +53,10 @@ struct AxisConfig {
   float enc_ofs_rad{NAN};
   std::array<float, 6> hall_deg{NAN, NAN, NAN, NAN, NAN, NAN};
   Feedback feedback{Feedback::HALL};
+  float spd_kp{NAN}, spd_ki{NAN}; ///< A/rpm, A/rpm-s; NaN = compiled default
+  float pll_hz{NAN};              ///< Hz; NaN = compiled default
 
+  bool tuning_saved() const { return !std::isnan(spd_kp) && !std::isnan(spd_ki); }
   bool assigned() const { return axis_id != rammp::AxisId::UNASSIGNED; }
   bool enc_calibrated() const { return !std::isnan(enc_ofs_rad); }
   bool hall_calibrated() const {
@@ -110,6 +122,15 @@ inline bool load(AxisConfig &cfg, espp::Logger &logger) {
   if (nvs_get_u8(h, kKeyFeedback, &fb) == ESP_OK && fb <= (uint8_t)Feedback::ENCODER) {
     cfg.feedback = static_cast<Feedback>(fb);
   }
+  auto get_f = [&](const char *key, float &out) {
+    size_t n = sizeof(float);
+    float v = NAN;
+    if (nvs_get_blob(h, key, &v, &n) == ESP_OK && n == sizeof(float))
+      out = v;
+  };
+  get_f(kKeySpdKp, cfg.spd_kp);
+  get_f(kKeySpdKi, cfg.spd_ki);
+  get_f(kKeyPllHz, cfg.pll_hz);
   nvs_close(h);
   return true;
 }
@@ -152,6 +173,30 @@ inline bool save_hall(const std::array<float, 6> &deg, espp::Logger &logger) {
 inline bool save_feedback(Feedback fb, espp::Logger &logger) {
   return detail::write(logger,
                        [&](nvs_handle_t h) { return nvs_set_u8(h, kKeyFeedback, (uint8_t)fb); });
+}
+
+/// Speed-loop gains and hall PLL bandwidth, in the loop's own units.
+inline bool save_tuning(float kp_rpm, float ki_rpm, float pll_hz, espp::Logger &logger) {
+  return detail::write(logger, [&](nvs_handle_t h) {
+    esp_err_t e = nvs_set_blob(h, kKeySpdKp, &kp_rpm, sizeof(kp_rpm));
+    if (e == ESP_OK)
+      e = nvs_set_blob(h, kKeySpdKi, &ki_rpm, sizeof(ki_rpm));
+    if (e == ESP_OK)
+      e = nvs_set_blob(h, kKeyPllHz, &pll_hz, sizeof(pll_hz));
+    return e;
+  });
+}
+
+/// Back to the compiled defaults at the next boot. 'tune clear' on the console.
+inline bool clear_tuning(espp::Logger &logger) {
+  return detail::write(logger, [&](nvs_handle_t h) {
+    for (const char *k : {kKeySpdKp, kKeySpdKi, kKeyPllHz}) {
+      const esp_err_t e = nvs_erase_key(h, k);
+      if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND)
+        return e;
+    }
+    return ESP_OK;
+  });
 }
 
 /// Forget everything: back to factory. 'axis clear' on the console.

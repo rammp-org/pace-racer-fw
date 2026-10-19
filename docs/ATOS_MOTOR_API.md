@@ -1,6 +1,6 @@
 # PACE RACER motor-controller API over ATOS: design record
 
-Status: **design settled 2026-09-16; Phase 1 in review (rammp-rtps PR #5); Phase 2 firmware drafted, unflashed** (branch `feat/atos-drive`) (grilling session 2026-09-15/16, 39 questions,
+Status: **design settled 2026-09-16; Phase 1 merged (rammp-rtps PR #5); Phase 2 firmware bench-verified 2026-09-25; tuning topic added 2026-10-09 (D37, API v2, in rammp-rtps PR #7 `feat/motor-api-doc` since 2026-10-16)** (branch `feat/atos-drive`) (grilling session 2026-09-15/16, 39 questions,
 frontier empty). Sections: Context, Facts, Decisions (D1-D32), Wire types,
 Behavior contract, Implementation plan, Host-side MIB stand-in, Bench
 verification, Risks. Not yet implemented.
@@ -61,7 +61,7 @@ verification, Risks. Not yet implemented.
 | D23 | Jetson reads the same topics through espp/rtps itself (it builds on Linux: POSIX sockets, `std::thread`) or its Python bindings, including `motor_message.hpp` directly. No IDL. Not ROS 2-visible in v1. | One serializer for every peer; espp/rtps lacks ROS 2 name mangling. Revised 2026-09-16: the IDL twin was dropped from PR #5. |
 | D24 | Firmware home: new app `components/pace-racer-board/atos-drive/`, forked from `halls-sensorless` (encoder-commutated drive path), `rammp-rtps` as a git submodule, console kept for provisioning/cal/tuning. | |
 | D25 | CLEAR_FAULT = `clear_fault_req_id : uint8` in `MotorCommand` (+1 per request, wraps); the board clears on a *new* value and echoes it as `MotorState.clear_fault_ack`. The `ActuatorCommand.req_id` idiom. | Survives packet loss, one clear per request, MIB can confirm, cannot mask a recurring fault. |
-| D26 | Sign convention: CCW at the shaft is positive, right-hand rule, for position, velocity and torque on every axis. No per-board direction flag; the MIB negates mirrored wheels. | One physical rule, no hidden provisioning. |
+| D26 | Sign convention: CCW at the shaft is positive, right-hand rule, for position, velocity and torque on every axis. CCW as seen from outside the chair looking at the wheel face, right-hand thumb pointing outboard along the axle. Driving forward the left wheel is positive and the right wheel negative. No per-board direction flag; the MIB negates mirrored wheels. | One physical rule, no hidden provisioning. |
 | D27 | Named setpoint fields `position` / `velocity` / `torque`; unused ones are zero. | Engineer clarity over 8 bytes. |
 | D28 | HOLD = position hold at the position at HOLD entry, under `torque_limit`. Mode changes while ARMED take effect immediately, with controller integrators reset; no bumpless transfer in v1. | |
 | D29 | `MotorState` also carries **`ibus_est`** (bus current estimate) and **`api_version`** (from `RAMMP_MOTOR_API_VERSION` in the header). | Per-wheel power for the Jetson; schema mismatch visible in telemetry rather than as wrong floats. |
@@ -72,6 +72,7 @@ verification, Risks. Not yet implemented.
 | D34 | `vel_limit` binds in every mode as a torque governor: in TORQUE the roll-off band is the top 20 % below the limit; in VELOCITY/POSITION/SAFE_STOP the band sits above the limit, so the loop reaches its clamped setpoint but a released stall or wound integrator is cut and braked. | A torque command must never be able to run a wheel away; 20 % is wider than the hall speed noise at chair speeds. |
 | D35 | A motor profile may carry an acceleration ceiling (`kMaxAccelRpmS`); where it does, `accel_limit` 0 or larger means the ceiling (D19 still holds where it is 0). The flatbot profile sets 120 rpm/s, 60 rpm, 10 A, 4 A hold. | Office ceilings the MIB cannot raise; raising them is a deliberate reflash. |
 | D36 | Feedback guards raise `HALL` (illegal input 50 ms) and `STALL` (speed integrator past half the cap and no net hall steps over 0.5 s, speed/position modes only). Both exit through the unload-then-coast path. Verified physically 2026-09-25. | A lost hall line or a blocked wheel must be a named fault, not a hot motor. |
+| D37 | **Revises D9 (2026-10-09).** Outer-loop tuning over the network: a third per-axis topic `rammp/mib/motor_tuning/<axis>` carries `MotorTuning` (`tuning_req_id`, `speed_kp`, `speed_ki`, `hall_pll_hz`, `persist`); the board acts on a new req_id, clamps to compile-time bounds, applies live without an integrator reset, echoes `tuning_ack` and the values in force in `MotorState`, and saves to NVS only when `persist` is set. API version 2. Current loop, ceilings and calibration stay off the wire. | The MIB drove the flatbot from the joystick (Oct 2026) and it vibrates; the gains were console-only, which means a laptop on the robot for every iteration. The per-command limits cannot fix a loop tune. Separate topic so the 50 Hz command stays 28 bytes; req_id so a best-effort resend is harmless; `persist` opt-in so a bad experiment dies at reboot. |
 
 
 ## Wire types
@@ -158,7 +159,7 @@ measured in `rtps-telemetry-results`; verify with the stand-in (see Bench verifi
 ### Units and frames
 
 SI at the motor output shaft: rad (multiturn from boot), rad/s, N.m (Kt x iq, Kt =
-0.60 N.m/A measured). CCW at the shaft is positive by the right-hand rule on every axis;
+0.60 N.m/A measured). CCW at the shaft is positive by the right-hand rule on every axis (seen from outside the chair, thumb outboard);
 the MIB negates mirrored wheels. The board hides the MT6701 2.5x gearing and its
 calibration offset.
 

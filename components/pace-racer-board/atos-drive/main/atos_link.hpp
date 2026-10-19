@@ -1,8 +1,8 @@
 #pragma once
 
 // The board's end of the ATOS wire: DHCP ethernet, one RTPS participant, one
-// MotorCommand reader on this axis's command topic, one MotorState writer on its
-// state topic at 20 Hz.
+// MotorCommand reader on this axis's command topic, one MotorTuning reader on
+// its tuning topic, one MotorState writer on its state topic at 20 Hz.
 //
 // Lifecycle follows the IP address. The BSP's ethernet callbacks run on the
 // event-loop task and must not block, so they only record the new address; the
@@ -34,11 +34,13 @@
 namespace atoslink {
 
 using CommandFn = std::function<void(const rammp::MotorCommand &)>;
+using TuningFn = std::function<void(const rammp::MotorTuning &)>;
 using StateFn = std::function<rammp::MotorState()>;
 
 struct Config {
   rammp::AxisId axis{rammp::AxisId::UNASSIGNED};
   CommandFn on_command;    ///< called on the RTPS receive thread; must be quick
+  TuningFn on_tuning;      ///< same thread, same rule
   StateFn state_fn;        ///< sampled on the link task at publish time
   std::string hostname{"pace-racer"};
   uint32_t publish_hz{20};
@@ -46,6 +48,7 @@ struct Config {
 
 struct Counters {
   std::atomic<uint32_t> rx{0};         ///< MotorCommands received
+  std::atomic<uint32_t> rx_tune{0};    ///< MotorTunings received
   std::atomic<uint32_t> tx_ok{0};      ///< MotorStates published
   std::atomic<uint32_t> tx_fail{0};    ///< publish() returned false (no matched reader is one cause)
   std::atomic<uint32_t> overrun{0};    ///< publish deadline already passed
@@ -176,14 +179,26 @@ private:
                     cfg_.on_command(c);
                 },
         });
-    if (!publisher_->is_valid() || !subscriber_->is_valid()) {
+    tuning_sub_ = std::make_unique<espp::Subscriber<rammp::MotorTuning>>(
+        *participant_,
+        espp::Subscriber<rammp::MotorTuning>::Config{
+            .topic = axis.tuning.name,
+            .type_name = axis.tuning.type,
+            .on_message =
+                [this](const rammp::MotorTuning &t) {
+                  counters_.rx_tune.fetch_add(1, std::memory_order_relaxed);
+                  if (cfg_.on_tuning)
+                    cfg_.on_tuning(t);
+                },
+        });
+    if (!publisher_->is_valid() || !subscriber_->is_valid() || !tuning_sub_->is_valid()) {
       logger_->error("atos: endpoint registration failed");
       tear_down();
       return;
     }
     counters_.restarts.fetch_add(1, std::memory_order_relaxed);
-    logger_->info("atos: up on {} as {} (cmd '{}', state '{}')", ip, axis.segment,
-                  axis.command.name, axis.state.name);
+    logger_->info("atos: up on {} as {} (cmd '{}', state '{}', tuning '{}')", ip, axis.segment,
+                  axis.command.name, axis.state.name, axis.tuning.name);
   }
 
   void tear_down() {
@@ -191,6 +206,7 @@ private:
       // Stop first: reader callbacks live on the participant until it stops.
       participant_->stop();
     }
+    tuning_sub_.reset();
     subscriber_.reset();
     publisher_.reset();
     participant_.reset();
@@ -204,6 +220,7 @@ private:
   std::unique_ptr<espp::RtpsParticipant> participant_;
   std::unique_ptr<espp::Publisher<rammp::MotorState>> publisher_;
   std::unique_ptr<espp::Subscriber<rammp::MotorCommand>> subscriber_;
+  std::unique_ptr<espp::Subscriber<rammp::MotorTuning>> tuning_sub_;
   std::unique_ptr<espp::Task> task_;
   Counters counters_;
 };

@@ -15,6 +15,8 @@
 //   torque <N.m> | vel <rad/s> | pos <rad>
 //   lim <torque N.m> <vel rad/s> <accel rad/s^2>   0 = firmware ceiling / no ramp
 //   clr                              bump clear_fault_req_id
+//   tune <kp> <ki> <pll_hz> [save]   MotorTuning: A/(rad/s), A/rad, Hz; 0 = unchanged;
+//                                    'save' sets persist. Sent once per line.
 //   wait <s>                         keep streaming, say nothing
 //   q                                stop streaming and exit
 //
@@ -81,11 +83,13 @@ double now_s() {
 void print_state(const rammp::MotorState &s, double t, uint32_t n) {
   printf("[%8.2f] #%-5u %-13s %-8s fault=%-15s seq=%3u last_cmd=%3u ack=%u age=%5ums | "
          "pos=%8.3f vel=%7.3f tq=%6.2f iq=%6.2f id=%6.2f vbus=%5.1f ibus=%5.2f | "
-         "lim tq=%.1f vel=%.1f acc=%.1f | T=%.0f/%.0f/%.0f/%.0f drv=0x%04x\n",
+         "lim tq=%.1f vel=%.1f acc=%.1f | T=%.0f/%.0f/%.0f/%.0f drv=0x%04x | "
+         "tune ack=%u kp=%.3g ki=%.3g pll=%.1f\n",
          t, n, state_name(s.state), mode_name(s.mode), fault_name(s.fault_code), s.seq,
          s.last_cmd_seq, s.clear_fault_ack, s.cmd_age_ms, s.position, s.velocity, s.torque_est,
          s.iq, s.id, s.vbus, s.ibus_est, s.torque_limit_eff, s.vel_limit_eff, s.accel_limit_eff,
-         s.temps[0], s.temps[1], s.temps[2], s.temps[3], s.drv_status);
+         s.temps[0], s.temps[1], s.temps[2], s.temps[3], s.drv_status, s.tuning_ack, s.speed_kp,
+         s.speed_ki, s.hall_pll_hz);
   fflush(stdout);
 }
 
@@ -156,13 +160,15 @@ int main(int argc, char **argv) {
                  }});
   espp::Publisher<rammp::MotorCommand> pub(
       part, {.topic = axis->command.name, .type_name = axis->command.type});
-  if (!sub.is_valid() || !pub.is_valid()) {
+  espp::Publisher<rammp::MotorTuning> tune_pub(
+      part, {.topic = axis->tuning.name, .type_name = axis->tuning.type});
+  if (!sub.is_valid() || !pub.is_valid() || !tune_pub.is_valid()) {
     fprintf(stderr, "endpoint registration FAILED\n");
     return 1;
   }
-  printf("mib_stub on %s -> axis %s\n  cmd   %s (%s)\n  state %s (%s)\n", iface.c_str(),
-         axis->segment, axis->command.name, axis->command.type, axis->state.name,
-         axis->state.type);
+  printf("mib_stub on %s -> axis %s\n  cmd   %s (%s)\n  state %s (%s)\n  tune  %s (%s)\n",
+         iface.c_str(), axis->segment, axis->command.name, axis->command.type, axis->state.name,
+         axis->state.type, axis->tuning.name, axis->tuning.type);
   fflush(stdout);
 
   // The command the 20 Hz stream sends. stdin edits it under the mutex.
@@ -171,6 +177,7 @@ int main(int argc, char **argv) {
   cmd.requested_state = rammp::RequestedState::DISARMED;
   cmd.mode = rammp::ControlMode::COAST;
   std::atomic<bool> run{true};
+  rammp::MotorTuning tune{};
 
   std::thread streamer([&]() {
     auto next = std::chrono::steady_clock::now();
@@ -237,6 +244,16 @@ int main(int argc, char **argv) {
       cmd.accel_limit = c;
     } else if (strncmp(line, "clr", 3) == 0) {
       cmd.clear_fault_req_id++;
+    } else if (sscanf(line, "tune %f %f %f", &a, &b, &c) == 3) {
+      // Best-effort and sent once: watch tune ack in the next MotorState and
+      // repeat the line if it did not take.
+      tune.tuning_req_id++;
+      tune.persist = strstr(line, "save") ? 1 : 0;
+      tune.speed_kp = a;
+      tune.speed_ki = b;
+      tune.hall_pll_hz = c;
+      if (!tune_pub.publish(tune))
+        printf("! tune publish failed (no matched reader?)\n");
     } else if (sscanf(line, "wait %f", &a) == 1) {
       cmd_mutex.unlock();
       std::this_thread::sleep_for(std::chrono::duration<double>(a));

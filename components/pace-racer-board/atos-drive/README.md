@@ -24,7 +24,7 @@ encoder commutation, guards and console are the parent's. Added:
 git submodule update --init                       # external/rammp-rtps
 idf.py build                                      # NineBot on the dyno, encoder rig
 idf.py -B build-flatbot -DATOS_MOTOR=flatbot build # NineBot with office ceilings (60 rpm, 10 A, ramped)
-idf.py -DATOS_MOTOR=hub20 build                   # wheelchair hub motor
+idf.py -B build-hub20 -DATOS_MOTOR=hub20 build    # wheelchair hub motor (measured R/L/lambda/gains, 2026-09-24)
 idf.py -p PORT flash monitor
 ```
 
@@ -60,7 +60,45 @@ Reboot. The board takes a DHCP lease from the MIB, joins
 `MotorState` at 20 Hz. `axis` shows what is saved, `fb` shows the source and
 its gains, `atos` shows the link and the state machine. Arming is refused
 (`FAULT(ENCODER)`) until the selected source is calibrated. An unprovisioned
-board (`axis_id` 255) stays off the network.
+board (`axis_id` 255) brings ethernet up but joins no topic.
+
+## Ethernet service stream (2026-10-15)
+
+A board inside a wheel has no reachable USB port, so everything the WebUSB
+vendor stream carries for commissioning is also served over TCP
+(`main/eth_link.hpp`): OTA (module 0, a second `espp::OtaService` on the same
+engine), the console (0x10, lines in, stdout out), reset and info (0x20) and
+discovery (0xFF), same frames as USB. Ports: **tcp :5555** service stream, one
+client at a time (a newcomer replaces a stale session); **udp :5556**
+discovery, `PACE?` in (broadcast is fine), one JSON line back by unicast with
+axis, feedback, calibration state, motor profile, firmware, partition, base
+MAC and the service port. Ethernet comes up whether or not the axis is
+assigned.
+
+```
+tools/eth_bridge.py                         # provisioning dashboard at http://localhost:8765/ (also WebUSB: open tools/dashboard.html)
+tools/eth_link.py list                      # who answers on the LAN
+tools/eth_link.py drive_left info           # by axis name, number, IP or 'auto'
+tools/eth_link.py auto flash                # OTA build-hub20, wait for it back, mark valid
+tools/eth_link.py auto cmd "axis"           # one console line
+tools/eth_link.py auto console              # interactive
+tools/eth_link.py auto reset | status | mark-valid | rollback
+tools/provision.py --host auto --motor hub20   # the whole provisioning flow over ethernet
+```
+
+Rollback is gated on the network, not on uptime. A new image boots
+PENDING_VERIFY; the USB link no longer self-confirms after 30 s. It confirms
+itself only once it holds a lease and the service stream is accepting, 20 s
+later, and the host tool confirms explicitly as soon as it reconnects. An
+image that never gets that far stays pending and the bootloader boots the
+previous one at the next power cycle, which is the only recovery a sealed
+board has. First flash of a board still has to go over USB: the firmware on
+it has to have this server before ethernet can carry the next one.
+
+Known shape of the LAN: the bench switch drops board-originated multicast,
+which is why discovery is a host question with a unicast answer rather than
+mDNS. On this Mac bind to the dock interface for 169.254 targets (the tool
+does) or Tailscale swallows the traffic.
 
 ## Driving it
 
@@ -87,6 +125,75 @@ the drive rolls torque off and then brakes, so a wound-up integrator released
 from a stall cannot launch the wheel (measured 18.5 rad/s against a 6.3 limit
 before this, 4.1 after).
 
+## Tuning over ATOS (2026-10-09, API v2)
+
+A third topic per axis, `rammp/mib/motor_tuning/<axis>` (`MotorTuning`:
+`tuning_req_id`, `speed_kp` A per rad/s, `speed_ki` A per rad, `hall_pll_hz`,
+`persist`). The supervisor acts on a new req_id, clamps into the
+`kTune*` bounds in `motor_params.hpp`, and applies on its next tick in any
+state, without resetting the integrator. `MotorState` echoes `tuning_ack` and
+the three values in force (SI; the console's `sg`/`hpll` are A/rpm and Hz).
+`persist` = the stream task writes the live values to NVS (`spd_kp`,
+`spd_ki`, `pll_hz`), restored at boot over the per-source defaults. Console:
+
+| command | meaning |
+| --- | --- |
+| `tune` | live tune in both unit systems, last ack, and what NVS holds |
+| `tune save` | keep the live values across reboots |
+| `tune clear` | compiled defaults at the next boot |
+
+`mib_stub` sends one with `tune <kp> <ki> <pll_hz> [save]`. Not yet run on a
+board: built clean (flatbot), host stand-in built; bench next.
+
+## Native USB (WebUSB) link (2026-09-28)
+
+The USB-C port is now a composite native USB device (`main/demo_link.hpp`,
+shared with the test-bench repo): a **WebUSB vendor** stream carrying OTA
+(module 0), telemetry (3), the flash core dump (4), a console bridge (0x10:
+text commands in, stdout out) and a system module (0x20: reset, info), plus a
+**CDC** console. USB-Serial/JTAG shares the PHY and is gone while the app runs:
+flash with `test-bench/tools/ota.py racer` (espp OTA, auto-confirm), reset
+over the system module, and hold BOOT while plugging in only if an image
+cannot bring USB up. Primary console is UART0 (the tx/rx header). The
+partition table has two 3 MB OTA slots, rollback and a core dump partition
+(16 MB flash). Before an OTA the drive is unloaded and the sampler disabled:
+flash writes disable the cache and the sampling ISR is not IRAM-resident.
+Telemetry (20 Hz: `rpm_set rpm_hall iq iqref id vd vq t0..t3 mode`) and the
+stdout mirror on the vendor stream are quiet until a host sends SET_STREAM.
+
+## Characterization hooks (2026-09-28)
+
+`test-bench/web/characterize.html` runs the motor-identification sequence
+(R/L, pole pairs, hcal, ecal, λ, K<sub>t</sub> against the stand's torque
+sensor, J, speed-loop pole placement, current-loop gains) from the browser
+using this app's existing primitives. Two things were added for it:
+
+- vendor-stream module **0x30, capture readout**: `0x01 META → 0x81 [n u32][every u32][mode u8][want u32][fs_hz f32]`,
+  `0x02 READ [off u32][count u16] → 0x82 [off u32][3 × f32 per row]` (≤ 340 rows per reply). Same ring as
+  `cap`/`capdump`, but binary and request/reply, because the stdout mirror on the vendor stream is
+  best-effort and would drop rows of a 3000-row dump.
+- console `mi`: one `#mi name= pp= gear= kt= r= l_uh= lambda= vbus= kp= ki= vlim= maxrpm= maxamps= spd_kp= spd_ki= enc_cal= hall_cal=`
+  line with the compiled-in and live constants.
+
+`hv` now commutates on the encoder when its offset is known (the `erun` path,
+with the encoder speed gains), falling back to halls otherwise; `hv` with no
+argument reports which.
+
+## Driving it from a browser or script (2026-09-28)
+
+For a host that streams small setpoint steps over the USB console (the dyno
+demo page in `test-bench/web/demo.html`):
+
+| command | meaning |
+| --- | --- |
+| `hv <rpm> [A]` | hall speed setpoint; starts the speed loop if it is not running, otherwise only the target moves (50 rpm/s ramp, 100 rpm cap, default 10 A ceiling) |
+| `wd <ms>` | console heartbeat watchdog, 0 = off. No console line for `ms` while the drive is live: unload, Hi-Z coast, one `! watchdog` line. One-shot; the next command re-arms nothing, send `wd` again |
+| `hb` | heartbeat, prints nothing |
+
+The stream gained a 17th column, `rpm_set`: the ramped reference the speed
+loop is tracking, 0 outside a speed loop. Verified on drive_left: `hv 20` at
+0.65 A, watchdog fired 1591 ms after the last `hb`.
+
 ## Bench notes (2026-09-25)
 
 - The bench switch does not forward the board's multicast to the Mac, so
@@ -106,6 +213,6 @@ before this, 4.1 after).
 - Two boards on one network; induced VDS/thermal/sampler faults; any load.
 - The hub motor: quadrature encoder source (PCNT) with hall-edge sync, R/L
   measurement, current-loop retune. `ATOS_MOTOR=hub20` only swaps constants.
-- `fw_version` is a constant in `motor_params.hpp`; no git stamp yet.
+- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic); no git stamp yet.
 - espp on the board keeps reader proxies of dead host participants (one extra
   copy of every sample per MIB restart). Needs a fix in espp itself.

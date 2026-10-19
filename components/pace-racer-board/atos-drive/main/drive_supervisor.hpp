@@ -16,10 +16,17 @@
 // contract testable against a fake plant and keeps every mapping (N.m -> A,
 // rad/s -> rpm, the limit ceilings) in one place: apply_mode() below.
 //
-// Threads: on_command() runs on the RTPS receive thread and only stores the
-// command under a mutex. tick() runs on the supervisor task at 100 Hz and makes
-// every decision. state() is called by the link task at 20 Hz and reads the
-// last MotorState tick() assembled, under the same mutex.
+// Threads: on_command() and on_tuning() run on the RTPS receive thread and
+// only store the message under a mutex. tick() runs on the supervisor task at
+// 100 Hz and makes every decision. state() is called by the link task at 20 Hz
+// and reads the last MotorState tick() assembled, under the same mutex.
+//
+// Tuning (D37): a MotorTuning with a NEW tuning_req_id is clamped to the
+// motor_params bounds and handed to Hooks::tuning on the next tick, live,
+// whatever the state; the integrator is not reset, so a gain change under way
+// is a change of slope, not a bump. The wire is SI (A per rad/s, A per rad,
+// Hz); the hooks and the loop are A/rpm. The values in force come back in
+// MotorState every tick, converted the other way.
 
 #include <algorithm>
 #include <array>
@@ -56,6 +63,10 @@ struct Measured {
   bool drv_fault{false};   ///< DRV8353 reported a fault (drv_status has the bits)
   bool hall_fault{false};  ///< hall inputs illegal while driving (FOC side already stopped)
   bool stall{false};       ///< no motion at the torque cap for 0.5 s (FOC side already stopped)
+  /// Outer-loop tune in force, the loop's units (reported back in SI).
+  float speed_kp_rpm{0};   ///< A per rpm
+  float speed_ki_rpm{0};   ///< A per rpm-second
+  float pll_hz{0};         ///< hall tracking-loop bandwidth
 };
 
 struct Hooks {
@@ -79,6 +90,9 @@ struct Hooks {
   /// the current-loop PI while driving.
   std::function<void()> reset_controllers;
   std::function<Measured()> measure;
+  /// New outer-loop tune, already clamped, in the loop's units. `persist` =
+  /// also save to NVS (the app defers the flash write to a task that may block).
+  std::function<void(float kp_rpm, float ki_rpm, float pll_hz, bool persist)> tuning;
 };
 
 class Supervisor {
@@ -99,6 +113,13 @@ public:
     cmd_ = c;
     cmd_time_us_ = esp_timer_get_time();
     have_cmd_ = true;
+  }
+
+  /// RTPS receive thread. Store and return; tick() applies a new req_id.
+  void on_tuning(const rammp::MotorTuning &t) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    tune_ = t;
+    have_tune_ = true;
   }
 
   /// A command stream is live: the console must not drive.
@@ -156,6 +177,24 @@ public:
         set_state_locked(BoardState::DISARMED);
         go_idle_coast_locked();
       }
+    }
+
+    // 2b. Tuning: a NEW counter value -> clamp, apply, ack. 0 keeps a field.
+    if (have_tune_ && tune_.tuning_req_id != tune_ack_) {
+      tune_ack_ = tune_.tuning_req_id;
+      const float kp = tune_.speed_kp > 0
+                           ? std::clamp(tune_.speed_kp * motor::kRpmToRadS, motor::kTuneKpMinRpm,
+                                        motor::kTuneKpMaxRpm)
+                           : m.speed_kp_rpm;
+      const float ki = tune_.speed_ki > 0
+                           ? std::clamp(tune_.speed_ki * motor::kRpmToRadS, motor::kTuneKiMinRpm,
+                                        motor::kTuneKiMaxRpm)
+                           : m.speed_ki_rpm;
+      const float hz = tune_.hall_pll_hz > 0 ? std::clamp(tune_.hall_pll_hz, motor::kTunePllMinHz,
+                                                          motor::kTunePllMaxHz)
+                                             : m.pll_hz;
+      if (hooks_.tuning)
+        hooks_.tuning(kp, ki, hz, tune_.persist != 0);
     }
 
     // 3. Watchdog: only matters while energized. A DISARMED board with no
@@ -251,6 +290,11 @@ public:
     state_.id = m.id;
     state_.ibus_est = (m.vd * m.id + m.vq * m.iq) / state_.vbus;
     state_.temps = m.temps;
+    state_.tuning_ack = tune_ack_;
+    // A/rpm -> A per rad/s: iq = kp_rpm * err_rpm = kp_rpm * kRadSToRpm * err_rad_s.
+    state_.speed_kp = m.speed_kp_rpm * motor::kRadSToRpm;
+    state_.speed_ki = m.speed_ki_rpm * motor::kRadSToRpm;
+    state_.hall_pll_hz = m.pll_hz;
     switch (state_.state) {
     case BoardState::ARMED:
       state_.mode = have_cmd_ ? cmd_.mode : ControlMode::COAST;
@@ -395,6 +439,9 @@ private:
   bool fault_holding_{false};
   bool watchdog_pending_{false};
   uint8_t clear_ack_{0};
+  rammp::MotorTuning tune_{};
+  bool have_tune_{false};
+  uint8_t tune_ack_{0};
   std::optional<rammp::ControlMode> prev_mode_;
   float hold_deg_{0};
   float safe_stop_ramp_{motor::kSafeStopRampRpmS};

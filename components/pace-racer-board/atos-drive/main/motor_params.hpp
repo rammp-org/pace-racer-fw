@@ -41,32 +41,35 @@ inline constexpr float kDefaultKi = 54.5f;
 inline constexpr float kDefaultVoltLimit = 8.0f; // back-EMF at 60 rpm is 2.5 V, 3x margin
 #elif defined(ATOS_MOTOR_HUB20)
 // Wheelchair hub motor: 48 V, 17 N.m / 7.5 A rated, 51 N.m / 22 A peak, 150 rpm
-// rated / 180 rpm peak, R 0.7 ohm, L 1.885 mH (+/-10%), Ke 0.262 V/rpm,
-// 4096 CPR quadrature encoder (A/B differential), halls.
+// rated / 180 rpm peak, 4096 CPR quadrature encoder (A/B differential), halls.
+// R, L, lambda and the current-loop gains below are MEASURED on this drive
+// (2026-09-24, board 8c:fd:49:a2:de:b0, 48 V): the datasheet's 0.7 ohm /
+// 1.885 mH / Ke-derived lambda 0.077 were 30-50 % off, and at 0.077 the
+// observer never locked (flux pinned at the parameter). See hub_motor_cal.py
+// in halls-sensorless for the procedure.
 inline constexpr const char *kName = "hub20";
 inline constexpr int kPolePairs = 20;
-inline constexpr float kKt = 2.3f; // N.m/A; 17/7.5 = 2.27, 51/22 = 2.32, Ke agrees within 10%
+// N.m/A = 1.5 * pp * lambda. 17 N.m at 10.9 A peak = 7.7 A RMS, which is the
+// datasheet's rated 7.5 A (RMS) within 3 %.
+inline constexpr float kKt = 1.56f;
 inline constexpr float kMaxRpm = 180.0f;  // vel_limit = 0. No-load figure at 48 V.
 inline constexpr float kMaxAmps = 22.0f;  // torque_limit = 0. Datasheet peak.
-inline constexpr float kHoldAmps = 10.0f; // HOLDING cap: ~23 N.m, holds a 10 deg slope
-                                          // at 150 kg per drive wheel; 15 A sustained is
+inline constexpr float kHoldAmps = 10.0f; // HOLDING cap: ~16 N.m; 15 A sustained is
                                           // the measured warm thermal limit.
-inline constexpr float kObsR = 0.7f;      // ohm, datasheet; confirm line-line vs phase
-inline constexpr float kObsL = 1.885e-3f; // H, datasheet
-// Wb. Derived: lambda = Kt / (1.5 * pp) = 2.3 / 30. Cross-checks against the
-// datasheet Ke: 1.5 * sqrt(3) * pp * lambda = 0.278 V/rpm line-line peak vs
-// 0.262 +/-10% stated. The same identity on the NineBot gives 0.585 vs 0.60
-// measured, so the 1.5*pp*lambda torque convention holds for this drive.
-// NOT zero: the observer fail-safe band is 0.35*lambda..3*lambda, which with
-// lambda = 0 can never be satisfied.
-inline constexpr float kObsLambda = 0.077f;
-// Bench supply, V. SVPWM scales duties by this, so it must be the real bus or
-// every commanded volt lands short.
+inline constexpr float kObsR = 0.51f;     // ohm/phase, 'rl' at 0.6/1.0/1.5 V steps
+inline constexpr float kObsL = 804.0e-6f; // H/phase (the sheet's 1.885 mH is ~2x phase)
+// Wb. Observer locks 0.045..0.052 (rpm_est = rpm_hall within 0.2 % from 60
+// down to 7 rpm), unlocks at 0.060. NOT zero: the observer fail-safe band is
+// 0.35*lambda..3*lambda, which with lambda = 0 can never be satisfied.
+inline constexpr float kObsLambda = 0.052f;
+// Bus, V. SVPWM scales duties by this, so it must be the real bus or every
+// commanded volt lands short. 45 V was the bench series supply; the chair's
+// 48 V pack sits 46-50 V, re-check with the 'mi' line against the pack.
 inline constexpr float kBusVoltage = 45.0f;
-// Current-loop PI. Same closed-loop bandwidth as the validated NineBot tune
-// (Kp/L = 169 rad/s, Ki/Kp = R/L): Kp scales with L, Ki with R.
-inline constexpr float kDefaultKp = 0.32f; // V/A
-inline constexpr float kDefaultKi = 118.0f; // V/(A*s)
+// Current-loop PI at the validated 169 rad/s closed-loop bandwidth
+// (Kp/L = 169, Ki/Kp = R/L), from the measured R and L.
+inline constexpr float kDefaultKp = 0.136f; // V/A
+inline constexpr float kDefaultKi = 86.0f;  // V/(A*s)
 // 'vl' boot default. Back-EMF is omega_e * lambda = 4.8 V at 30 rpm and 9.6 V
 // at 60, so the NineBot's 8 V clamp would stall the I/f spin outright.
 inline constexpr float kDefaultVoltLimit = 16.0f;
@@ -106,8 +109,17 @@ inline constexpr float kHoldMaxRpm = 30.0f;
 // Command watchdog, ms. The contract: the MIB sends >= 10 Hz, idle or not.
 inline constexpr uint32_t kWatchdogMs = 200;
 
+// MotorTuning bounds (D37). The wire carries SI (A per rad/s, A per rad, Hz);
+// the loop runs in A/rpm. Anything a MotorTuning asks for is clamped into
+// these, so a typo on the MIB cannot make the speed loop unstable or the
+// tracking loop useless. The upper bounds are 8x the hall defaults
+// (0.25 A/rpm, 0.5 A/rpm-s); the PLL range is HallDrive's own.
+inline constexpr float kTuneKpMinRpm = 0.005f, kTuneKpMaxRpm = 2.0f; // A/rpm
+inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
+inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
+
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (1u << 16) | 0u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (2u << 16) | 0u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;
