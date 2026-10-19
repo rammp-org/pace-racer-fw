@@ -96,3 +96,6 @@ tools/eth_bridge.py                # Ethernet: serves the page at http://localho
 The page defaults to Ethernet when it is served by the bridge and to WebUSB
 when opened as a file. Both transports carry the same frames, so every
 button works on either. The bridge is standard library only.
+
+Step-by-step setup for a wheel on the chair or a bench switch, network
+included: [ETHERNET_DASHBOARD.md](ETHERNET_DASHBOARD.md).
