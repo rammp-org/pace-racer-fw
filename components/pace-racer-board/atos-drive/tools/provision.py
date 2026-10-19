@@ -1,24 +1,36 @@
 #!/usr/bin/env python3
-"""Plug a laptop into a PACE RACER board and make it a flatbot wheel.
+"""Make a PACE RACER board a robot wheel: flash, axis, feedback, hall table.
 
-    tools/provision.py                # one board on USB: flash + axis + fb hall, hcal if needed
-    tools/provision.py --axis 3       # override the roster
-    tools/provision.py --no-flash     # NVS only, keep whatever firmware is on it
-    tools/provision.py --hcal         # redo the hall table even if one is saved
-    tools/provision.py --list         # just say which boards are plugged in
+Over USB (a board on the bench, or its first flash before it goes into a wheel):
+
+    tools/provision.py --motor hub20            # one board on USB: flash + axis + fb hall, hcal if needed
+    tools/provision.py --motor hub20 --axis 3   # override the roster
+    tools/provision.py --no-flash               # NVS only, keep whatever firmware is on it
+    tools/provision.py --hcal                   # redo the hall table even if one is saved
+    tools/provision.py --list                   # just say which boards are plugged in
+
+Over ethernet (a board inside a wheel; needs firmware with the service stream):
+
+    tools/provision.py --host auto --motor hub20        # the one board on the LAN
+    tools/provision.py --host drive_left --axis 2       # by current axis name, or IP
+    tools/provision.py --host list                      # who answers on the LAN
 
 Steps, each reported as it goes:
-  1. find the board: every /dev/cu.usbmodem* is asked for its MAC with esptool.
-     Boards on the blocklist below are never touched. With several boards
-     plugged in, pass --port.
-  2. flash the build in --build (default build-flatbot; run idf.py there first).
+  1. find the board. USB: every /dev/cu.usbmodem* is asked for its MAC with
+     esptool; boards on the blocklist below are never touched; with several
+     plugged in, pass --port. Ethernet: a "PACE?" broadcast; the board
+     reports its MAC so the same roster applies.
+  2. flash the build in --build (default build-<motor>; run idf.py there
+     first). USB = esptool with the full table; ethernet = OTA of the app,
+     wait for it to come back, mark it valid.
   3. over the console: axis <n>, fb hall, then a reset so both take effect.
   4. if the hall table is not saved (or --hcal): the calibration spin. Wheel
      off the ground, motor supply on. The wheel turns both ways for ~15 s each.
   5. read back 'axis' and 'fb' and print the result line.
 
-Needs pyserial and esptool. The ESP-IDF python env has both; the script finds
-it under ~/.espressif when the system python lacks them.
+USB needs pyserial and esptool. The ESP-IDF python env has both; the script
+finds it under ~/.espressif when the system python lacks them. Ethernet needs
+only the standard library plus the espp_ota package in managed_components.
 """
 import argparse
 import glob
@@ -30,6 +42,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 APP = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+import eth_link  # noqa: E402  (the ethernet twin of the serial console + esptool below)
 
 # Boards by base MAC (what esptool read-mac prints; the ethernet MAC is the
 # same on this board). Add a line when a new board joins the robot.
@@ -60,7 +74,7 @@ def die(msg):
 def find_python():
     """A python that imports esptool and serial: this one, else the IDF venv."""
     for exe in [sys.executable] + sorted(glob.glob(os.path.expanduser("~/.espressif/python_env/*/bin/python"))):
-        r = subprocess.run([exe, "-c", "import esptool, serial"], capture_output=True)
+        r = subprocess.run([exe, "-c", "import esptool, serial, usb.core"], capture_output=True)
         if r.returncode == 0:
             return exe
     die("no python with esptool + pyserial; run 'pip install esptool pyserial' or install ESP-IDF")
@@ -147,9 +161,18 @@ def wait_for_console(port, secs=8):
 
 
 def reset(port):
+    """The WebUSB builds own the S3's one USB PHY, so esptool's DTR/RTS reset
+    does nothing to them: ask the System module over the vendor stream first
+    (needs pyusb), and fall back to esptool for a board without that link."""
+    try:
+        import usb_reset
+        if usb_reset.reset_via_vendor():
+            return
+    except ImportError:
+        pass
     rc, out = esptool(port, "--after", "hard-reset", "read-mac", timeout=30)
     if rc != 0:
-        die(f"reset via esptool failed:\n{out}")
+        die(f"reset via esptool failed (and no WebUSB vendor interface answered):\n{out}")
 
 
 # ---------------------------------------------------------------- steps
@@ -246,17 +269,98 @@ def report(con):
     return ok
 
 
+# ---------------------------------------------------------------- ethernet
+def main_eth(a):
+    """Same steps as main(), board reached over tcp :5555 (see eth_link.py)."""
+    if a.host == "list" or a.list:
+        boards = eth_link.discover()
+        if not boards:
+            die("no boards answered on the LAN (is the DHCP server / MIB up? right interface?)")
+        for b in boards:
+            mac = b.get("mac", "?")
+            tag = "BLOCKED" if mac in BLOCKLIST else \
+                  (f"roster: axis {ROSTER[mac]} {AXES[ROSTER[mac]]}" if mac in ROSTER else "not in roster")
+            say(f"{b['ip']}: {mac}  now axis {b.get('axis')} {b.get('axis_name')}  fw {b.get('version')} "
+                f"{b.get('motor')}  {tag}")
+        return
+    try:
+        host, inf = eth_link.resolve(a.host)
+        if inf is None:
+            inf = eth_link.info(host)
+    except eth_link.LinkError as e:
+        die(str(e))
+    mac = inf.get("mac")
+    if mac in BLOCKLIST:
+        die(f"{host} ({mac}) is on the blocklist")
+    axis = a.axis if a.axis is not None else ROSTER.get(mac)
+    if axis is None:
+        die(f"{host} ({mac}) is not in the roster; pass --axis N (or add it to ROSTER)")
+    say(f"{host}: {mac}  running {inf.get('version')} ({inf.get('motor')}) on {inf.get('partition')}, "
+        f"axis {inf.get('axis')} {inf.get('axis_name')}")
+
+    if not a.no_flash:
+        binary = os.path.join(a.build, "pace_racer_atos_drive.bin")
+        if not os.path.exists(binary):
+            die(f"{binary} missing; build first: idf.py -B {os.path.basename(a.build)} "
+                f"-DATOS_MOTOR={a.motor} build")
+        try:
+            eth_link.flash(host, binary, say=say)
+        except (eth_link.LinkError, eth_link.OtaError, OSError) as e:
+            die(f"OTA failed: {e}. The board keeps its old image; power-cycle if it does not answer.")
+
+    con = eth_link.EthConsole(host)
+    before = first(con.cmd("axis"), "#axis")
+    say(f"before: {before}")
+    provision_nvs(con, axis)
+    con.close()
+    say("resetting so axis and feedback take effect")
+    eth_link.reset(host)
+    time.sleep(3.0)
+    try:
+        eth_link.wait_for_board(host, say=say)
+    except eth_link.LinkError as e:
+        die(str(e))
+    con = eth_link.EthConsole(host)
+
+    ax = first(con.cmd("axis"), "#axis")
+    if a.hcal or "hall table saved" not in ax:
+        input(f"\n   Wheel {AXES[axis]} off the ground and free, motor supply ON. Enter to spin, Ctrl-C to skip: ")
+        hall_cal(con)
+    else:
+        say("hall table already saved (use --hcal to redo)")
+
+    ok = report(con)
+    con.close()
+    say("DONE: board is ready" if ok else "NOT READY, see the axis line above")
+    sys.exit(0 if ok else 1)
+
+
 # ---------------------------------------------------------------- main
 def main():
     global PY
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", help="serial port; default: the one PACE board found on USB")
+    ap.add_argument("--host", help="ethernet instead of USB: IP, axis name, axis number, 'auto' or 'list'")
     ap.add_argument("--axis", type=int, choices=sorted(AXES), help="wheel; default from the roster by MAC")
-    ap.add_argument("--build", default=os.path.join(APP, "build-flatbot"), help="idf.py build dir to flash")
+    ap.add_argument("--motor", default="flatbot", choices=["flatbot", "hub20", "ninebot"],
+                    help="which profile's build dir to flash (build-<motor>); default flatbot")
+    ap.add_argument("--build", help="idf.py build dir to flash (overrides --motor)")
     ap.add_argument("--no-flash", action="store_true", help="keep the firmware that is on the board")
     ap.add_argument("--hcal", action="store_true", help="redo the hall table even if one is saved")
     ap.add_argument("--list", action="store_true", help="show boards on USB and exit")
     a = ap.parse_args()
+    if not a.build:
+        a.build = os.path.join(APP, f"build-{a.motor}")
+    if a.host:
+        return main_eth(a)
+    # The USB path needs pyserial, esptool and pyusb in THIS interpreter (the
+    # console, the vendor-stream reset). Re-exec under one that has them.
+    try:
+        import esptool, serial, usb.core  # noqa: F401
+    except ImportError:
+        py = find_python()
+        if os.path.realpath(py) != os.path.realpath(sys.executable):
+            os.execv(py, [py, os.path.abspath(__file__), *sys.argv[1:]])
     PY = find_python()
 
     ports = [a.port] if a.port else candidate_ports()

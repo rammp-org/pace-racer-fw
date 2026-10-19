@@ -1,0 +1,637 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PACE RACER · provisioning</title>
+<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Roboto+Condensed:wght@500;700&family=Roboto+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* alex-style tokens (subset of alex-style-guide/web/tokens.css) */
+:root {
+  --ax-font: 'Roboto', system-ui, sans-serif; --ax-font-title: 'Roboto Condensed', 'Roboto', sans-serif; --ax-font-mono: 'Roboto Mono', ui-monospace, Menlo, monospace;
+  --ax-bg: #0e0f10; --ax-panel: #141516; --ax-border: #2a2c2f; --ax-border-strong: #3a3c3f; --ax-rule: #222426; --ax-grid: #26282b; --ax-axis: #4a4c4e;
+  --ax-ink: #e4e1d8; --ax-muted: #8a877e; --ax-accent: #e2683c; --ax-accent-rgb: 226, 104, 60; --ax-on-accent: #0e0f10; --ax-glow: 0 0 14px rgba(var(--ax-accent-rgb), 0.28);
+  --ax-s1: #2f62e8; --ax-s2: #e03a2f; --ax-s3: #0f9a66; --ax-good: #4fbf5a; --ax-warning: #e6c229; --ax-critical: #ff5a4a; --ax-off: #5a5c5e;
+  --ax-gap: 8px; --ax-ease: cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.ax, .ax * { box-sizing: border-box; }
+body { margin: 0; }
+.ax { background: var(--ax-bg); color: var(--ax-ink); font: 14px/1.5 var(--ax-font); font-variant-numeric: tabular-nums; min-height: 100vh; }
+.ax h1 { font: 700 24px/1.1 var(--ax-font-title); letter-spacing: 0.06em; text-transform: uppercase; margin: 0; }
+.ax h1::before { content: "■ "; color: var(--ax-accent); }
+.ax h2 { font: 500 14px/1.3 var(--ax-font-title); letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 2px; }
+.ax-page { max-width: 1120px; margin: 0 auto; padding: 28px 32px 64px; }
+.ax-label { font: 500 10px var(--ax-font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ax-muted); }
+.ax-muted { color: var(--ax-muted); }
+.ax-cap { color: var(--ax-muted); font-size: 12px; margin-bottom: 10px; }
+.ax-mast { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding-bottom: 14px; margin-bottom: 22px; border-bottom: 1px solid var(--ax-border); }
+.ax-meta { display: flex; gap: 14px; color: var(--ax-muted); font: 12px var(--ax-font-mono); margin-top: 6px; flex-wrap: wrap; }
+.ax-panel, .ax-tile { position: relative; background: var(--ax-panel); border: 1px solid var(--ax-border); padding: 16px 18px; }
+.ax-panel::before, .ax-tile::before { content: ""; position: absolute; top: -1px; left: -1px; width: 8px; height: 8px; border-top: 2px solid var(--ax-accent); border-left: 2px solid var(--ax-accent); }
+.ax-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--ax-gap); margin-bottom: var(--ax-gap); }
+.ax-tile { padding: 14px 16px; }
+.ax-value { font: 500 28px/1 var(--ax-font-mono); margin-top: 6px; color: var(--ax-accent); text-shadow: var(--ax-glow); transition: color 0.6s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ax-value small { font-size: 0.45em; color: var(--ax-muted); margin-left: 4px; font-weight: 400; text-shadow: none; }
+.ax-value.changed { color: var(--ax-ink); transition: none; }
+.ax-sub { font: 12px var(--ax-font-mono); color: var(--ax-muted); margin-top: 4px; }
+.ax-grid { display: grid; gap: var(--ax-gap); margin-bottom: var(--ax-gap); }
+.ax-btn { position: relative; display: inline-flex; align-items: center; gap: 8px; font: 500 12px/1 var(--ax-font-mono); text-transform: uppercase; letter-spacing: 0.1em; padding: 9px 13px; border: 1px solid var(--ax-border-strong); background: var(--ax-panel); color: var(--ax-ink); border-radius: 0; cursor: pointer; transition: border-color 0.15s, transform 0.08s; }
+.ax-btn:hover { border-color: var(--ax-accent); }
+.ax-btn:active { transform: translateY(1px); }
+.ax-btn:focus-visible { outline: 2px solid var(--ax-accent); outline-offset: 2px; }
+.ax-btn.primary { background: var(--ax-accent); color: var(--ax-on-accent); border-color: var(--ax-accent); }
+.ax-btn.danger { border-color: var(--ax-critical); color: var(--ax-critical); }
+.ax-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ax-input, select.ax-input { font: 13px var(--ax-font-mono); background: var(--ax-bg); color: var(--ax-ink); border: 1px solid var(--ax-border); border-radius: 0; padding: 6px 8px; }
+.ax-input:focus { outline: none; border-color: var(--ax-accent); }
+.ax-status { display: inline-flex; align-items: center; gap: 6px; font: 12px var(--ax-font-mono); }
+.ax-status::before { content: ""; width: 8px; height: 8px; background: var(--ax-off); flex: none; }
+.ax-status.good::before { background: var(--ax-good); }
+.ax-status.warning::before { background: var(--ax-warning); }
+.ax-status.critical::before { background: var(--ax-critical); }
+.ax-status.live::before { background: var(--ax-good); animation: ax-breathe 1.6s ease-in-out infinite; }
+@keyframes ax-breathe { 50% { opacity: 0.35; transform: scale(0.75); } }
+.ax table { width: 100%; border-collapse: collapse; }
+.ax th { text-align: left; font: 500 10px var(--ax-font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ax-muted); padding: 6px 8px; border-bottom: 1px solid var(--ax-border-strong); }
+.ax td { padding: 7px 8px; border-bottom: 1px solid var(--ax-rule); }
+.ax td.time { color: var(--ax-muted); font-family: var(--ax-font-mono); white-space: nowrap; }
+.ax tbody tr { transition: background 0.12s; }
+.ax tbody tr:hover { background: rgba(var(--ax-accent-rgb), 0.06); }
+.ax-spin { --sz: 16px; position: relative; display: inline-block; width: var(--sz); height: var(--sz); flex: none; vertical-align: -3px; }
+.ax-spin::before { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid rgba(var(--ax-accent-rgb), 0.18); border-top-color: var(--ax-accent); border-right-color: var(--ax-accent); animation: ax-spin 0.9s var(--ax-ease) infinite; }
+.ax-spin::after { content: ""; position: absolute; width: 4px; height: 4px; left: 50%; top: 50%; margin: -2px; border-radius: 50%; background: var(--ax-ink); animation: ax-orbit 1.8s linear infinite reverse, ax-bob 0.9s ease-in-out infinite; }
+.ax-spin.lg { --sz: 40px; } .ax-spin.lg::before { border-width: 3px; } .ax-spin.lg::after { width: 6px; height: 6px; margin: -3px; }
+@keyframes ax-spin { to { transform: rotate(360deg); } }
+@keyframes ax-orbit { from { transform: rotate(0deg) translateX(calc(var(--sz) * 0.22)); } to { transform: rotate(360deg) translateX(calc(var(--sz) * 0.22)); } }
+@keyframes ax-bob { 50% { opacity: 0.4; } }
+.ax-loading { position: relative; }
+.ax-loading > *:not(.ax-spin-wrap) { opacity: 0.35; transition: opacity 0.2s; }
+.ax-spin-wrap { position: absolute; inset: 0; display: grid; place-items: center; gap: 8px; align-content: center; font: 11px var(--ax-font-mono); color: var(--ax-muted); text-transform: uppercase; letter-spacing: 0.12em; z-index: 2; }
+.ax-fx-layer { position: fixed; inset: 0; pointer-events: none; z-index: 40; overflow: visible; }
+.ax-fx-layer path, .ax-fx-layer circle, .ax-fx-layer rect { fill: none; }
+[data-fx] { transition: box-shadow 0.25s, transform 0.15s var(--ax-ease); }
+[data-fx]:hover { box-shadow: 0 0 0 1px var(--ax-accent), 0 0 22px rgba(var(--ax-accent-rgb), 0.45); transform: translateY(-1px); }
+[data-fx]:active { transform: translateY(1px); }
+@media (prefers-reduced-motion: reduce) { .ax-spin::before, .ax-spin::after, .ax-status.live::before { animation-duration: 3s; } [data-fx]:hover { transform: none; } }
+
+/* page */
+.two { grid-template-columns: 1fr 1fr; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+.row + .row { margin-top: 8px; }
+.ctl { display: flex; gap: 8px; align-items: center; }
+.bar { height: 6px; background: var(--ax-rule); margin-top: 10px; }
+.bar > div { height: 100%; width: 0; background: var(--ax-accent); transition: width 0.2s; }
+.bar.done > div { background: var(--ax-good); } .bar.failed > div { background: var(--ax-critical); }
+pre.out { font: 12px/1.45 var(--ax-font-mono); background: var(--ax-bg); border: 1px solid var(--ax-border); margin: 10px 0 0; padding: 8px; height: 220px; overflow: auto; white-space: pre-wrap; color: var(--ax-ink); }
+pre.out .sys { color: var(--ax-muted); } pre.out .err { color: var(--ax-critical); }
+.halls { display: flex; gap: 6px; margin-top: 6px; }
+.halls span { font: 500 12px var(--ax-font-mono); padding: 3px 8px; border: 1px solid var(--ax-border-strong); color: var(--ax-muted); }
+.halls span.on { color: var(--ax-ink); border-color: var(--ax-ink); }
+.steps { list-style: none; margin: 10px 0 0; padding: 0; font: 12px var(--ax-font-mono); }
+.steps li { padding: 4px 0; border-bottom: 1px solid var(--ax-rule); display: flex; gap: 8px; align-items: center; color: var(--ax-muted); }
+.steps li.now { color: var(--ax-ink); } .steps li.ok { color: var(--ax-good); } .steps li.bad { color: var(--ax-critical); }
+.steps li::before { content: "·"; width: 10px; }
+.steps li.ok::before { content: "■"; } .steps li.bad::before { content: "■"; } .steps li.now::before { content: "▸"; }
+#log tbody td:nth-child(2) { font-family: var(--ax-font-mono); font-size: 12px; }
+.hint { font: 12px var(--ax-font); color: var(--ax-muted); margin-top: 8px; }
+</style>
+</head>
+<body class="ax">
+<main class="ax-page">
+  <header class="ax-mast">
+    <div>
+      <h1>PACE RACER provisioning</h1>
+      <div class="ax-meta"><span id="mFw">fw –</span><span id="mPart">–</span><span id="mMac">mac –</span><span class="ax-status" id="mLink">Disconnected</span></div>
+    </div>
+    <div class="ctl">
+      <select class="ax-input" id="transport"><option value="usb">WebUSB</option><option value="eth">Ethernet via bridge</option></select>
+      <input class="ax-input" id="ethTarget" placeholder="board IP" style="width:150px;display:none">
+      <button class="ax-btn" id="findBtn" style="display:none">Find boards</button>
+      <button class="ax-btn primary" id="connectBtn" data-fx="ripple">Connect</button>
+      <button class="ax-btn" id="resetBtn" disabled>Reset board</button>
+    </div>
+  </header>
+
+  <section class="ax-tiles">
+    <div class="ax-tile"><div class="ax-label">Axis</div><div class="ax-value" id="tAxis">–</div><div class="ax-sub" id="tAxisSub">not read yet</div></div>
+    <div class="ax-tile"><div class="ax-label">Feedback</div><div class="ax-value" id="tFb">–</div><div class="ax-sub" id="tFbSub">–</div></div>
+    <div class="ax-tile"><div class="ax-label">Hall state</div><div class="ax-value" id="tHall">–</div><div class="halls"><span id="hA">A</span><span id="hB">B</span><span id="hC">C</span></div><div class="ax-sub" id="tHallSub">–</div></div>
+    <div class="ax-tile"><div class="ax-label">Wheel speed</div><div class="ax-value" id="tRpm">0<small>rpm</small></div><div class="ax-sub" id="tRpmSub">from the halls</div></div>
+    <div class="ax-tile"><div class="ax-label">Ethernet</div><div class="ax-value" id="tIp" style="font-size:20px">–</div><div class="ax-sub" id="tIpSub">–</div></div>
+  </section>
+
+  <section class="ax-grid two">
+    <div class="ax-panel" id="provPanel">
+      <h2>Provision</h2>
+      <div class="ax-cap">Which wheel this board is, and what it commutates on. Saved to NVS; a reboot applies the axis.</div>
+      <div class="row">
+        <span class="ax-label" style="width:70px">Axis</span>
+        <select class="ax-input" id="axisSel">
+          <option value="0">0 front_caster_left</option><option value="1">1 front_caster_right</option>
+          <option value="2" selected>2 drive_left</option><option value="3">3 drive_right</option>
+        </select>
+        <button class="ax-btn" id="axisBtn" disabled>Save axis</button>
+      </div>
+      <div class="row">
+        <span class="ax-label" style="width:70px">Feedback</span>
+        <select class="ax-input" id="fbSel"><option value="hall" selected>hall</option><option value="enc">enc</option></select>
+        <button class="ax-btn" id="fbBtn" disabled>Save feedback</button>
+      </div>
+      <div class="row">
+        <button class="ax-btn" id="rebootBtn" disabled>Reboot to apply</button>
+        <button class="ax-btn" id="refreshBtn" disabled>Re-read</button>
+      </div>
+    </div>
+
+    <div class="ax-panel" id="calPanel">
+      <h2>Hall calibration</h2>
+      <div class="ax-cap">Wheel off the ground and free, motor supply on. Spins 30 rpm each way at 3 A for about 15 s and saves the sector table.</div>
+      <div class="row">
+        <button class="ax-btn primary" id="calBtn" data-fx="sparks" disabled>Start calibration</button>
+        <button class="ax-btn danger" id="stopBtn" disabled>Stop motor</button>
+        <span class="ax-status" id="calStatus">Idle</span>
+      </div>
+      <ul class="steps" id="calSteps">
+        <li>Hall lines legal (not 000 or 111)</li>
+        <li>Arm: ho 9999 45 1, hcal 6</li>
+        <li>Spin +30 rpm, collect</li>
+        <li>Spin -30 rpm, collect</li>
+        <li>Table saved, cal=1</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="ax-grid two">
+    <div class="ax-panel" id="fwPanel">
+      <h2>Firmware</h2>
+      <div class="ax-cap">OTA of an app image. The board reboots pending-verify; this page reconnects and marks it valid once it answers.</div>
+      <div class="row">
+        <input type="file" id="fwFile" accept=".bin" class="ax-input" style="max-width:260px">
+        <button class="ax-btn" id="flashBtn" disabled>Flash</button>
+        <button class="ax-btn" id="abortBtn" disabled>Abort</button>
+      </div>
+      <div class="bar" id="fwBar"><div></div></div>
+      <div class="row">
+        <span class="ax-status" id="fwStatus">No image chosen</span>
+      </div>
+      <div class="row">
+        <button class="ax-btn" id="validBtn" disabled>Mark valid</button>
+        <button class="ax-btn danger" id="rollbackBtn" disabled>Roll back</button>
+      </div>
+    </div>
+
+    <div class="ax-panel">
+      <h2>Console</h2>
+      <div class="ax-cap">Any firmware command. Output is the board's stdout.</div>
+      <div class="row">
+        <input class="ax-input" id="conIn" placeholder="hs, axis, atos, mi, tune ..." style="flex:1" disabled>
+        <button class="ax-btn" id="conBtn" disabled>Send</button>
+        <button class="ax-btn" id="conClr">Clear</button>
+      </div>
+      <pre class="out" id="conOut"><span class="sys">Not connected. Choose WebUSB (board on the laptop) or Ethernet (through tools/eth_bridge.py) and press Connect.</span></pre>
+    </div>
+  </section>
+
+  <section class="ax-panel">
+    <h2>Event log</h2>
+    <div class="ax-cap">Most recent first</div>
+    <table id="log"><thead><tr><th>Time</th><th>Event</th><th>Status</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+
+<script>
+// alex-style ax-fx.js (busy spinners, hover effects, value flash)
+(function () {
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches, NS = 'http://www.w3.org/2000/svg';
+  const tok = v => getComputedStyle(document.documentElement).getPropertyValue('--ax-' + v).trim();
+  function busy(el, on, label) {
+    if (el.matches('button, .ax-btn, a, input')) {
+      if (on) { if (!el.dataset.axIdle) el.dataset.axIdle = el.innerHTML; el.innerHTML = `<span class="ax-spin"></span>${label || el.textContent.trim()}`; el.disabled = true; el.setAttribute('aria-busy', 'true'); }
+      else if (el.dataset.axIdle !== undefined) { el.innerHTML = el.dataset.axIdle; delete el.dataset.axIdle; el.disabled = false; el.removeAttribute('aria-busy'); }
+      return;
+    }
+    el.querySelector(':scope > .ax-spin-wrap')?.remove(); el.classList.toggle('ax-loading', on); el.toggleAttribute('aria-busy', on);
+    if (on) { const w = document.createElement('div'); w.className = 'ax-spin-wrap'; w.innerHTML = `<span class="ax-spin lg"></span>${label ? `<span>${label}</span>` : ''}`; el.appendChild(w); }
+  }
+  window.axBusy = busy;
+  let layer; const getLayer = () => layer || (layer = document.body.appendChild(Object.assign(document.createElementNS(NS, 'svg'), { })), layer.setAttribute('class', 'ax-fx-layer'), layer);
+  const rand = (a, b) => a + Math.random() * (b - a);
+  function edgePoint(r) { const per = 2 * (r.width + r.height); let d = rand(0, per); if (d < r.width) return [r.left + d, r.top, 0, -1]; if ((d -= r.width) < r.height) return [r.right, r.top + d, 1, 0]; if ((d -= r.height) < r.width) return [r.right - d, r.bottom, 0, 1]; d -= r.width; return [r.left, r.bottom - d, -1, 0]; }
+  function add(tag, attrs, frames, opts) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); getLayer().appendChild(e); e.animate(frames, opts).onfinish = () => e.remove(); return e; }
+  const effects = {
+    sparks(r, accent) { const [x, y, nx, ny] = edgePoint(r); const a = Math.atan2(ny, nx) + rand(-0.7, 0.7), dist = rand(14, 34), dx = Math.cos(a), dy = Math.sin(a);
+      add('path', { d: `M${x} ${y}l${dx * 6} ${dy * 6}`, stroke: Math.random() < 0.3 ? '#fff' : accent, 'stroke-width': 2, 'stroke-linecap': 'square' }, [{ transform: 'translate(0,0)', opacity: 1 }, { transform: `translate(${dx * dist}px,${dy * dist + 6}px)`, opacity: 0 }], { duration: rand(300, 480), easing: 'cubic-bezier(.2,.8,.4,1)' }); },
+    ripple(r, accent) { add('rect', { x: r.left, y: r.top, width: r.width, height: r.height, stroke: accent, 'stroke-width': 1.5, style: 'transform-box:fill-box;transform-origin:center' }, [{ transform: 'scale(1)', opacity: 0.9 }, { transform: 'scale(1.25, 1.6)', opacity: 0 }], { duration: 900, easing: 'ease-out' }); },
+  };
+  const rate = { sparks: 40, ripple: 450 };
+  function bindFx(el) { if (el.dataset.fxBound) return; el.dataset.fxBound = '1'; const kind = effects[el.dataset.fx] ? el.dataset.fx : 'sparks'; let timer;
+    const fire = n => { const r = el.getBoundingClientRect(), c = tok('accent'); for (let i = 0; i < n; i++) effects[kind](r, c); };
+    el.addEventListener('mouseenter', () => { if (reduced || el.disabled) return; fire(kind === 'sparks' ? 4 : 1); timer = setInterval(() => fire(1), rate[kind]); });
+    el.addEventListener('mouseleave', () => clearInterval(timer)); el.addEventListener('click', () => { if (!reduced && !el.disabled) fire(kind === 'sparks' ? 14 : 2); }); }
+  window.axSet = function (el, value, { digits = 0, ms = 400 } = {}) {
+    const node = [...el.childNodes].find(n => n.nodeType === 3) || el.insertBefore(document.createTextNode(''), el.firstChild);
+    const from = parseFloat(node.textContent) || 0, t0 = performance.now();
+    el.classList.add('changed'); requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove('changed')));
+    const step = now => { const k = reduced ? 1 : Math.max(0, Math.min(1, (now - t0) / ms)), e = 1 - Math.pow(1 - k, 3); node.textContent = (from + (value - from) * e).toFixed(digits); if (k < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  };
+  const init = () => { document.querySelectorAll('[data-fx]').forEach(bindFx); };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
+
+// ---------------------------------------------------------------- espp stream_frame codec (from espp telemetry.html)
+const USB_VID = 0x1209, USB_PID = 0x0d41;
+const SF_HEADER = 9, SF_CRC = 4, SF_CORR = 2, SF_MAX_PAYLOAD = 4096, SF_MAX_FRAME = SF_HEADER + SF_CORR + SF_MAX_PAYLOAD + SF_CRC;
+const SF_REQUEST = 0x10, SF_REPLY_BIT = 0x01, SF_CORR_BIT = 0x02;
+const CRC_T = (() => { const t = new Uint32Array(256); for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = (c & 1) ? ((c >>> 1) ^ 0xEDB88320) : (c >>> 1); t[i] = c >>> 0; } return t; })();
+const crc32 = b => { let c = 0xFFFFFFFF; for (let i = 0; i < b.length; i++) c = CRC_T[(c ^ b[i]) & 0xFF] ^ (c >>> 8); return (~c) >>> 0; };
+function sfBuild(module, type, payload) {
+  payload = payload || new Uint8Array(0);
+  const f = new Uint8Array(SF_HEADER + payload.length + SF_CRC), v = new DataView(f.buffer);
+  v.setUint16(0, 0x4F54, true); f[2] = SF_REQUEST; f[3] = module; f[4] = type; v.setUint32(5, payload.length, true);
+  f.set(payload, SF_HEADER); v.setUint32(SF_HEADER + payload.length, crc32(f.subarray(0, SF_HEADER + payload.length)), true);
+  return f;
+}
+class SfParser {
+  constructor() { this.buf = new Uint8Array(0); }
+  reset() { this.buf = new Uint8Array(0); }
+  feed(chunk) {
+    const m = new Uint8Array(this.buf.length + chunk.length); m.set(this.buf, 0); m.set(chunk, this.buf.length);
+    const out = []; let pos = 0;
+    for (;;) {
+      while (pos < m.length && !(m[pos] === 0x54 && (pos + 1 >= m.length || m[pos + 1] === 0x4F))) pos++;
+      if (m.length - pos < 3) break;
+      const flags = m[pos + 2], ext = (flags & SF_CORR_BIT) ? SF_CORR : 0, hs = SF_HEADER + ext;
+      if (m.length - pos < hs) break;
+      const view = new DataView(m.buffer, m.byteOffset + pos), len = view.getUint32(5 + ext, true);
+      if (len > SF_MAX_PAYLOAD) { pos++; continue; }
+      const total = hs + len + SF_CRC; if (m.length - pos < total) break;
+      if (crc32(m.subarray(pos, pos + hs + len)) !== view.getUint32(hs + len, true)) { pos++; continue; }
+      out.push({ module: m[pos + 3], type: m[pos + 4], reply: (flags & SF_REPLY_BIT) !== 0, payload: m.slice(pos + hs, pos + hs + len) });
+      pos += total;
+    }
+    this.buf = m.slice(pos); return out;
+  }
+}
+
+// ---------------------------------------------------------------- transports
+class UsbTransport {
+  constructor(device) { this.device = device || null; this.iface = null; this.epIn = null; this.epOut = null; this.reading = false; }
+  async open() {
+    if (!this.device) this.device = await navigator.usb.requestDevice({ filters: [{ vendorId: USB_VID }] });
+    await this.device.open();
+    if (this.device.configuration === null) await this.device.selectConfiguration(1);
+    let found = null;
+    for (const itf of this.device.configuration.interfaces) for (const alt of itf.alternates) {
+      if (alt.interfaceClass !== 0xFF) continue;
+      let inEp = null, outEp = null;
+      for (const ep of alt.endpoints) { if (ep.type !== 'bulk') continue; if (ep.direction === 'in' && !inEp) inEp = ep; else if (ep.direction === 'out' && !outEp) outEp = ep; }
+      if (inEp && outEp) { found = { itf: itf.interfaceNumber, alt: alt.alternateSetting, inEp, outEp }; break; }
+    }
+    if (!found) throw new Error('no vendor interface with a bulk IN+OUT pair');
+    await this.device.claimInterface(found.itf);
+    if (found.alt !== 0) await this.device.selectAlternateInterface(found.itf, found.alt);
+    this.iface = found.itf; this.epIn = found.inEp.endpointNumber; this.epOut = found.outEp.endpointNumber;
+  }
+  name() { return `${this.device.productName || 'USB'} ${this.device.serialNumber || ''}`.trim(); }
+  async send(bytes) {
+    let sent = 0;
+    while (sent < bytes.length) {
+      const out = await this.device.transferOut(this.epOut, sent === 0 ? bytes : bytes.subarray(sent));
+      if (out.status !== 'ok') throw new Error('USB OUT ' + out.status);
+      const n = out.bytesWritten || 0; if (!n) throw new Error('USB OUT made no progress'); sent += n;
+    }
+  }
+  async readLoop(onData) {
+    this.reading = true;
+    while (this.reading && this.device) {
+      let r;
+      try { r = await this.device.transferIn(this.epIn, 65536); } catch (e) { if (this.reading) throw e; return; }
+      if (!this.reading) return;
+      if (r.status === 'stall') { try { await this.device.clearHalt('in', this.epIn); } catch (e) {} continue; }
+      if (r.data && r.data.byteLength) onData(new Uint8Array(r.data.buffer, r.data.byteOffset, r.data.byteLength));
+    }
+  }
+  async close() { this.reading = false; if (this.device) { try { await this.device.releaseInterface(this.iface); } catch (e) {} try { await this.device.close(); } catch (e) {} } this.device = null; }
+}
+class WsTransport {
+  constructor(target) { this.target = target; this.ws = null; this.onData = null; this.onClose = null; }
+  async open() {
+    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?target=${encodeURIComponent(this.target)}`;
+    await new Promise((res, rej) => {
+      const ws = new WebSocket(url); ws.binaryType = 'arraybuffer';
+      ws.onopen = () => { this.ws = ws; res(); };
+      ws.onerror = () => rej(new Error('bridge refused ' + this.target + ' (is tools/eth_bridge.py running, is the board on the LAN?)'));
+      ws.onmessage = ev => this.onData && this.onData(new Uint8Array(ev.data));
+      ws.onclose = () => { const was = this.ws; this.ws = null; if (was && this.onClose) this.onClose(); };
+    });
+  }
+  name() { return 'ethernet ' + this.target; }
+  async send(bytes) { if (!this.ws) throw new Error('link closed'); this.ws.send(bytes); }
+  async readLoop(onData) { this.onData = onData; await new Promise(res => { this.onClose = res; if (!this.ws) res(); }); }
+  async close() { const ws = this.ws; this.ws = null; if (ws) ws.close(); if (this.onClose) this.onClose(); }
+}
+
+// ---------------------------------------------------------------- link: dispatcher over one transport
+const M_OTA = 0, M_TM = 3, M_CON = 0x10, M_SYS = 0x20;
+const OTA = { BEGIN: 1, DATA: 2, FINISH: 3, ABORT: 4, OK: 5, ERROR: 6, PROGRESS: 7, GET_STATUS: 8, MARK_VALID: 9, MARK_INVALID: 10, STATUS: 11 };
+const $ = id => document.getElementById(id);
+const dec = new TextDecoder(), enc = new TextEncoder();
+let link = null;        // { t, parser, kind }
+let waiters = [];       // { module, types, resolve, reject, timer }
+let stdoutSinks = [];   // functions receiving stdout text
+let busyFlow = false;   // calibration or flash running: pause polling
+
+function now() { const d = new Date(); return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0'); }
+function logEvent(text, status, cls) {
+  const tb = $('log').querySelector('tbody'), tr = document.createElement('tr');
+  tr.innerHTML = `<td class="time">${now()}</td><td></td><td><span class="ax-status ${cls || ''}">${status || ''}</span></td>`;
+  tr.children[1].textContent = text; tb.insertBefore(tr, tb.firstChild);
+  while (tb.children.length > 60) tb.removeChild(tb.lastChild);
+}
+function conPrint(text, cls) {
+  const o = $('conOut'); const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; o.appendChild(s);
+  while (o.childNodes.length > 800) o.removeChild(o.firstChild);
+  o.scrollTop = o.scrollHeight;
+}
+
+function onFrame(f) {
+  if (f.module === M_CON && f.type === 0x82) { const text = dec.decode(f.payload); onStdout(text); return; }
+  if (!f.reply) return;
+  for (const w of [...waiters]) if (w.module === f.module && w.types.includes(f.type)) {
+    if (f.module === M_OTA && f.type === OTA.PROGRESS) { w.progress && w.progress(f); continue; }
+    waiters.splice(waiters.indexOf(w), 1); clearTimeout(w.timer); w.resolve(f);
+  }
+}
+function request(module, type, payload, types, timeoutMs, progress) {
+  return new Promise(async (resolve, reject) => {
+    if (!link) return reject(new Error('not connected'));
+    const w = { module, types, resolve, reject, progress, timer: setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); reject(new Error('timeout waiting for reply')); }, timeoutMs || 3000) };
+    waiters.push(w);
+    try { await link.t.send(sfBuild(module, type, payload)); } catch (e) { waiters.splice(waiters.indexOf(w), 1); clearTimeout(w.timer); reject(e); }
+  });
+}
+let lineBuf = '';
+function onStdout(text) {
+  for (const s of stdoutSinks) s(text);
+  lineBuf += text;
+  let i;
+  while ((i = lineBuf.indexOf('\n')) >= 0) { const l = lineBuf.slice(0, i); lineBuf = lineBuf.slice(i + 1); parseLine(l); if (l.startsWith('#') || l.startsWith('!')) conPrint(l + '\n', l.startsWith('!') ? 'err' : ''); }
+}
+let cmdChain = Promise.resolve();
+function cmd(line, waitMs) {
+  // serialized: one console line at a time, collect stdout for waitMs
+  const run = async () => {
+    if (!link) throw new Error('not connected');
+    let buf = ''; const sink = t => { buf += t; }; stdoutSinks.push(sink);
+    try {
+      await link.t.send(sfBuild(M_CON, 0x01, enc.encode(line)));
+      await new Promise(r => setTimeout(r, waitMs || 800));
+    } finally { stdoutSinks.splice(stdoutSinks.indexOf(sink), 1); }
+    return buf;
+  };
+  const p = cmdChain.then(run, run); cmdChain = p.catch(() => {}); return p;
+}
+const first = (text, prefix) => (text.split('\n').find(l => l.startsWith(prefix)) || '').trim();
+
+// ---------------------------------------------------------------- parsing board lines into tiles
+const state = { axis: null, axisName: '', fb: '', fbCal: false, hallSaved: false, encSaved: false, motor: '', hall: null, rpm: 0, ip: '', fw: '' };
+function parseLine(l) {
+  let m;
+  if ((m = l.match(/^#axis (\d+) \((\w+)\) \| fb (\w+)( \(NOT CALIBRATED\))? \| enc ofs (\w+) \| hall table (\w+) \| motor (\w+)/))) {
+    state.axis = +m[1]; state.axisName = m[2]; state.fb = m[3]; state.fbCal = !m[4]; state.encSaved = m[5] === 'saved'; state.hallSaved = m[6] === 'saved'; state.motor = m[7];
+    $('tAxis').textContent = `${state.axis} ${state.axisName}`; $('tAxisSub').textContent = `motor ${state.motor}`;
+    $('axisSel').value = String(state.axis); $('fbSel').value = state.fb;
+    $('tFb').textContent = state.fb; $('tFbSub').innerHTML = state.fbCal ? '<span class="ax-status good">Calibrated</span>' : '<span class="ax-status warning">Not calibrated</span>';
+    $('tFbSub').innerHTML += ` <span class="ax-muted">hall ${state.hallSaved ? 'saved' : 'none'} · enc ${state.encSaved ? 'saved' : 'none'}</span>`;
+  } else if ((m = l.match(/^#hall state=0b([01]{3}) \(A=(\d) B=(\d) C=(\d)\) sector=(-?\d+) steps=(-?\d+) rpm=(-?[\d.]+) cal=(\d)/))) {
+    state.hall = m[1]; state.rpm = parseFloat(m[7]);
+    $('tHall').textContent = m[1]; $('hA').classList.toggle('on', m[2] === '1'); $('hB').classList.toggle('on', m[3] === '1'); $('hC').classList.toggle('on', m[4] === '1');
+    const illegal = m[1] === '000' || m[1] === '111';
+    $('tHallSub').innerHTML = illegal ? '<span class="ax-status critical">Illegal: no hall signal</span>' : `<span class="ax-status good">Sector ${m[5]}</span> <span class="ax-muted">steps ${m[6]} cal=${m[8]}</span>`;
+    axSet($('tRpm'), state.rpm, { digits: 1 });
+  } else if ((m = l.match(/^#atos link=(\w+) ip=(\S*)/))) {
+    state.ip = m[2]; $('tIp').textContent = m[2] || 'no lease'; $('tIpSub').innerHTML = m[1] === 'up' ? '<span class="ax-status good">RTPS up</span>' : (m[2] ? '<span class="ax-status warning">lease, RTPS down (axis unassigned?)</span>' : '<span class="ax-status">no DHCP lease</span>');
+  }
+}
+
+// ---------------------------------------------------------------- connection
+function setConnected(on, label) {
+  $('mLink').className = 'ax-status ' + (on ? 'live' : ''); $('mLink').textContent = label || (on ? 'Live' : 'Disconnected');
+  for (const id of ['resetBtn', 'axisBtn', 'fbBtn', 'rebootBtn', 'refreshBtn', 'calBtn', 'conIn', 'conBtn', 'validBtn', 'rollbackBtn']) $(id).disabled = !on;
+  $('stopBtn').disabled = !on; $('flashBtn').disabled = !on || !$('fwFile').files.length;
+  $('connectBtn').textContent = on ? 'Disconnect' : 'Connect';
+}
+async function connect(transport) {
+  const t = transport || ($('transport').value === 'usb' ? new UsbTransport() : new WsTransport($('ethTarget').value.trim()));
+  if (t instanceof WsTransport && !t.target) throw new Error('enter a board IP, or press Find boards');
+  axBusy($('connectBtn'), true, 'Connecting');
+  try {
+    await t.open();
+    link = { t, parser: new SfParser(), kind: t instanceof UsbTransport ? 'usb' : 'eth' };
+    t.readLoop(d => { for (const f of link.parser.feed(d)) onFrame(f); }).catch(e => { conPrint('link read error: ' + e.message + '\n', 'err'); }).finally(() => { if (link && link.t === t) disconnect(true); });
+    if (link.kind === 'usb') { // stdout only mirrors to the vendor stream while telemetry streams
+      const p = new Uint8Array(3); p[0] = 1; new DataView(p.buffer).setUint16(1, 1000, true); await t.send(sfBuild(M_TM, 0x02, p));
+    }
+    setConnected(true); conPrint(`connected: ${t.name()}\n`, 'sys'); logEvent('Connected ' + t.name(), 'Connected', 'good');
+    await cmd('sq 1', 300);
+    await readInfo(); await readState();
+    schedulePoll();
+  } catch (e) {
+    try { await t.close(); } catch (_) {}
+    link = null; setConnected(false); logEvent('Connect failed: ' + e.message, 'Failed', 'critical'); conPrint(e.message + '\n', 'err');
+    throw e;
+  } finally { axBusy($('connectBtn'), false); $('connectBtn').textContent = link ? 'Disconnect' : 'Connect'; }
+}
+async function disconnect(lost) {
+  const l = link; link = null; clearTimeout(pollTimer);
+  for (const w of waiters) { clearTimeout(w.timer); w.reject(new Error('disconnected')); } waiters = [];
+  if (l) { try { await l.t.close(); } catch (_) {} }
+  setConnected(false, lost ? 'Link lost' : 'Disconnected'); logEvent(lost ? 'Link lost' : 'Disconnected', lost ? 'Lost' : 'Off', lost ? 'warning' : '');
+}
+async function readInfo() {
+  try {
+    const f = await request(M_SYS, 0x02, null, [0x82], 3000); const j = JSON.parse(dec.decode(f.payload));
+    state.fw = j.version; $('mFw').textContent = `fw ${j.version} (${j.built})`; $('mPart').textContent = `${j.partition}${j.pending_verify ? ' PENDING VERIFY' : ''}`; $('mMac').textContent = 'mac ' + (j.mac || '?');
+    if (j.ip !== undefined) { $('tIp').textContent = j.ip || 'no lease'; }
+    $('validBtn').disabled = !j.pending_verify;
+    if (j.pending_verify) $('fwStatus').innerHTML = 'Running image is pending verify', $('fwStatus').className = 'ax-status warning';
+    return j;
+  } catch (e) { conPrint('info: ' + e.message + '\n', 'err'); return null; }
+}
+async function readState() { await cmd('axis', 500); await cmd('hs', 500); await cmd('atos', 500); }
+let pollTimer = null, pollN = 0;
+function schedulePoll() { clearTimeout(pollTimer); pollTimer = setTimeout(poll, 1000); }
+async function poll() {
+  if (!link) return;
+  if (!busyFlow) { try { await cmd('hs', 350); if (++pollN % 6 === 0) { await cmd('axis', 350); await cmd('atos', 350); } } catch (_) {} }
+  schedulePoll();
+}
+
+// ---------------------------------------------------------------- actions
+$('transport').onchange = () => { const eth = $('transport').value === 'eth'; $('ethTarget').style.display = eth ? '' : 'none'; $('findBtn').style.display = eth ? '' : 'none'; };
+if (!navigator.usb) { $('transport').value = 'eth'; $('transport').onchange(); }
+if (location.protocol !== 'file:' && location.port) { /* served by the bridge: default to ethernet */ $('transport').value = 'eth'; $('transport').onchange(); }
+$('findBtn').onclick = async e => {
+  axBusy(e.currentTarget, true, 'Finding');
+  try {
+    const r = await fetch('/discover'); const boards = await r.json();
+    if (!boards.length) { logEvent('No boards answered the PACE? broadcast', 'None', 'warning'); conPrint('no boards on the LAN\n', 'err'); }
+    for (const b of boards) { conPrint(`${b.ip}  axis ${b.axis} ${b.axis_name}  ${b.motor}  fw ${b.version}  ${b.partition}${b.pending_verify ? ' PENDING' : ''}\n`, 'sys'); }
+    if (boards.length === 1) $('ethTarget').value = boards[0].ip;
+    else if (boards.length) { const pick = boards.find(b => b.axis_name === 'drive_left') || boards[0]; $('ethTarget').value = pick.ip; logEvent(`${boards.length} boards; picked ${pick.ip} ${pick.axis_name}`, 'Pick', ''); }
+  } catch (err) { conPrint('discover failed: ' + err.message + ' (run tools/eth_bridge.py and open this page from it)\n', 'err'); }
+  finally { axBusy(e.currentTarget, false); }
+};
+$('connectBtn').onclick = async () => { if (link) return disconnect(false); try { await connect(); } catch (_) {} };
+$('resetBtn').onclick = async e => {
+  axBusy(e.currentTarget, true, 'Resetting');
+  try { await request(M_SYS, 0x01, null, [0x81], 3000); logEvent('Reset acknowledged, board restarting', 'Reset', 'warning'); await reconnectAfterReboot(); }
+  catch (err) { logEvent('Reset: ' + err.message, 'Failed', 'critical'); }
+  finally { axBusy(e.currentTarget, false); }
+};
+$('refreshBtn').onclick = () => { readInfo(); readState(); };
+$('axisBtn').onclick = async e => {
+  axBusy(e.currentTarget, true, 'Saving');
+  const n = $('axisSel').value; const r = await cmd('axis ' + n, 800);
+  if (r.includes('saved')) logEvent(`Axis ${n} saved; reboot to apply`, 'Saved', 'good'); else logEvent('axis not accepted: ' + r.trim(), 'Failed', 'critical');
+  axBusy(e.currentTarget, false); await cmd('axis', 400);
+};
+$('fbBtn').onclick = async e => {
+  axBusy(e.currentTarget, true, 'Saving');
+  const v = $('fbSel').value; const r = await cmd('fb ' + v, 800);
+  if (first(r, '#fb ' + v)) logEvent(`Feedback ${v} saved`, 'Saved', 'good'); else logEvent('fb not accepted: ' + r.trim(), 'Failed', 'critical');
+  axBusy(e.currentTarget, false); await cmd('axis', 400);
+};
+$('rebootBtn').onclick = () => $('resetBtn').click();
+$('stopBtn').onclick = async () => { calAbort = true; try { await cmd('stop', 1500); logEvent('Stop sent', 'Stop', 'warning'); } catch (_) {} };
+$('conBtn').onclick = async () => { const l = $('conIn').value.trim(); if (!l) return; $('conIn').value = ''; conPrint('> ' + l + '\n', 'sys'); const r = await cmd(l, 1200); const rest = r.split('\n').filter(x => x && !x.startsWith('#') && !x.startsWith('!') && !/^[\d.]+, [A-Z]/.test(x)); if (rest.length) conPrint(rest.join('\n') + '\n'); };
+$('conIn').onkeydown = e => { if (e.key === 'Enter') $('conBtn').click(); };
+$('conClr').onclick = () => { $('conOut').textContent = ''; };
+
+// Reconnect after a reboot: USB re-enumerates (permission persists, so getDevices finds it), the bridge socket drops and is reopened.
+async function reconnectAfterReboot(timeoutMs) {
+  const kind = link ? link.kind : $('transport').value; const target = $('ethTarget').value.trim();
+  const deadline = Date.now() + (timeoutMs || 90000);
+  $('mLink').className = 'ax-status warning'; $('mLink').textContent = 'Rebooting';
+  await disconnect(false);
+  await new Promise(r => setTimeout(r, 2500));
+  while (Date.now() < deadline) {
+    try {
+      if (kind === 'usb') {
+        const devs = (await navigator.usb.getDevices()).filter(d => d.vendorId === USB_VID);
+        if (devs.length) { await connect(new UsbTransport(devs[0])); return true; }
+      } else { await connect(new WsTransport(target)); return true; }
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 1500));
+  }
+  logEvent('Board did not come back', 'Timeout', 'critical'); return false;
+}
+
+// ---------------------------------------------------------------- hall calibration (same sequence as tools/provision.py)
+let calAbort = false;
+function stepSet(i, cls) { const li = $('calSteps').children[i]; li.className = cls; }
+function calStatus(text, cls) { $('calStatus').className = 'ax-status ' + (cls || ''); $('calStatus').textContent = text; }
+$('calBtn').onclick = async e => {
+  const HCAL_SECS = 6, RPM = 30, AMPS = 3, RAMP = 5;
+  const btn = e.currentTarget; axBusy(btn, true, 'Calibrating'); busyFlow = true; calAbort = false;
+  for (let i = 0; i < 5; i++) stepSet(i, '');
+  const fail = async (msg, step) => { stepSet(step, 'bad'); calStatus(msg, 'critical'); logEvent('Hall calibration: ' + msg, 'Failed', 'critical'); try { await cmd('stop', 2000); } catch (_) {} };
+  try {
+    stepSet(0, 'now'); calStatus('Checking halls');
+    const hs0 = first(await cmd('hs', 600), '#hall state');
+    const st = (hs0.match(/state=0b([01]{3})/) || [])[1];
+    if (!st || st === '000' || st === '111') return await fail(`hall lines read ${st || '?'}: no hall signal, check the connector and supply`, 0);
+    stepSet(0, 'ok');
+    stepSet(1, 'now'); calStatus('Arming');
+    await cmd('ho 9999 45 1', 500);
+    const arm = await cmd('hcal ' + HCAL_SECS, 800);
+    if (!arm.includes('#hcal armed')) return await fail('hcal did not arm: ' + arm.trim(), 1);
+    stepSet(1, 'ok');
+    let log = '';
+    for (const [k, rpm] of [[2, RPM], [3, -RPM]]) {
+      if (calAbort) return await fail('aborted', k);
+      stepSet(k, 'now'); calStatus(`Spinning ${rpm > 0 ? '+' : ''}${rpm} rpm`);
+      const r = await cmd(`run ${AMPS} ${rpm} ${RAMP}`, 800);
+      if (!r.includes('#run')) return await fail("'run' refused (sampler off? power-cycle with the motor supply on): " + r.trim(), k);
+      for (let s = 0; s < RAMP + 1; s++) { if (calAbort) return await fail('aborted', k); log += await cmd('hs', 1000); }
+      const hs = first(await cmd('hs', 600), '#hall state'); const got = Math.abs(parseFloat((hs.match(/rpm=(-?[\d.]+)/) || [0, 0])[1]));
+      if (got < 0.5 * RPM) return await fail(`wheel did not turn (${got.toFixed(0)} rpm): supply off, wheel blocked, or hall wiring`, k);
+      calStatus(`Collecting at ${got.toFixed(0)} rpm`);
+      for (let s = 0; s < HCAL_SECS + 3; s++) { if (calAbort) return await fail('aborted', k); log += await cmd('hs', 1000); }
+      log += await cmd('stop', 2500);
+      stepSet(k, 'ok');
+    }
+    stepSet(4, 'now'); calStatus('Checking table');
+    const r = await cmd('hs', 800); log += r; const hs = first(r, '#hall state');
+    const ax = await cmd('axis', 600);
+    if (log.includes('hcal FAILED')) return await fail(first(log, '! hcal FAILED'), 4);
+    if (hs.includes('cal=1') && (log.includes('#hcal OK') || ax.includes('hall table saved'))) {
+      stepSet(4, 'ok'); calStatus('Table saved', 'good'); logEvent('Hall table saved: ' + first(r, '#hall centers'), 'Saved', 'good');
+    } else return await fail('did not finish (' + hs + '); it needs 6 s of rotation per direction, run again with the wheel free', 4);
+  } catch (err) { await fail(err.message, 4); }
+  finally { busyFlow = false; axBusy(btn, false); }
+};
+
+// ---------------------------------------------------------------- firmware
+let flashAbort = false;
+$('fwFile').onchange = () => { $('flashBtn').disabled = !link || !$('fwFile').files.length; $('fwStatus').className = 'ax-status'; $('fwStatus').textContent = $('fwFile').files.length ? $('fwFile').files[0].name : 'No image chosen'; };
+const u32 = n => { const p = new Uint8Array(4); new DataView(p.buffer).setUint32(0, n >>> 0, true); return p; };
+async function otaTransact(type, payload, timeout, progress) {
+  const f = await request(M_OTA, type, payload, [OTA.OK, OTA.ERROR, OTA.STATUS, OTA.PROGRESS], timeout, progress);
+  if (f.type === OTA.ERROR) { const v = new DataView(f.payload.buffer, f.payload.byteOffset); throw new Error(`device error ${v.getUint32(0, true)}: ${dec.decode(f.payload.subarray(4))}`); }
+  return f;
+}
+function parseStatus(f) { const p = f.payload; let i = 1; const rs = () => { if (i >= p.length) return ''; const n = p[i++]; const s = dec.decode(p.subarray(i, i + n)); i += n; return s; }; return { pending: !!(p[0] & 1), rollback: !!(p[0] & 2), version: rs(), project: rs() }; }
+$('flashBtn').onclick = async e => {
+  const file = $('fwFile').files[0]; if (!file || !link) return;
+  const image = new Uint8Array(await file.arrayBuffer());
+  if (image[0] !== 0xE9) { $('fwStatus').className = 'ax-status critical'; $('fwStatus').textContent = 'Not an ESP app image (first byte is not 0xE9)'; return; }
+  const btn = e.currentTarget; axBusy(btn, true, 'Flashing'); $('abortBtn').disabled = false; busyFlow = true; flashAbort = false;
+  const bar = $('fwBar'); bar.className = 'bar'; bar.firstElementChild.style.width = '0';
+  const setP = (w, t) => { bar.firstElementChild.style.width = (100 * w / t).toFixed(1) + '%'; $('fwStatus').textContent = `${(w / 1024).toFixed(0)} / ${(t / 1024).toFixed(0)} KiB`; };
+  $('fwStatus').className = 'ax-status warning';
+  const t0 = Date.now();
+  try {
+    await cmdChain; // let any console poll finish
+    $('fwStatus').textContent = 'BEGIN: erasing the update slot';
+    logEvent(`Flashing ${file.name} (${(image.length / 1024).toFixed(0)} KiB)`, 'OTA', 'warning');
+    await otaTransact(OTA.BEGIN, u32(image.length), 60000);
+    let sent = 0;
+    while (sent < image.length) {
+      if (flashAbort) throw Object.assign(new Error('aborted'), { userAbort: true });
+      const chunk = image.subarray(sent, Math.min(sent + SF_MAX_PAYLOAD, image.length));
+      await otaTransact(OTA.DATA, chunk, 5000); sent += chunk.length; setP(sent, image.length);
+    }
+    $('fwStatus').textContent = 'FINISH: device verifying the image';
+    await otaTransact(OTA.FINISH, null, 60000);
+    bar.className = 'bar done'; const dt = (Date.now() - t0) / 1000;
+    $('fwStatus').className = 'ax-status good'; $('fwStatus').textContent = `Uploaded in ${dt.toFixed(1)} s, board rebooting`;
+    logEvent(`OTA complete in ${dt.toFixed(1)} s (${(image.length / 1024 / dt).toFixed(0)} KiB/s); waiting for the board`, 'Rebooting', 'warning');
+    busyFlow = false;
+    const back = await reconnectAfterReboot(90000);
+    if (back) {
+      const st = parseStatus(await otaTransact(OTA.GET_STATUS, null, 3000));
+      if (st.pending) { await otaTransact(OTA.MARK_VALID, null, 3000); logEvent(`New image ${st.version} answered and was marked valid`, 'Valid', 'good'); $('fwStatus').textContent = `Running ${st.version}, marked valid`; }
+      else { logEvent(`Running ${st.version}, already confirmed`, 'OK', 'good'); }
+      await readInfo();
+    } else { $('fwStatus').className = 'ax-status critical'; $('fwStatus').textContent = 'Board did not come back; a power cycle boots the previous image'; }
+  } catch (err) {
+    bar.className = 'bar failed'; $('fwStatus').className = 'ax-status critical';
+    $('fwStatus').textContent = (err.userAbort ? 'Aborted' : 'Failed: ' + err.message);
+    logEvent('OTA ' + (err.userAbort ? 'aborted' : 'failed: ' + err.message), 'Failed', 'critical');
+    if (link) { try { await otaTransact(OTA.ABORT, null, 3000); } catch (_) {} }
+  } finally { busyFlow = false; axBusy(btn, false); $('abortBtn').disabled = true; $('flashBtn').disabled = !link || !$('fwFile').files.length; }
+};
+$('abortBtn').onclick = () => { flashAbort = true; };
+$('validBtn').onclick = async e => { axBusy(e.currentTarget, true, 'Marking'); try { await otaTransact(OTA.MARK_VALID, null, 3000); logEvent('Running image marked valid', 'Valid', 'good'); await readInfo(); } catch (err) { logEvent('Mark valid: ' + err.message, 'Failed', 'critical'); } finally { axBusy(e.currentTarget, false); } };
+$('rollbackBtn').onclick = async e => {
+  if (!confirm('Roll back to the previous firmware image and reboot?')) return;
+  axBusy(e.currentTarget, true, 'Rolling back');
+  try { await otaTransact(OTA.MARK_INVALID, null, 3000); logEvent('Rolling back, board rebooting', 'Rollback', 'warning'); await reconnectAfterReboot(); }
+  catch (err) { logEvent('Rollback: ' + err.message, 'Failed', 'critical'); } finally { axBusy(e.currentTarget, false); }
+};
+if (navigator.usb) navigator.usb.addEventListener('disconnect', ev => { if (link && link.kind === 'usb' && link.t.device === ev.device) disconnect(true); });
+</script>
+</body>
+</html>
