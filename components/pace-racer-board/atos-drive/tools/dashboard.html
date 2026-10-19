@@ -166,8 +166,9 @@ pre.out .sys { color: var(--ax-muted); } pre.out .err { color: var(--ax-critical
       <h2>Firmware</h2>
       <div class="ax-cap">OTA of an app image. The board reboots pending-verify; this page reconnects and marks it valid once it answers.</div>
       <div class="row">
-        <input type="file" id="fwFile" accept=".bin" class="ax-input" style="max-width:260px">
-        <button class="ax-btn" id="flashBtn" disabled>Flash</button>
+        <select class="ax-input" id="fwBuild" style="display:none;max-width:320px" title="App images the bridge found in build-*/"></select>
+        <input type="file" id="fwFile" accept=".bin" class="ax-input" style="max-width:260px" title="Or choose an app image (or drop one on this panel)">
+        <button class="ax-btn" id="flashBtn" disabled title="Connect to a board first">Flash</button>
         <button class="ax-btn" id="abortBtn" disabled>Abort</button>
       </div>
       <div class="bar" id="fwBar"><div></div></div>
@@ -419,7 +420,7 @@ function parseLine(l) {
 function setConnected(on, label) {
   $('mLink').className = 'ax-status ' + (on ? 'live' : ''); $('mLink').textContent = label || (on ? 'Live' : 'Disconnected');
   for (const id of ['resetBtn', 'axisBtn', 'fbBtn', 'rebootBtn', 'refreshBtn', 'calBtn', 'conIn', 'conBtn', 'validBtn', 'rollbackBtn']) $(id).disabled = !on;
-  $('stopBtn').disabled = !on; $('flashBtn').disabled = !on || !$('fwFile').files.length;
+  $('stopBtn').disabled = !on; fwUpdate();
   $('connectBtn').textContent = on ? 'Disconnect' : 'Connect';
 }
 async function connect(transport) {
@@ -575,7 +576,53 @@ $('calBtn').onclick = async e => {
 
 // ---------------------------------------------------------------- firmware
 let flashAbort = false;
-$('fwFile').onchange = () => { $('flashBtn').disabled = !link || !$('fwFile').files.length; $('fwStatus').className = 'ax-status'; $('fwStatus').textContent = $('fwFile').files.length ? $('fwFile').files[0].name : 'No image chosen'; };
+// The image comes from a file the user picked or dropped (fwPicked), else the
+// build chosen in the bridge's list (fwBuild, only when served by eth_bridge.py).
+var fwPicked = null; // var: setConnected() may call fwUpdate() before this line runs
+function fwSource() {
+  if (fwPicked) return { name: fwPicked.name, read: async () => new Uint8Array(await fwPicked.arrayBuffer()) };
+  const d = $('fwBuild').value;
+  if (!d) return null;
+  return { name: $('fwBuild').selectedOptions[0].textContent, read: async () => {
+    const r = await fetch('/builds/' + encodeURIComponent(d), { cache: 'no-store' });
+    if (!r.ok) throw new Error(`bridge could not read ${d}: HTTP ${r.status}`);
+    return new Uint8Array(await r.arrayBuffer());
+  } };
+}
+function fwUpdate(keepStatus) { // keepStatus: leave a flash result on the status line
+  const b = $('flashBtn');
+  if (b.getAttribute('aria-busy')) return; // a flash is running; its finally block calls back
+  const src = fwSource();
+  b.disabled = busyFlow || !link || !src;
+  b.title = !link ? 'Connect to a board first' : !src ? 'Choose an image first' : 'Flash ' + src.name;
+  if (busyFlow || keepStatus) return;
+  $('fwStatus').className = 'ax-status';
+  $('fwStatus').textContent = !src ? 'No image chosen' : (link ? src.name : src.name + ' · connect to a board to flash');
+}
+$('fwFile').onchange = () => { fwPicked = $('fwFile').files[0] || null; fwUpdate(); };
+$('fwBuild').onchange = () => { fwPicked = null; $('fwFile').value = ''; fwUpdate(); };
+$('fwPanel').addEventListener('dragover', e => { e.preventDefault(); });
+$('fwPanel').addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (f) { fwPicked = f; logEvent('Image dropped: ' + f.name, 'Image', ''); fwUpdate(); }
+});
+async function loadBuilds() {
+  if (location.protocol === 'file:') return; // WebUSB from a file: no bridge to ask
+  try {
+    const r = await fetch('/builds', { cache: 'no-store' });
+    if (!r.ok) return;
+    const list = await r.json();
+    const sel = $('fwBuild'); sel.innerHTML = '';
+    for (const b of list) {
+      const o = document.createElement('option'); o.value = b.dir;
+      o.textContent = `${b.dir} · ${b.version} · ${b.built}`; sel.appendChild(o);
+    }
+    sel.style.display = list.length ? '' : 'none';
+  } catch (_) { /* not the bridge */ }
+  fwUpdate();
+}
+loadBuilds();
 const u32 = n => { const p = new Uint8Array(4); new DataView(p.buffer).setUint32(0, n >>> 0, true); return p; };
 async function otaTransact(type, payload, timeout, progress) {
   const f = await request(M_OTA, type, payload, [OTA.OK, OTA.ERROR, OTA.STATUS, OTA.PROGRESS], timeout, progress);
@@ -584,15 +631,16 @@ async function otaTransact(type, payload, timeout, progress) {
 }
 function parseStatus(f) { const p = f.payload; let i = 1; const rs = () => { if (i >= p.length) return ''; const n = p[i++]; const s = dec.decode(p.subarray(i, i + n)); i += n; return s; }; return { pending: !!(p[0] & 1), rollback: !!(p[0] & 2), version: rs(), project: rs() }; }
 $('flashBtn').onclick = async e => {
-  const file = $('fwFile').files[0]; if (!file || !link) return;
-  const image = new Uint8Array(await file.arrayBuffer());
-  if (image[0] !== 0xE9) { $('fwStatus').className = 'ax-status critical'; $('fwStatus').textContent = 'Not an ESP app image (first byte is not 0xE9)'; return; }
+  const src = fwSource(); if (!src || !link) return fwUpdate();
   const btn = e.currentTarget; axBusy(btn, true, 'Flashing'); $('abortBtn').disabled = false; busyFlow = true; flashAbort = false;
   const bar = $('fwBar'); bar.className = 'bar'; bar.firstElementChild.style.width = '0';
   const setP = (w, t) => { bar.firstElementChild.style.width = (100 * w / t).toFixed(1) + '%'; $('fwStatus').textContent = `${(w / 1024).toFixed(0)} / ${(t / 1024).toFixed(0)} KiB`; };
-  $('fwStatus').className = 'ax-status warning';
+  $('fwStatus').className = 'ax-status warning'; $('fwStatus').textContent = 'Reading ' + src.name;
   const t0 = Date.now();
   try {
+    const image = await src.read(); // inside the try: a browser that refuses the file says so here
+    const file = { name: src.name };
+    if (image[0] !== 0xE9) throw new Error('not an ESP app image (first byte is not 0xE9); pick pace_racer_atos_drive.bin');
     await cmdChain; // let any console poll finish
     $('fwStatus').textContent = 'BEGIN: erasing the update slot';
     logEvent(`Flashing ${file.name} (${(image.length / 1024).toFixed(0)} KiB)`, 'OTA', 'warning');
@@ -621,7 +669,7 @@ $('flashBtn').onclick = async e => {
     $('fwStatus').textContent = (err.userAbort ? 'Aborted' : 'Failed: ' + err.message);
     logEvent('OTA ' + (err.userAbort ? 'aborted' : 'failed: ' + err.message), 'Failed', 'critical');
     if (link) { try { await otaTransact(OTA.ABORT, null, 3000); } catch (_) {} }
-  } finally { busyFlow = false; axBusy(btn, false); $('abortBtn').disabled = true; $('flashBtn').disabled = !link || !$('fwFile').files.length; }
+  } finally { busyFlow = false; axBusy(btn, false); $('abortBtn').disabled = true; fwUpdate(true); }
 };
 $('abortBtn').onclick = () => { flashAbort = true; };
 $('validBtn').onclick = async e => { axBusy(e.currentTarget, true, 'Marking'); try { await otaTransact(OTA.MARK_VALID, null, 3000); logEvent('Running image marked valid', 'Valid', 'good'); await readInfo(); } catch (err) { logEvent('Mark valid: ' + err.message, 'Failed', 'critical'); } finally { axBusy(e.currentTarget, false); } };

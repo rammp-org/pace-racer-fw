@@ -107,7 +107,8 @@ One page for the whole provisioning job, so nobody has to remember the
 console commands: connect, read axis / feedback / hall state live, save the
 axis and feedback source, run the hall calibration with each step reported,
 flash an app image with progress and automatic mark-valid after the reboot,
-roll back, reset, and a free-form console. Styled per alex-style-guide.
+roll back, reset, and a free-form console. Served by the bridge, the Firmware
+panel lists the app images in `build-*/` and flashes one without a file dialog. Styled per alex-style-guide.
 
 Two ways in:
 

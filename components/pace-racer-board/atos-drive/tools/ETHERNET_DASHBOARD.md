@@ -74,9 +74,18 @@ From a terminal the same check is `tools/eth_link.py list`.
 
 ## 5. Flash
 
-1. Choose `build-hub20/pace_racer_atos_drive.bin` in the firmware file picker.
-2. Flash. The page shows progress, waits for the board to reboot and come
-   back, then marks the new image valid.
+1. Pick the image in the **build list** next to the Flash button. The bridge
+   lists every `build-*/pace_racer_atos_drive.bin` it finds, newest first,
+   with its version and build time, so there is no file dialog to fight.
+   For an image from elsewhere, use the file picker or drop the `.bin` on
+   the Firmware panel.
+2. Press **Flash**. The page shows progress, waits for the board to reboot and
+   come back, then marks the new image valid. A failure, including a browser
+   that refuses to read a picked file, is printed on the status line and in
+   the event log. Hover a greyed-out Flash button to see why it is off.
+
+Restart `eth_bridge.py` after pulling a new version of it: the page is read
+fresh on every load, but the build list comes from the running bridge.
 
 Do one wheel at a time. Each wheel is its own board: repeat for the other IP.
 

@@ -9,6 +9,8 @@ inside a wheel, where WebUSB cannot reach.
 Endpoints:
     GET  /                     dashboard.html from this directory
     GET  /discover             JSON list of boards answering "PACE?" (eth_link.discover)
+    GET  /builds               JSON list of app images in ../build-*/ (profile, version, built, size)
+    GET  /builds/<dir>         that build's app image, so the page flashes it without a file dialog
     WS   /ws?target=<ip>       raw bytes <-> tcp <ip>:5555, one socket per page session
 
 Standard library only: a minimal RFC 6455 server (text/binary frames, masked
@@ -63,6 +65,33 @@ def ws_read(rfile):
     return opcode, data
 
 
+APP = os.path.dirname(HERE)  # the atos-drive app dir, where idf.py puts build-*/
+APP_BIN = "pace_racer_atos_drive.bin"
+
+
+def _cstr(b):
+    return b.split(b"\0", 1)[0].decode("ascii", "replace")
+
+
+def builds():
+    """App images under the app's build-*/ dirs, newest first. Version and
+    build time come from the image's esp_app_desc (after the 24-byte image
+    header and the first 8-byte segment header)."""
+    out = []
+    for d in sorted(os.listdir(APP)):
+        path = os.path.join(APP, d, APP_BIN)
+        if not (d.startswith("build") and os.path.isfile(path)):
+            continue
+        with open(path, "rb") as fh:
+            head = fh.read(256)
+        if len(head) < 144 or head[0] != 0xE9 or struct.unpack_from("<I", head, 32)[0] != 0xABCD5432:
+            continue
+        out.append({"dir": d, "version": _cstr(head[48:80]), "project": _cstr(head[80:112]),
+                    "built": f"{_cstr(head[128:144])} {_cstr(head[112:128])}",
+                    "mtime": os.path.getmtime(path), "size": os.path.getsize(path)})
+    return sorted(out, key=lambda b: -b["mtime"])
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
@@ -79,6 +108,14 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
+        if u.path == "/builds":
+            return self.reply(200, "application/json", json.dumps(builds()).encode())
+        if u.path.startswith("/builds/"):
+            d = u.path[len("/builds/"):]
+            if d not in {b["dir"] for b in builds()}:  # only listed dirs: no path tricks
+                return self.send_error(404, "no such build")
+            with open(os.path.join(APP, d, APP_BIN), "rb") as fh:
+                return self.reply(200, "application/octet-stream", fh.read())
         if u.path in ("/", "/dashboard.html"):
             with open(os.path.join(HERE, "dashboard.html"), "rb") as fh:
                 body = fh.read()
@@ -89,6 +126,14 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         self.send_error(404)
+
+    def reply(self, code, ctype, body):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def websocket(self, target):
         key = self.headers.get("Sec-WebSocket-Key")
