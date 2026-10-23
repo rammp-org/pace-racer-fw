@@ -89,6 +89,7 @@ static constexpr float kTwoPi = 6.28318530718f;
 // commanded-voltage model is only right when this is the real bus voltage.
 // (24 V was the bring-up value; 48 V doubles ripple to ~6-7 App on 94 uH —
 // watch the LM75s. Re-zero with 'z' after changing supplies.)
+// 2026-09-24: hub motor bench = Rigol DP2031 CH1 (18 V) + CH2 (30 V) in SERIES mode = 48 V.
 static constexpr float kBusVoltage = 48.0f;
 // Lowered from 15 A during stage-3 bring-up: the I/f ramp was running the current
 // away to ~22 A before the hardware OCP caught it. 10 A trips a runaway early
@@ -126,8 +127,9 @@ static constexpr float kTempLimitC = 80.0f;
 // CROSSFADE was tried first and failed on hardware: it swings the current
 // vector toward max-torque orientation with iq unchanged, so torque-per-amp
 // jumps ~5-10x mid-blend and the acceleration burst slipped the rotor.
-static constexpr float kHoEngageRpm = 60.0f;
-static constexpr float kHoRevertRpm = 45.0f;
+// 2026-09-24 hub motor: observer tracks to 7 rpm (jitter grows below ~18) -> 30/20.
+static constexpr float kHoEngageRpm = 30.0f;
+static constexpr float kHoRevertRpm = 20.0f;
 static constexpr float kHoDecayAps = 1.0f; // iq decay rate during CONVERGE
 // Absolute CONVERGE floor. A FRACTIONAL floor (25% of run amps) made
 // convergence impossible at high run amps on the dyno: the load angle only
@@ -135,7 +137,9 @@ static constexpr float kHoDecayAps = 1.0f; // iq decay rate during CONVERGE
 // T/(k·λ·I)), and drag doesn't scale with the commanded amps — at `run 10` the
 // 2.5 A floor parked aerr at ~90° until the stuck-abort fired, forever. 0.5 A
 // matches the unloaded converge current observed on this rig.
-static constexpr float kIqFloorAmps = 0.5f;
+// 2026-09-24: hub wheel drag is ~0.2-0.3 A (hrun unloaded), so a 0.5 A floor could never
+// converge (sin(gamma) = 0.6 -> 37 deg > cone). Lowered to 0.2 A.
+static constexpr float kIqFloorAmps = 0.2f;
 static constexpr float kConvergeDeg = 15.0f;       // frames agree inside this cone
 static constexpr uint32_t kEngageTicks = 1000;     // 50 ms sustained above engage rpm
 static constexpr uint32_t kConvergeTicks = 400;    // 20 ms inside the cone -> switch
@@ -173,11 +177,16 @@ static constexpr float kVoltageLimit = 8.0f;
 // series A->B pair (2R, 2L); the dq plant is a single phase (R, L). 169 rad/s
 // bandwidth (auto-tuner's verified-overdamped crossover for the NineBot S):
 // kp = 169*336uH = 0.0568, ki = kp*R/L = 0.0568*961 = 54.5.
-static constexpr float kDefaultKp = 0.0568f; // V/A
-static constexpr float kDefaultKi = 54.5f;   // V/(A*s)
+// 2026-09-23 hub motor (datasheet, line-line R 0.7 ohm / L 1.885 mH -> per-phase
+// 0.35 ohm / 943 uH), same 169 rad/s: kp = 169*943uH = 0.159, ki = 169*0.35 = 59.2.
+// 2026-09-24 measured with 'rl' on the hub motor: R=0.51 ohm, L=804 uH (per phase);
+// 169 rad/s: kp = 169*804uH = 0.136, ki = 169*0.51 = 86.
+static constexpr float kDefaultKp = 0.136f; // V/A
+static constexpr float kDefaultKi = 86.0f;  // V/(A*s)
 
-// I/f open-loop startup (stage 2b). 15 pole pairs (measured: 90 hall edges/rev).
-static constexpr int kPolePairs = 15;
+// I/f open-loop startup (stage 2b). NineBot S was 15 pp (90 hall edges/rev);
+// 2026-09-23 hub motor: 20 pp per datasheet (expect 120 hall edges/rev).
+static constexpr int kPolePairs = 20;
 static constexpr float kAlignMs = 300.0f; // DC-align time before the ramp
 // Gentle first-spin defaults (override with `run <amps> <rpm> <ramp_s>`).
 static constexpr float kSpinAmps = 2.0f;
@@ -195,10 +204,17 @@ static constexpr auto kHallC = GPIO_NUM_9;
 // half the A->B series fit): NineBot S = 0.323 ohm / 336 uH. lambda_pm seeded
 // from vq at speed. All tunable from the console ('mp', 'og') — dial in from the
 // logs. NOTE: kObsR ideally validated against the stage-2a vd=id*R slope.
-static constexpr float kObsR = 0.323f;
-static constexpr float kObsL = 336.0e-6f;
+// 2026-09-23 hub motor datasheet (line-line / 2): 0.35 ohm / 943 uH.
+// 2026-09-24 'rl' ident on the hub motor (0.6/1.0/1.5 V steps): R=0.51 ohm, L=804 uH.
+static constexpr float kObsR = 0.51f;
+static constexpr float kObsL = 804.0e-6f;
 // Measured on the NineBot S 2026-07-27 (I/f spin, 'flux' column): 0.025-0.027.
-static constexpr float kObsLambda = 0.026f;
+// 2026-09-23 hub motor: Ke 0.262 V/rpm taken as line-line peak -> phase peak
+// 0.151 V/rpm / (20*2pi/60) = 0.072; Kt 17 Nm / 7.5 A = 2.27 -> 2.27/(1.5*20) = 0.076.
+// 2026-09-24 MEASURED: observer locks at 0.052 (rpm_est = rpm_hall to 0.1 % from 60
+// down to 7 rpm), unlocks at 0.060; bemf slope of the I/f sweep agrees. Datasheet's
+// 7.5 A rated is RMS: Kt = 1.5*20*0.052 = 1.56 N.m/A -> 17 N.m at 10.9 A peak.
+static constexpr float kObsLambda = 0.052f;
 static constexpr float kObsFluxGain = 1.0e5f;
 static constexpr float kObsPllKp = 300.0f;
 static constexpr float kObsPllKi = 22500.0f;
@@ -348,7 +364,7 @@ std::atomic<float> g_hall_ramp{50.0f}; // setpoint ramp, rpm/s
 // electrical angle with no homing. Offset from `ecal` (or `eofs`); validated
 // on the dyno 2026-08-19: slope 6.005, lash ~6 elec-deg incl. friction.
 static constexpr float kEncGear = 2.5f;
-static constexpr float kEncToElec = (float)kPolePairs / kEncGear; // = 6.0 exactly
+static constexpr float kEncToElec = (float)kPolePairs / kEncGear; // = 6.0 at 15 pp (8.0 at 20 pp)
 static constexpr float kEncCntToRad = 6.28318530718f / 16384.0f;
 static constexpr float kEncRpmTau = 0.05f; // LPF on encoder-derived rotor rpm
 std::atomic<int> g_theta_src{0};           // HALL-mode angle source: 0 = hall table, 1 = encoder
@@ -1692,6 +1708,46 @@ extern "C" void app_main(void) {
       a = std::clamp(a, 30.0f, 120.0f);
       g_temp_limit.store(a);
       fmt::print("#tlimit {:.0f} C\n", a);
+    } else if (sscanf(line, "sen %d", &x) == 1) {
+      // sen <0|1> — DIAGNOSTIC. 0 disables the DRV8353 SENSE overcurrent (SPx-SNx
+      // > SEN_LVL) protection. New-rev boards trip SA_OC at ZERO current
+      // (2026-09-23: phase-A SPA sits above 0.25 V with nothing flowing), which
+      // latches the bridge off. VDS OCP and the software trip stay armed.
+      using GD = Bsp::GateDriver;
+      std::error_code sec;
+      auto gd = bsp.gate_driver();
+      gd->set_sense_overcurrent_enabled(x != 0, sec);
+      gd->clear_faults(sec);
+      std::this_thread::sleep_for(20ms);
+      auto csa = gd->read_csa_control(sec);
+      auto fs = gd->fault_status(sec);
+      auto v2 = gd->read_register(GD::Register::VGS_STATUS_2, sec);
+      fmt::print("#sen {} — csa=0x{:04x} fault1=0x{:04x} vgs2=0x{:04x} nfault_active={:d}{}\n",
+                 x ? "enabled" : "DISABLED", csa.raw, fs.raw, v2, gd->fault_pin_active() ? 1 : 0,
+                 sec ? " (SPI error)" : "");
+    } else if (sscanf(line, "gdf %d", &x) == 1) {
+      // gdf <0|1> — DIAGNOSTIC ONLY. 1 sets DIS_GDF (DRIVER_CONTROL bit 8): the
+      // DRV8353 stops checking that each gate reaches its VGS level within
+      // tDRIVE, so a board latching GDF+VGS_xx at power-up (new-rev boards,
+      // 2026-09-23) can be exercised to see whether the leg actually switches.
+      // It masks the check, it does not fix a gate. Re-arm with 'e 1' after.
+      std::error_code gec;
+      auto gd = bsp.gate_driver();
+      auto dc = gd->read_driver_control(gec);
+      if (x)
+        dc.raw |= (1u << 8);
+      else
+        dc.raw &= ~(1u << 8);
+      dc.raw &= ~(1u << 0); // never carry CLR_FLT in a plain write
+      gd->write_driver_control(dc, gec);
+      gd->clear_faults(gec);
+      std::this_thread::sleep_for(20ms);
+      auto fs = gd->fault_status(gec);
+      auto v2 = gd->read_register(Bsp::GateDriver::Register::VGS_STATUS_2, gec);
+      auto dcv = gd->read_driver_control(gec);
+      fmt::print("#gdf {} — drv_ctl=0x{:04x} fault1=0x{:04x} vgs2=0x{:04x} nfault_active={:d}{}\n",
+                 x ? "DISABLED (masked)" : "enabled", dcv.raw, fs.raw, v2,
+                 gd->fault_pin_active() ? 1 : 0, gec ? " (SPI error)" : "");
     } else if (sscanf(line, "vds %d", &x) == 1 && x >= 0 && x <= 6) {
       // vds <0-5> — DRV8353 hardware OCP threshold. 0-4 are the fine steps
       // (0.06-0.10 V); 5 is the chip's next step, a 2x jump to 0.20 V

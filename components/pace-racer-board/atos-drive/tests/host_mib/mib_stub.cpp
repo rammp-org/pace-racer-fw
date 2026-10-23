@@ -15,8 +15,8 @@
 //   torque <N.m> | vel <rad/s> | pos <rad>
 //   lim <torque N.m> <vel rad/s> <accel rad/s^2>   0 = firmware ceiling / no ramp
 //   clr                              bump clear_fault_req_id
-//   tune <kp> <ki> <pll_hz> [save]   MotorTuning: A/(rad/s), A/rad, Hz; 0 = unchanged;
-//                                    'save' sets persist. Sent once per line.
+//   tune <kp> <ki> <pll_hz> [save]   MotorTuning: A/(rad/s), A/rad, Hz; 0 = unchanged,
+//                                    negative kp/ki = exactly 0; 'save' sets persist. Sent once per line.
 //   wait <s>                         keep streaming, say nothing
 //   q                                stop streaming and exit
 //

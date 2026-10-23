@@ -705,8 +705,9 @@ IRAM_ATTR void foc_task_fn(void *) {
           const float step = g_spin_ramp_rate.load(std::memory_order_relaxed) / kRpmToOmegaE * dt;
           spd_set += std::clamp(rpm_t - spd_set, -step, step);
           const float serr = spd_set - rpm_est;
-          spd_integ = std::clamp(spd_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt,
-                                 -amps, amps);
+          const float ki = g_spd_ki.load(std::memory_order_relaxed);
+          // ki = 0 is "integrator off": hold it at 0, seed included.
+          spd_integ = ki > 0 ? std::clamp(spd_integ + ki * serr * dt, -amps, amps) : 0.0f;
           iq_cmd =
               std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + spd_integ, -amps, amps);
           iqref = iq_cmd;
@@ -854,8 +855,9 @@ IRAM_ATTR void foc_task_fn(void *) {
         }
         g_hall_set_pub.store(h_set, std::memory_order_relaxed);
         const float serr = std::clamp(h_set - rpm_meas, -kHallErrClampRpm, kHallErrClampRpm);
-        h_integ =
-            std::clamp(h_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt, -amps, amps);
+        const float ki = g_spd_ki.load(std::memory_order_relaxed);
+        // ki = 0 is "integrator off": hold it at 0, the torque-mode seed included.
+        h_integ = ki > 0 ? std::clamp(h_integ + ki * serr * dt, -amps, amps) : 0.0f;
         iqref = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + h_integ, -amps, amps);
       }
       // Speed governor (see g_hall_vmax): torque in the direction of motion
@@ -1427,7 +1429,7 @@ extern "C" void app_main(void) {
     return m;
   };
   // Outer-loop tune from the wire, already clamped by the supervisor. Live: the
-  // integrator keeps its state, only the slope changes. Marked custom so 'hv'
+  // integrator keeps its state, only the slope changes (ki = 0 zeroes it, in the loop). Marked custom so 'hv'
   // does not revert it; the flash write, if asked for, happens on the stream task.
   hooks.tuning = [](float kp_rpm, float ki_rpm, float pll_hz, bool persist) {
     g_spd_gains_custom.store(true);

@@ -1,6 +1,6 @@
 # PACE RACER motor-controller API over ATOS: design record
 
-Status: **design settled 2026-09-16; Phase 1 merged (rammp-rtps PR #5); Phase 2 firmware bench-verified 2026-09-25; tuning topic added 2026-10-09 (D37, API v2, in rammp-rtps PR #7 `feat/motor-api-doc` since 2026-10-16)** (branch `feat/atos-drive`) (grilling session 2026-09-15/16, 39 questions,
+Status: **design settled 2026-09-16; Phase 1 merged (rammp-rtps PR #5); Phase 2 firmware bench-verified 2026-09-25; tuning topic added 2026-10-09 (D37, API v2, merged in rammp-rtps PR #7 2026-10-16); true-zero gains 2026-10-19 (D38, API v3)** (branch `feat/atos-drive`) (grilling session 2026-09-15/16, 39 questions,
 frontier empty). Sections: Context, Facts, Decisions (D1-D32), Wire types,
 Behavior contract, Implementation plan, Host-side MIB stand-in, Bench
 verification, Risks. Not yet implemented.
@@ -73,6 +73,7 @@ verification, Risks. Not yet implemented.
 | D35 | A motor profile may carry an acceleration ceiling (`kMaxAccelRpmS`); where it does, `accel_limit` 0 or larger means the ceiling (D19 still holds where it is 0). The flatbot profile sets 120 rpm/s, 60 rpm, 10 A, 4 A hold. | Office ceilings the MIB cannot raise; raising them is a deliberate reflash. |
 | D36 | Feedback guards raise `HALL` (illegal input 50 ms) and `STALL` (speed integrator past half the cap and no net hall steps over 0.5 s, speed/position modes only). Both exit through the unload-then-coast path. Verified physically 2026-09-25. | A lost hall line or a blocked wheel must be a named fault, not a hot motor. |
 | D37 | **Revises D9 (2026-10-09).** Outer-loop tuning over the network: a third per-axis topic `rammp/mib/motor_tuning/<axis>` carries `MotorTuning` (`tuning_req_id`, `speed_kp`, `speed_ki`, `hall_pll_hz`, `persist`); the board acts on a new req_id, clamps to compile-time bounds, applies live without an integrator reset, echoes `tuning_ack` and the values in force in `MotorState`, and saves to NVS only when `persist` is set. API version 2. Current loop, ceilings and calibration stay off the wire. | The MIB drove the flatbot from the joystick (Oct 2026) and it vibrates; the gains were console-only, which means a laptop on the robot for every iteration. The per-command limits cannot fix a loop tune. Separate topic so the 50 Hz command stays 28 bytes; req_id so a best-effort resend is harmless; `persist` opt-in so a bad experiment dies at reboot. |
+| D38 | **Extends D37 (2026-10-19).** A negative `speed_kp` / `speed_ki` in `MotorTuning` sets that gain to exactly 0; 0 (and NaN) still means unchanged; positive values clamp as before, the Kp floor lowered to 0. With ki = 0 both speed loops hold their integrator at 0 (bumpless seeds included), so switching it off also drops the current it held. Same wire layout; API version 3, fw 0.3.0. | Switching a term off is a basic controller operation, and the v2 floor-by-sentinel left only a tiny positive Ki, which keeps the integrator's stored current forever as an offset. Negative rather than redefining 0, so existing senders that send 0 for "leave as is" don't silently zero a gain; a v2 board already ignored negatives. |
 
 
 ## Wire types

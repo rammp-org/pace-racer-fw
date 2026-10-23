@@ -113,13 +113,14 @@ inline constexpr uint32_t kWatchdogMs = 200;
 // the loop runs in A/rpm. Anything a MotorTuning asks for is clamped into
 // these, so a typo on the MIB cannot make the speed loop unstable or the
 // tracking loop useless. The upper bounds are 8x the hall defaults
-// (0.25 A/rpm, 0.5 A/rpm-s); the PLL range is HallDrive's own.
-inline constexpr float kTuneKpMinRpm = 0.005f, kTuneKpMaxRpm = 2.0f; // A/rpm
+// (0.25 A/rpm, 0.5 A/rpm-s); the PLL range is HallDrive's own. Both gains go
+// to 0: switching a term off is a tune, not a typo (a negative on the wire).
+inline constexpr float kTuneKpMinRpm = 0.0f, kTuneKpMaxRpm = 2.0f; // A/rpm
 inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (2u << 16) | 0u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (3u << 16) | 0u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;
