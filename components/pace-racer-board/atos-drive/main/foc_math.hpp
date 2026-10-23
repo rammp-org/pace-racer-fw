@@ -62,10 +62,19 @@ struct Duties {
 /// min and max (the SVPWM common-mode term — same result as the sector method
 /// espp uses, fewer branches), then map to [0,1] duties centered at 0.5. vbus is
 /// the DC bus voltage. Duties are clamped so a comparator never sees 0 or 1.
-inline Duties svpwm(AlphaBeta v, float vbus, float min_duty, float max_duty) {
-  const float ua = v.alpha;
-  const float ub = -0.5f * v.alpha + 0.86602540f * v.beta; // sqrt(3)/2
-  const float uc = -0.5f * v.alpha - 0.86602540f * v.beta;
+/// comp_abc: optional per-phase voltage added before the zero-sequence shift
+/// (dead-time compensation: +Vdt where the phase current flows out, -Vdt where
+/// it flows in).
+inline Duties svpwm(AlphaBeta v, float vbus, float min_duty, float max_duty,
+                    const float *comp_abc = nullptr) {
+  float ua = v.alpha;
+  float ub = -0.5f * v.alpha + 0.86602540f * v.beta; // sqrt(3)/2
+  float uc = -0.5f * v.alpha - 0.86602540f * v.beta;
+  if (comp_abc) {
+    ua += comp_abc[0];
+    ub += comp_abc[1];
+    uc += comp_abc[2];
+  }
   const float vmax = std::max(ua, std::max(ub, uc));
   const float vmin = std::min(ua, std::min(ub, uc));
   const float voff = 0.5f * (vmax + vmin);

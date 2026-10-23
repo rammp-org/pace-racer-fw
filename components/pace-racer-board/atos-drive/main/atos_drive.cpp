@@ -59,6 +59,8 @@
 #include <type_traits>
 
 #include "driver/gpio.h"
+#include "driver/mcpwm_timer.h"
+#include "hal/mcpwm_ll.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -309,6 +311,65 @@ std::atomic<bool> g_hall_ready{false}; // poller initialized (app_main -> FOC ta
 FocState g_foc;
 TaskHandle_t g_foc_task = nullptr;
 std::shared_ptr<espp::BldcDriver> g_driver;
+
+// Three-phase duty write that lands all three comparators in the SAME PWM
+// period. espp's set_pwm() writes the shadow registers one after another, and
+// the hardware copies shadow -> active at TEZ: if TEZ falls between the first
+// and last write, one phase runs the new duty a whole period before the other
+// two. On the NineBot (~670 uH line-line) that one-period mismatch was a 1-2 A
+// blip nobody noticed; on a ~4 uH drone outrunner it is 13 A/us into the
+// windings and the DRV8353 VDS OCP latches on every boot (phase-A clamp,
+// 2026-10-23). The FOC task is the worst offender: it wakes on the TEP sample
+// and lands its write right around TEZ. Fix: if the counter is within
+// kDutyGuardTicks of TEZ on the way down, wait for TEZ to pass, then write the
+// three values back-to-back with interrupts off. Bounded spin (one guard
+// window at most, ~3 us); a stopped timer exits through the iteration cap.
+static constexpr uint32_t kDutyHalfPeriodTicks = espp::BldcDriver::TICKS_PER_PERIOD / 2; // 2000
+static constexpr uint32_t kDutyGuardTicks = 240; // 3 us at 80 MHz
+static portMUX_TYPE g_duty_mux = portMUX_INITIALIZER_UNLOCKED;
+// defer_past_tez: wait until the counter has passed TEZ (counting up) before
+// writing, so the new duties always take effect at the NEXT TEZ, i.e. a fixed
+// two periods after the sample that produced them, whatever the compute time
+// was (as long as it stays under ~70 us). HFI demodulation needs that fixed
+// latency; the plain current loop does not and keeps the shorter path.
+static void set_duties(float a, float b, float c, bool defer_past_tez = false) {
+  static mcpwm_timer_handle_t timer = nullptr;
+  static const sensorless::PwmComparators *cmp = nullptr;
+  if (!g_driver)
+    return;
+  if (!timer) {
+    timer = sensorless::borrow_pwm_timer(*g_driver);
+    cmp = &sensorless::borrow_pwm_comparators(*g_driver);
+  }
+  auto ticks = [](float d) {
+    d = std::clamp(d, 0.0f, 1.0f);
+    return (uint32_t)(d * (float)kDutyHalfPeriodTicks);
+  };
+  const uint32_t ta = ticks(a), tb = ticks(b), tc = ticks(c);
+  // Counter position straight from the peripheral (group 0, timer 0: the BSP
+  // creates the one and only MCPWM timer, and the sampler ISR already assumes
+  // the same). The public driver has no phase getter in this IDF.
+  mcpwm_dev_t *dev = MCPWM_LL_GET_HW(0);
+  if (defer_past_tez) {
+    for (int i = 0; i < 4000; i++) { // bounded ~30 us: at most one half period of waiting
+      if (mcpwm_ll_timer_get_count_direction(dev, 0) == MCPWM_TIMER_DIRECTION_UP)
+        break;
+    }
+  } else {
+    for (int i = 0; i < 256; i++) { // bounded: 256 x ~20 ns reads covers the 3 us guard
+      const uint32_t cnt = mcpwm_ll_timer_get_count_value(dev, 0);
+      const bool down = mcpwm_ll_timer_get_count_direction(dev, 0) == MCPWM_TIMER_DIRECTION_DOWN;
+      if (!(down && cnt < kDutyGuardTicks))
+        break;
+    }
+  }
+  (void)timer;
+  taskENTER_CRITICAL(&g_duty_mux);
+  mcpwm_comparator_set_compare_value((*cmp)[0], ta);
+  mcpwm_comparator_set_compare_value((*cmp)[1], tb);
+  mcpwm_comparator_set_compare_value((*cmp)[2], tc);
+  taskEXIT_CRITICAL(&g_duty_mux);
+}
 std::shared_ptr<espp::PaceRacerBoard::Encoder> g_encoder; // MT6701 SSI, read by BSP task
 
 // Observer parameters, console-tunable. Written by the console, read by the FOC
@@ -380,8 +441,8 @@ std::atomic<int64_t> g_console_last_us{0};
 // angle — an integer, so the single-turn absolute count maps to a unique
 // electrical angle with no homing. Offset from `ecal` (or `eofs`); validated
 // on the dyno 2026-08-19: slope 6.005, lash ~6 elec-deg incl. friction.
-static constexpr float kEncGear = 2.5f;
-static constexpr float kEncToElec = (float)kPolePairs / kEncGear; // = 6.0 exactly
+static constexpr float kEncGear = motor::kEncGear; // encoder revs per rotor rev (sign = sense)
+static constexpr float kEncToElec = (float)kPolePairs / kEncGear; // 6.0 on the NineBot, -2.0 on the drone
 static constexpr float kEncCntToRad = 6.28318530718f / 16384.0f;
 static constexpr float kEncRpmTau = 0.05f; // LPF on encoder-derived rotor rpm
 std::atomic<int> g_theta_src{0};           // HALL-mode angle source: 0 = hall table, 1 = encoder
@@ -406,6 +467,63 @@ std::atomic<bool> g_pos_kick{false}; // console pulses on epos: re-seed the D te
 // from the V/I slope across several step levels (kills the deadtime offset),
 // L from the exponential rise tau = L/R.
 std::atomic<float> g_rl_volts{0.0f};
+
+// High-frequency injection (HFI) for standstill / low-speed angle estimation on
+// a motor with no sensors (the drone outrunner, 2026-10-23). Square-wave
+// voltage injection at half the control rate: +Vh, -Vh on alternate ticks
+// along the d-axis of the injection frame. The current change between
+// consecutive samples is demodulated with the injection sign: its d-part is
+// Vh*Ts/Ld (an online inductance read), its q-part is proportional to
+// (Lq-Ld)/(2 Ld Lq) * sin(2*(theta_rotor - theta_inj)) — zero when the
+// injection frame sits on the rotor d-axis, so a PLL that nulls it tracks the
+// rotor (up to the 180 deg polarity ambiguity, resolved separately later).
+//   hscan <Vh> [Id_bias]   step the injection frame 0..350 deg, 10 deg per
+//                          step, average the demodulated d/q responses per
+//                          angle into the capture ring ('capdump': angle, yd,
+//                          yq). Shows the saliency amplitude and 2-theta
+//                          pattern directly, before any loop closes on it.
+//   hfi <Vh> [Id_bias] [track]  continuous injection; 'track' closes the PLL
+//                          and HOLD drives on the estimated angle.
+//   hfi 0                  off.   hfig <kp> <ki> [lag] [sign]  PLL gains.
+// Vh is clamped: with L ~3 uH every 0.1 V is 1.7 A of per-tick current step,
+// and the sampler's slew filter rejects jumps above 5 A.
+static constexpr float kHfiMaxVolts = 0.25f;
+// Dead-time compensation ('dtc <V> [band_A]'): each phase loses ~Vdt of average
+// voltage in the direction of its current (measured 0.13 V at 24 V / 20 kHz on
+// the drone bench, = 3.6 A of offset at 36 mohm). Added per phase before the
+// SVPWM zero-sequence shift, sign of the phase current with a linear band
+// around zero so measurement noise does not chatter it.
+std::atomic<float> g_dt_comp_v{0.0f};
+std::atomic<float> g_dt_comp_band{0.3f};
+std::atomic<float> g_hfi_volts{0.0f};  // 0 = off
+std::atomic<float> g_hfi_bias{0.0f};   // Id bias while injecting (keeps the current off the dead-time zero crossing)
+std::atomic<bool> g_hfi_track{false};  // PLL closes, HOLD frame = estimate
+std::atomic<float> g_hfi_pll_kp{1000.0f}; // rad/s per A of demodulated q response
+std::atomic<float> g_hfi_pll_ki{20000.0f};
+std::atomic<int> g_hfi_lag{0};         // demod latency in ticks, 0 = pick the lag with the largest d response
+std::atomic<int> g_hfi_lag_used{1};    // what the auto choice settled on (status print)
+std::atomic<int> g_hfi_half{2};        // ticks per half-cycle of the injection pattern (2 = 5 kHz)
+std::atomic<float> g_hfi_sign{1.0f};   // +1/-1: flips the PLL error sign (Lq<Ld motors)
+std::atomic<float> g_hfi_theta{0.0f};  // estimate, rad (published)
+std::atomic<float> g_hfi_omega{0.0f};  // estimate, rad/s electrical
+std::atomic<float> g_hfi_yd{0.0f};     // filtered demod d response, A per tick
+std::atomic<float> g_hfi_yq{0.0f};     // filtered demod q response, A per tick
+std::atomic<int> g_hscan_left{0};      // scan: angles left to do (0 = idle)
+std::atomic<float> g_hscan_volts{0.0f};
+std::atomic<float> g_hscan_bias{0.0f};
+static constexpr int kHscanAngles = 36;
+// Rotating injection ('hrot <Vh> [ms]'): a voltage vector of magnitude Vh
+// stepping 90 deg per tick in the STATIONARY frame (fs/4 = 5 kHz). The current
+// answers with a positive-sequence part P ~ Vh/(j w Lavg) and a negative-
+// sequence part N ~ P * (dL/L) * exp(j 2 theta_r). arg(N) + arg(P) + 180 deg =
+// 2 theta_r with the write latency cancelling, |N|/|P| = (Lq-Ld)/(Lq+Ld). The
+// inverter's own asymmetry adds a fixed N_s; pin the rotor at a few known
+// angles and the rotor term is the part that turns with 2A.
+std::atomic<int> g_hrot_left{0};
+std::atomic<float> g_hrot_volts{0.0f};
+static constexpr int kHrotSettleTicks = 400;
+static constexpr int kHscanSettleTicks = 600;  // 30 ms
+static constexpr int kHscanAvgTicks = 2400;    // 120 ms
 std::atomic<int> g_rl_left{0};
 
 // Capture ring for step-response figures. The host arms it ('cap'), the FOC
@@ -961,6 +1079,214 @@ IRAM_ATTR void foc_task_fn(void *) {
     }
     last_th = th;
 
+    // ---- HFI: demodulate this tick's current against the injection history,
+    // run the PLL, and (scan / track) steer the HOLD frame. Injection itself
+    // is added to the alpha-beta voltage below. ----
+    static float hfi_ia_prev = 0.0f, hfi_ib_prev = 0.0f;   // last sample, alpha-beta
+    static float hfi_did_prev = 0.0f, hfi_diq_prev = 0.0f; // last delta, injection frame
+    static int hfi_hist[6] = {1, 1, 1, 1, 1, 1}; // sign written at tick k-1, k-2, ... k-6
+    static float hfi_th_inj = 0.0f;  // frame the injection is applied in
+    static float hfi_th_hat = 0.0f, hfi_w_hat = 0.0f;
+    static float hfi_yd_f = 0.0f, hfi_yq_f = 0.0f;
+    static int scan_idx = 0, scan_tick = 0, scan_n = 0; static float scan_yd = 0.0f, scan_yq = 0.0f;
+    static float scan_yd3[3] = {0, 0, 0}, scan_yq3[3] = {0, 0, 0}; static int scan_n3[3] = {0, 0, 0};
+    static float bin_d[32] = {}, bin_q[32] = {}; static int bin_n[32] = {}; // synchronous averages by pattern phase
+    static int hfi_pat = 0; // position in the +,+,-,- pattern
+    float vinj = 0.0f;
+    const float hfi_vh = g_hfi_volts.load(std::memory_order_relaxed);
+    const bool scanning = g_hscan_left.load(std::memory_order_relaxed) > 0;
+    const bool rotating = g_hrot_left.load(std::memory_order_relaxed) > 0;
+    const bool hfi_on = (hfi_vh > 0.0f || scanning || rotating) && (mode == HOLD || mode == SPIN || mode == HALL);
+    static int rot_k = 0, rot_n = 0; static float rot_pr = 0, rot_pi = 0, rot_nr = 0, rot_ni = 0; static int rot_left_total = 0;
+    float vrot_a = 0.0f, vrot_b = 0.0f;
+    if (rotating) {
+      const int left = g_hrot_left.load(std::memory_order_relaxed);
+      if (rot_left_total == 0) { rot_left_total = left; rot_k = 0; rot_n = 0; rot_pr = rot_pi = rot_nr = rot_ni = 0.0f; }
+      // demod this tick's current with THIS tick's phasor (constant latency phases cancel in arg(N)+arg(P))
+      const int ph = rot_k & 3; // 0,90,180,270 deg
+      const float cph = (ph == 0) ? 1.0f : (ph == 2) ? -1.0f : 0.0f;
+      const float sph = (ph == 1) ? 1.0f : (ph == 3) ? -1.0f : 0.0f;
+      if (rot_left_total - left >= kHrotSettleTicks) {
+        // P += i * e^{-j phi};  N += i * e^{+j phi}
+        rot_pr += ab.alpha * cph + ab.beta * sph;  rot_pi += ab.beta * cph - ab.alpha * sph;
+        rot_nr += ab.alpha * cph - ab.beta * sph;  rot_ni += ab.beta * cph + ab.alpha * sph;
+        rot_n++;
+      }
+      const float vr = g_hrot_volts.load(std::memory_order_relaxed);
+      vrot_a = vr * cph; vrot_b = vr * sph;
+      rot_k++;
+      g_hrot_left.store(left - 1, std::memory_order_relaxed);
+      if (left - 1 == 0) {
+        const float inv = 1.0f / (float)std::max(rot_n, 1);
+        g_cap_buf[0][0] = rot_pr * inv; g_cap_buf[0][1] = rot_pi * inv; g_cap_buf[0][2] = (float)rot_n;
+        g_cap_buf[1][0] = rot_nr * inv; g_cap_buf[1][1] = rot_ni * inv; g_cap_buf[1][2] = vr;
+        g_cap_n.store(2, std::memory_order_relaxed); g_cap_mode.store(4);
+        rot_left_total = 0;
+      }
+    } else {
+      rot_left_total = 0;
+    }
+    if (hfi_on) {
+      // Demodulation: delta of the stationary-frame current, rotated into the
+      // injection frame, second-differenced (kills the slowly varying part),
+      // correlated with the sign that produced it.
+      const float da = ab.alpha - hfi_ia_prev, db = ab.beta - hfi_ib_prev;
+      const float ci = espp::fast_cos(hfi_th_inj), si = espp::fast_sin(hfi_th_inj);
+      const float did = da * ci + db * si, diq = -da * si + db * ci;
+      // Pattern is `half` ticks of +Vh then `half` of -Vh (default 4+4 = 2.5 kHz),
+      // not +,-: a sample at the period centre sees half of the previous
+      // period's voltage and half of this one's, so an fs/2 alternation is
+      // invisible to it (the current triangle crosses its mean at every
+      // centre). The write-to-effect latency is also not fixed - the FOC task
+      // lands its duty write before TEZ most ticks (effect next period) but
+      // after it on a slow tick (effect the period after) - so a tick is only
+      // demodulated when the three writes it could be answering to all had the
+      // same sign; then delta(k) = s * Vh * Ts / L exactly, whichever latency
+      // applied. 'hfig ... lag' shifts the window if needed.
+      // With the deferred write (fixed 2-period latency) the voltage in period
+      // k is the sign written at tick k-2, so delta(k) = (s(k-3) + s(k-2))/2 *
+      // Vh*Ts/L: hist[1] and hist[2] at this point (lag = 2). The pair sum is
+      // +/-1 on the two ticks inside each half-cycle and 0 at the transitions.
+      // The latency is not perfectly fixed (it moved between 1 and 2 periods
+      // with the bias level on the bench), so three demods run in parallel
+      // for lags 1..3 and the one with the largest |d response| is used:
+      // 'hfig ... lag 0' = auto (default), 1..3 forces one.
+      static float yd_f3[3] = {0, 0, 0}, yq_f3[3] = {0, 0, 0};
+      float yd3[3], yq3[3]; bool val3[3];
+      for (int L = 1; L <= 3; L++) {
+        const float cL = 0.5f * (float)(hfi_hist[L - 1] + hfi_hist[L]);
+        val3[L - 1] = cL != 0.0f;
+        yd3[L - 1] = val3[L - 1] ? did * cL : 0.0f;
+        yq3[L - 1] = val3[L - 1] ? diq * cL : 0.0f;
+        if (val3[L - 1]) {
+          yd_f3[L - 1] += (yd3[L - 1] - yd_f3[L - 1]) * 0.02f;
+          yq_f3[L - 1] += (yq3[L - 1] - yq_f3[L - 1]) * 0.02f;
+        }
+      }
+      int lag = std::clamp(g_hfi_lag.load(std::memory_order_relaxed), 0, 3);
+      if (lag == 0) { // the inductive response is positive by construction: pick the largest positive one
+        lag = 1;
+        for (int L = 2; L <= 3; L++)
+          if (yd_f3[L - 1] > yd_f3[lag - 1])
+            lag = L;
+      }
+      const bool valid = val3[lag - 1];
+      const float yd = yd3[lag - 1], yq = yq3[lag - 1];
+      hfi_yd_f = yd_f3[lag - 1]; hfi_yq_f = yq_f3[lag - 1];
+      g_hfi_lag_used.store(lag, std::memory_order_relaxed);
+      (void)hfi_did_prev; (void)hfi_diq_prev;
+      g_hfi_yd.store(hfi_yd_f, std::memory_order_relaxed);
+      g_hfi_yq.store(hfi_yq_f, std::memory_order_relaxed);
+
+      if (scanning) {
+        // Step the injection frame through 36 angles; HOLD frame = scan frame,
+        // Id bias on it; average yd/yq per angle into the capture ring.
+        const int left = g_hscan_left.load(std::memory_order_relaxed);
+        scan_idx = kHscanAngles - left;
+        const float ang = (float)scan_idx * (kTwoPi / (float)kHscanAngles);
+        // Only the INJECTION frame scans. The HOLD frame (console 'th') and the
+        // Id bias stay put, so a free rotor is pinned by the bias on a known
+        // axis instead of following the scan: yq must cross zero where the
+        // scan angle meets 'th' (mod 180), the direct saliency check.
+        hfi_th_inj = ang;
+        if (mode == HOLD) { idref = g_hscan_bias.load(std::memory_order_relaxed); iqref = 0.0f; }
+        if (scan_tick >= kHscanSettleTicks) {
+          for (int L = 0; L < 3; L++)
+            if (val3[L]) { scan_yd3[L] += yd3[L]; scan_yq3[L] += yq3[L]; scan_n3[L]++; }
+          if (valid) { scan_yd += yd; scan_yq += yq; scan_n++; }
+          // Synchronous average of the injection-frame current by pattern
+          // phase: noise averages over hundreds of pattern periods and the
+          // write latency only rotates the bins, so the contrast between the
+          // two halves of the pattern is read off whichever rotation gives
+          // the largest d response.
+          const int nb = 2 * std::clamp(g_hfi_half.load(std::memory_order_relaxed), 1, 16);
+          const int j = hfi_pat % nb;
+          bin_d[j] += ab.alpha * ci + ab.beta * si;
+          bin_q[j] += -ab.alpha * si + ab.beta * ci;
+          bin_n[j]++;
+        }
+        if (++scan_tick >= kHscanSettleTicks + kHscanAvgTicks) {
+          if (scan_idx < kCapMax) {
+            // per-angle: the lag with the largest |d response| wins (same rule
+            // as the PLL); row = angle, yd, yq. The forced-lag case uses it.
+            int best = std::clamp(g_hfi_lag.load(std::memory_order_relaxed), 0, 3) - 1;
+            if (best < 0) {
+              best = 0;
+              for (int L = 1; L < 3; L++)
+                if (scan_yd3[L] / (float)std::max(scan_n3[L], 1) >
+                    scan_yd3[best] / (float)std::max(scan_n3[best], 1))
+                  best = L;
+            }
+            (void)best;
+            const int nb = 2 * std::clamp(g_hfi_half.load(std::memory_order_relaxed), 1, 16);
+            const int hb = nb / 2;
+            float md[32], mq[32];
+            for (int b = 0; b < nb; b++) {
+              md[b] = bin_d[b] / (float)std::max(bin_n[b], 1);
+              mq[b] = bin_q[b] / (float)std::max(bin_n[b], 1);
+            }
+            int jbest = 0; float ad_best = -1e9f, aq_best = 0.0f;
+            for (int j0 = 0; j0 < nb; j0++) { // contrast between the half starting at j0 and the other half
+              float ad = 0.0f, aq = 0.0f;
+              for (int b = 0; b < nb; b++) {
+                const float w = (((b - j0 + nb) % nb) < hb) ? 1.0f : -1.0f;
+                ad += w * md[b]; aq += w * mq[b];
+              }
+              ad /= (float)hb; aq /= (float)hb; // amplitude of the current square-ish wave, A
+              if (ad > ad_best) { ad_best = ad; aq_best = aq; jbest = j0; }
+            }
+            g_cap_buf[scan_idx][0] = ang * (180.0f / 3.14159265f) + 1000.0f * (float)(jbest + 1); // pattern rotation coded in thousands
+            g_cap_buf[scan_idx][1] = ad_best; // d response amplitude (A)
+            g_cap_buf[scan_idx][2] = aq_best; // q response amplitude at the same rotation (A)
+            g_cap_n.store(scan_idx + 1, std::memory_order_relaxed);
+          }
+          scan_tick = 0; scan_n = 0; scan_yd = scan_yq = 0.0f;
+          for (int L = 0; L < 3; L++) { scan_yd3[L] = scan_yq3[L] = 0.0f; scan_n3[L] = 0; }
+          for (int b = 0; b < 32; b++) { bin_d[b] = bin_q[b] = 0.0f; bin_n[b] = 0; }
+          g_hscan_left.store(left - 1, std::memory_order_relaxed);
+          if (left - 1 == 0) { // done: injection off, bias off (HOLD frame stays where 'th' put it)
+            g_hfi_volts.store(0.0f); g_id_target.store(0.0f);
+            g_cap_mode.store(3);
+          }
+        }
+        vinj = g_hscan_volts.load(std::memory_order_relaxed);
+      } else {
+        // PLL on the q response. Error sign is motor-dependent (which axis has
+        // the larger inductance); 'hfig ... sign' flips it.
+        const float e = valid ? yq * g_hfi_sign.load(std::memory_order_relaxed) : 0.0f;
+        hfi_w_hat += g_hfi_pll_ki.load(std::memory_order_relaxed) * e * dt;
+        hfi_w_hat = std::clamp(hfi_w_hat, -motor::kMaxRpm * kRpmToOmegaE * 2.0f, motor::kMaxRpm * kRpmToOmegaE * 2.0f);
+        hfi_th_hat += (hfi_w_hat + g_hfi_pll_kp.load(std::memory_order_relaxed) * e) * dt;
+        hfi_th_hat -= kTwoPi * floorf(hfi_th_hat / kTwoPi);
+        const bool track = g_hfi_track.load(std::memory_order_relaxed);
+        if (track) {
+          hfi_th_inj = hfi_th_hat;
+          if (mode == HOLD) { th = hfi_th_hat; idref += g_hfi_bias.load(std::memory_order_relaxed); }
+        } else {
+          hfi_th_inj = th; // open loop: inject on whatever frame drives (console th, I/f, halls)
+          if (mode == HOLD) idref += g_hfi_bias.load(std::memory_order_relaxed);
+          hfi_th_hat = hfi_th_inj; hfi_w_hat = sp_omega; // keep the estimate parked on the drive frame
+        }
+        vinj = hfi_vh;
+      }
+      g_hfi_theta.store(hfi_th_hat, std::memory_order_relaxed);
+      g_hfi_omega.store(hfi_w_hat, std::memory_order_relaxed);
+      last_th = th;
+    } else {
+      hfi_did_prev = hfi_diq_prev = 0.0f; hfi_yd_f = hfi_yq_f = 0.0f; scan_tick = 0; scan_n = 0; scan_yd = scan_yq = 0.0f;
+      hfi_th_hat = th; hfi_w_hat = 0.0f; hfi_th_inj = th;
+    }
+    hfi_ia_prev = ab.alpha; hfi_ib_prev = ab.beta;
+    if (vinj != 0.0f) { // half x (+), half x (-) pattern; remember what was written for the demod
+      const int half = std::clamp(g_hfi_half.load(std::memory_order_relaxed), 1, 16);
+      const int s_now = (hfi_pat < half) ? 1 : -1;
+      hfi_pat = (hfi_pat + 1) % (2 * half);
+      vinj *= (float)s_now;
+      for (int i = 5; i > 0; i--)
+        hfi_hist[i] = hfi_hist[i - 1];
+      hfi_hist[0] = s_now;
+    }
+
     // Hall calibration: while I/f drives (SPIN in 'S', align done), the drive
     // angle is ground truth for whatever sector the halls currently report.
     // Requires equal ticks in each spin direction (load-angle cancellation).
@@ -1001,9 +1327,22 @@ IRAM_ATTR void foc_task_fn(void *) {
       pi_d.reset();
       pi_q.reset();
     }
-    const auto vab = foc::inverse_park({vd, vq}, s, c);
-    const auto duties = foc::svpwm(vab, kBusVoltage, kMinDuty, kMaxDuty);
-    g_driver->set_pwm(duties.a, duties.b, duties.c);
+    auto vab = foc::inverse_park({vd, vq}, s, c);
+    if (vinj != 0.0f) { // HFI: square-wave on the injection frame's d-axis
+      vab.alpha += vinj * espp::fast_cos(hfi_th_inj);
+      vab.beta += vinj * espp::fast_sin(hfi_th_inj);
+    }
+    vab.alpha += vrot_a; // rotating injection (0 when idle)
+    vab.beta += vrot_b;
+    float dtc[3] = {0.0f, 0.0f, 0.0f};
+    const float dtv = g_dt_comp_v.load(std::memory_order_relaxed);
+    if (dtv > 0.0f) {
+      const float band = std::max(g_dt_comp_band.load(std::memory_order_relaxed), 0.01f);
+      for (int p = 0; p < 3; p++)
+        dtc[p] = dtv * std::clamp(i3[p] / band, -1.0f, 1.0f);
+    }
+    const auto duties = foc::svpwm(vab, kBusVoltage, kMinDuty, kMaxDuty, dtv > 0.0f ? dtc : nullptr);
+    set_duties(duties.a, duties.b, duties.c, /*defer_past_tez=*/hfi_on);
     if (g_auto_phase.load(std::memory_order_relaxed))
       g_sampler.select_lowest_two(duties.a, duties.b, duties.c);
 
@@ -1024,7 +1363,8 @@ IRAM_ATTR void foc_task_fn(void *) {
 
     constexpr float kRadToDeg = 180.0f / 3.14159265f;
     g_foc.publish({dq.d, dq.q, iqref, vd, vq, th * kRadToDeg, sp_omega / kRpmToOmegaE,
-                   g_observer.theta() * kRadToDeg, g_observer.omega() / kRpmToOmegaE,
+                   (hfi_on ? g_hfi_theta.load(std::memory_order_relaxed) : g_observer.theta()) * kRadToDeg,
+                   (hfi_on ? g_hfi_omega.load(std::memory_order_relaxed) : g_observer.omega()) / kRpmToOmegaE,
                    g_observer.flux_mag(), mstate});
 
     // Fill the capture ring if the host armed it.
@@ -1266,7 +1606,7 @@ extern "C" void app_main(void) {
 
   driver->enable();
   drv_check(bsp.gate_driver(), "after enable");
-  driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+  set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
   drv_check(bsp.gate_driver(), "after pwm center");
 
   if (!g_sampler.zero_calibrate(logger)) {
@@ -1274,12 +1614,12 @@ extern "C" void app_main(void) {
     return;
   }
   drv_check(bsp.gate_driver(), "after zero cal");
-  driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+  set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
 
   if (!g_sampler.set_edge(true /*TEP*/, logger))
     return;
   drv_check(bsp.gate_driver(), "after set_edge");
-  driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+  set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
   // Enabling the sampler starts the FOC task's control loop. With Id*=Iq*=0 the
   // loop commands 0 V -> centered duties -> no current, so this is safe.
   g_sampler.enable();
@@ -1575,7 +1915,7 @@ extern "C" void app_main(void) {
       g_id_target.store(0);
       g_iq_target.store(0);
       g_reset_pi.store(true);
-      driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+      set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
       g_request_coast.store(true);
       g_ev_overrun.store(true);
       fmt::print("! sampler persistently late / over budget — disabled; duties centered, "
@@ -1636,7 +1976,7 @@ extern "C" void app_main(void) {
         g_mode.store(HOLD);
         g_id_target.store(0);
         g_iq_target.store(0);
-        driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+        set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
         fmt::print("! DRV8353 fault 0x{:04x} — disarmed (power-cycle VM to clear)\n", fs.raw);
       }
     }
@@ -1715,7 +2055,7 @@ extern "C" void app_main(void) {
     }
     g_sampler.disable();
     g_mode.store(HOLD);
-    driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+    set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
     g_request_coast.store(true);
     fmt::print("#ota: drive unloaded, sampler off\n");
   };
@@ -1823,6 +2163,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -2026,7 +2367,7 @@ extern "C" void app_main(void) {
       g_iq_target.store(0);
       g_hall_iq.store(0);
       g_reset_pi.store(true);
-      driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+      set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
 
       auto gd = bsp.gate_driver();
       GD::OcpControl ocp{};
@@ -2325,6 +2666,87 @@ extern "C" void app_main(void) {
         g_mode.store(RLV);
         fmt::print("#rl step {:.2f} V for {} ms — 'capdump' when done\n", v, ms);
       }
+    } else if (strncmp(line, "hscan", 5) == 0 && (line[5] == ' ' || line[5] == '\0')) {
+      float vh = 0.05f, bias = 0.0f;
+      sscanf(line, "hscan %f %f", &vh, &bias);
+      vh = std::clamp(vh, 0.0f, kHfiMaxVolts);
+      bias = std::clamp(bias, -4.0f, 4.0f);
+      if (!g_sampler.is_enabled()) {
+        fmt::print("! sampler disabled — 'e 1' first\n");
+      } else {
+        uncoast();
+        g_mode.store(HOLD);
+        g_iq_target.store(0.0f);
+        g_id_target.store(bias); // on the current 'th' frame, which the scan leaves alone
+        g_hfi_track.store(false);
+        g_hfi_volts.store(0.0f);
+        g_hscan_volts.store(vh);
+        g_hscan_bias.store(bias);
+        g_cap_want.store(0);
+        g_cap_n.store(0);
+        g_hscan_left.store(kHscanAngles);
+        fmt::print("#hscan {:.3f} V, Id bias {:.2f} A, {} angles x {} ms — 'capdump' when done "
+                   "(angle_deg, yd, yq in A/tick)\n",
+                   vh, bias, kHscanAngles, (kHscanSettleTicks + kHscanAvgTicks) / 20);
+      }
+    } else if (strncmp(line, "dtc", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) {
+      float v = g_dt_comp_v.load(), band = g_dt_comp_band.load();
+      sscanf(line, "dtc %f %f", &v, &band);
+      g_dt_comp_v.store(std::clamp(v, 0.0f, 0.5f));
+      g_dt_comp_band.store(std::clamp(band, 0.01f, 5.0f));
+      fmt::print("#dead-time comp {:.3f} V, linear band +/-{:.2f} A\n", g_dt_comp_v.load(), g_dt_comp_band.load());
+    } else if (strncmp(line, "hrot", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+      float vh = 0.05f;
+      int ms = 1000;
+      sscanf(line, "hrot %f %d", &vh, &ms);
+      vh = std::clamp(vh, 0.0f, kHfiMaxVolts);
+      ms = std::clamp(ms, 50, 5000);
+      if (!g_sampler.is_enabled()) {
+        fmt::print("! sampler disabled — 'e 1' first\n");
+      } else {
+        uncoast();
+        if (g_mode.load() != HOLD) g_mode.store(HOLD);
+        g_cap_want.store(0); g_cap_n.store(0);
+        g_hrot_volts.store(vh);
+        g_hrot_left.store(ms * 20);
+        fmt::print("#hrot {:.3f} V for {} ms — 'capdump' when done: row0 = P (re, im, n), row1 = N (re, im, Vh)\n", vh, ms);
+      }
+    } else if (strncmp(line, "hfig", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+      float kp = g_hfi_pll_kp.load(), ki = g_hfi_pll_ki.load(), sg = g_hfi_sign.load();
+      int lag = g_hfi_lag.load(), half = g_hfi_half.load();
+      sscanf(line, "hfig %f %f %d %f %d", &kp, &ki, &lag, &sg, &half);
+      g_hfi_pll_kp.store(kp);
+      g_hfi_pll_ki.store(ki);
+      g_hfi_lag.store(std::clamp(lag, 0, 3));
+      g_hfi_sign.store(sg < 0 ? -1.0f : 1.0f);
+      g_hfi_half.store(std::clamp(half, 1, 16));
+      fmt::print("#hfi pll kp={:.4g} ki={:.4g} lag={} sign={:+.0f} half={} ({:.0f} Hz)\n", kp, ki, g_hfi_lag.load(),
+                 g_hfi_sign.load(), g_hfi_half.load(), 20000.0f / (2.0f * g_hfi_half.load()));
+    } else if (strncmp(line, "hfi", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) {
+      float vh = -1.0f, bias = g_hfi_bias.load();
+      char tr[8] = {0};
+      const int nargs = sscanf(line, "hfi %f %f %7s", &vh, &bias, tr);
+      if (nargs < 1) {
+        fmt::print("#hfi vh={:.3f} V bias={:.2f} A track={} th={:.1f} deg w={:.1f} rpm yd={:.4f} yq={:.4f} A/tick "
+                   "lag={} scan_left={}\n",
+                   g_hfi_volts.load(), g_hfi_bias.load(), (int)g_hfi_track.load(),
+                   g_hfi_theta.load() * 180.0f / 3.14159265f, g_hfi_omega.load() / kRpmToOmegaE,
+                   g_hfi_yd.load(), g_hfi_yq.load(), g_hfi_lag_used.load(), g_hscan_left.load());
+      } else if (vh <= 0.0f) {
+        g_hfi_volts.store(0.0f);
+        g_hfi_track.store(false);
+        g_hscan_left.store(0);
+        fmt::print("#hfi off\n");
+      } else if (!g_sampler.is_enabled()) {
+        fmt::print("! sampler disabled — 'e 1' first\n");
+      } else {
+        uncoast();
+        g_hfi_bias.store(std::clamp(bias, -4.0f, 4.0f));
+        g_hfi_track.store(tr[0] == 't');
+        g_hfi_volts.store(std::clamp(vh, 0.0f, kHfiMaxVolts));
+        fmt::print("#hfi on vh={:.3f} V bias={:.2f} A track={}\n", g_hfi_volts.load(), g_hfi_bias.load(),
+                   (int)g_hfi_track.load());
+      }
     } else if (sscanf(line, "sq %d", &x) == 1) {
       g_stream_quiet.store(x != 0);
       fmt::print("#stream {}\n", x ? "quiet" : "on");
@@ -2395,9 +2817,9 @@ extern "C" void app_main(void) {
         if (axiscfg::save_enc_ofs(ofs, logger))
           g_axis.enc_ofs_rad = ofs;
         // consistency: resultant length of the 8 unit vectors, 1.0 = all agree
-        fmt::print("#ecal OK ofs={:.2f} deg (elec = 6 x enc + ofs) consistency={:.3f} — "
+        fmt::print("#ecal OK ofs={:.2f} deg (elec = {:.1f} x enc + ofs) consistency={:.3f} — "
                    "erun/eiq unlocked\n",
-                   ofs / kDeg2Rad, sqrtf(ss * ss + cs * cs) / 8.0f);
+                   ofs / kDeg2Rad, kEncToElec, sqrtf(ss * ss + cs * cs) / 8.0f);
       }
     } else if (sscanf(line, "eofs %f", &a) == 1) {
       float ofs = fmodf(a, 360.0f) * 3.14159265f / 180.0f;
@@ -2627,7 +3049,7 @@ extern "C" void app_main(void) {
       g_iq_target.store(0);
       g_reset_pi.store(true);
       g_reset_obs.store(true);
-      driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+      set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
       g_sampler.set_edge(x != 0, logger);
       g_sampler.enable(); // recovery path after a trip/overrun
       fmt::print("#edge {} — armed, targets zeroed\n",

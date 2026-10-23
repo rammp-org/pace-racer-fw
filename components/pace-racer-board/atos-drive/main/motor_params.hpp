@@ -27,6 +27,7 @@ namespace motor {
 // any of these is a reflash on purpose. 60 rpm on the 267 mm wheel is 0.84 m/s.
 inline constexpr const char *kName = "flatbot";
 inline constexpr int kPolePairs = 15;
+inline constexpr float kEncGear = 2.5f; // MT6701 geared 2.5x per rotor rev on the dyno/rover
 inline constexpr float kKt = 0.60f;
 inline constexpr float kMaxRpm = 60.0f;   // vel_limit = 0 and hard ceiling
 inline constexpr float kMaxAmps = 20.0f;  // torque_limit = 0 and hard ceiling (12 N.m)
@@ -49,6 +50,7 @@ inline constexpr float kDefaultVoltLimit = 8.0f; // back-EMF at 60 rpm is 2.5 V,
 // in halls-sensorless for the procedure.
 inline constexpr const char *kName = "hub20";
 inline constexpr int kPolePairs = 20;
+inline constexpr float kEncGear = 2.5f; // (dyno MT6701 mount; the chair uses the quadrature encoder)
 // N.m/A = 1.5 * pp * lambda. 17 N.m at 10.9 A peak = 7.7 A RMS, which is the
 // datasheet's rated 7.5 A (RMS) within 3 %.
 inline constexpr float kKt = 1.56f;
@@ -74,11 +76,41 @@ inline constexpr float kDefaultKi = 86.0f;  // V/(A*s)
 // at 60, so the NineBot's 8 V clamp would stall the I/f spin outright.
 inline constexpr float kDefaultVoltLimit = 16.0f;
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: 0 = step (D24)
+#elif defined(ATOS_MOTOR_DRONE)
+// Sensorless drone outrunner on the bench (2026-10-23), no halls, no encoder,
+// no datasheet. Phase-A clamp at bridge enable: 13.5 A/us at 48 V, so the
+// line-line inductance is only ~3.5-5 uH (NineBot: ~670 uH) and the winding
+// resistance is tens of milliohms. Everything here is a bring-up placeholder
+// until 'rl' and the HFI saliency scan replace it; the ceilings are low on
+// purpose. 24 V bench supply (12 + 12 in series): 48 V puts >20 A into this
+// motor on every one-period duty glitch.
+inline constexpr const char *kName = "drone";
+inline constexpr int kPolePairs = 2;      // MEASURED 2026-10-23: I/f at 7 and 14 Hz electrical, encoder counted 3.49 / 7.02 rev/s
+// MT6701 magnet glued to the back of the bell, 1:1, reads opposite to the drive direction
+// (negative gear = inverted sense). Offset from 'ecal'.
+inline constexpr float kEncGear = -1.0f;
+inline constexpr float kKt = 0.02f;       // placeholder, N.m/A
+inline constexpr float kMaxRpm = 3000.0f; // mechanical; free rotor on the bench, no prop
+inline constexpr float kMaxAmps = 6.0f;   // torque_limit = 0 and hard ceiling
+inline constexpr float kHoldAmps = 2.0f;
+inline constexpr float kMaxAccelRpmS = 0.0f;
+inline constexpr float kObsR = 0.036f;    // ohm/phase: 'rl' 0.1..0.4 V slope, 24 V, 2026-10-23
+inline constexpr float kObsL = 3.0e-6f;   // H/phase: 2.3 A per 0.42 us edge at 24 V (loop L 4.4 uH = 1.5 Lph)
+inline constexpr float kObsLambda = 0.001f; // Wb, placeholder; read 'flux' at speed
+inline constexpr float kBusVoltage = 24.0f;
+// Current-loop PI at ~2000 rad/s (Kp/L = 2000, Ki/Kp = R/L) from the measured
+// R/L. Dead-time voltage error measured 0.13 V at 24 V / 20 kHz: 3.6 A worth
+// of offset at this resistance, so small-signal work needs an Id bias. Deliberately soft: with L this small the plant pole is at 20 krad/s
+// and a NineBot-tuned Kp (0.0568) would be 30x too hot.
+inline constexpr float kDefaultKp = 0.006f; // V/A  (Kp/L = 2000 rad/s)
+inline constexpr float kDefaultKi = 72.0f;  // V/(A*s) (Ki/Kp = R/L)
+inline constexpr float kDefaultVoltLimit = 3.0f; // 3 V into 40 mohm is 75 A - the PI clamp is not the current limit here
 #else
 // NineBot S on the dyno: 15 pp, Kt 0.60 N.m/A measured (report fig 5), 520 rpm
 // speed clamp from the 1 kW campaign, 30 A hard target ceiling.
 inline constexpr const char *kName = "ninebot";
 inline constexpr int kPolePairs = 15;
+inline constexpr float kEncGear = 2.5f; // MT6701 geared 2.5x per rotor rev
 inline constexpr float kKt = 0.60f;
 inline constexpr float kMaxRpm = 520.0f;
 inline constexpr float kMaxAmps = 30.0f;
