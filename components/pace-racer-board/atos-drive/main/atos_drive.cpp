@@ -52,6 +52,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <complex>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -486,8 +487,10 @@ std::atomic<float> g_rl_volts{0.0f};
 //                          and HOLD drives on the estimated angle.
 //   hfi 0                  off.   hfig <kp> <ki> [lag] [sign]  PLL gains.
 // Vh is clamped: with L ~3 uH every 0.1 V is 1.7 A of per-tick current step,
-// and the sampler's slew filter rejects jumps above 5 A.
-static constexpr float kHfiMaxVolts = 0.25f;
+// and the sampler's slew filter rejects jumps above 5 A. Measured on the drone
+// bench the response is far smaller (0.25 V -> 0.59 A, dead-time dominated), so
+// the cap is open to 1 V for HFI testing; watch 'rej' and max|A| in 's'.
+static constexpr float kHfiMaxVolts = 1.0f;
 // Dead-time compensation ('dtc <V> [band_A]'): each phase loses ~Vdt of average
 // voltage in the direction of its current (measured 0.13 V at 24 V / 20 kHz on
 // the drone bench, = 3.6 A of offset at 36 mohm). Added per phase before the
@@ -519,8 +522,16 @@ static constexpr int kHscanAngles = 36;
 // 2 theta_r with the write latency cancelling, |N|/|P| = (Lq-Ld)/(Lq+Ld). The
 // inverter's own asymmetry adds a fixed N_s; pin the rotor at a few known
 // angles and the rotor term is the part that turns with 2A.
+//
+// The sampler converts ONE phase per period (m 1), so in alpha-beta the other
+// phase is 50 us stale - a quarter cycle at fs/4, which fakes saliency too.
+// 'hrot ... 8' steps 45 deg per tick (fs/8): each phase is then fresh on every
+// other tick and sees 4 distinct phasors per cycle, so P and N are solved from
+// the two fresh-only phase phasors (capdump rows 2-3) with no stale data.
 std::atomic<int> g_hrot_left{0};
 std::atomic<float> g_hrot_volts{0.0f};
+std::atomic<int> g_hrot_div{8};        // ticks per injection revolution: 4 or 8
+std::atomic<int> g_smed{1};            // sampler median: 1 = auto (off while injecting), 0 = off, 2 = on
 static constexpr int kHrotSettleTicks = 400;
 static constexpr int kHscanSettleTicks = 600;  // 30 ms
 static constexpr int kHscanAvgTicks = 2400;    // 120 ms
@@ -1097,20 +1108,34 @@ IRAM_ATTR void foc_task_fn(void *) {
     const bool scanning = g_hscan_left.load(std::memory_order_relaxed) > 0;
     const bool rotating = g_hrot_left.load(std::memory_order_relaxed) > 0;
     const bool hfi_on = (hfi_vh > 0.0f || scanning || rotating) && (mode == HOLD || mode == SPIN || mode == HALL);
+    {
+      const int smed = g_smed.load(std::memory_order_relaxed);
+      g_sampler.set_raw_mode(smed == 0 || (smed == 1 && hfi_on));
+    }
     static int rot_k = 0, rot_n = 0; static float rot_pr = 0, rot_pi = 0, rot_nr = 0, rot_ni = 0; static int rot_left_total = 0;
+    static float rot_cr[3] = {}, rot_ci[3] = {}; static int rot_cn[3] = {}; // per-phase, fresh samples only
+    static int rot_div = 4;
     float vrot_a = 0.0f, vrot_b = 0.0f;
     if (rotating) {
       const int left = g_hrot_left.load(std::memory_order_relaxed);
-      if (rot_left_total == 0) { rot_left_total = left; rot_k = 0; rot_n = 0; rot_pr = rot_pi = rot_nr = rot_ni = 0.0f; }
+      if (rot_left_total == 0) {
+        rot_left_total = left; rot_k = 0; rot_n = 0; rot_pr = rot_pi = rot_nr = rot_ni = 0.0f;
+        for (int f = 0; f < 3; f++) { rot_cr[f] = rot_ci[f] = 0.0f; rot_cn[f] = 0; }
+        rot_div = g_hrot_div.load(std::memory_order_relaxed) == 8 ? 8 : 4;
+      }
       // demod this tick's current with THIS tick's phasor (constant latency phases cancel in arg(N)+arg(P))
-      const int ph = rot_k & 3; // 0,90,180,270 deg
-      const float cph = (ph == 0) ? 1.0f : (ph == 2) ? -1.0f : 0.0f;
-      const float sph = (ph == 1) ? 1.0f : (ph == 3) ? -1.0f : 0.0f;
+      const float phi = kTwoPi * (float)(rot_k % rot_div) / (float)rot_div;
+      const float cph = cosf(phi), sph = sinf(phi);
       if (rot_left_total - left >= kHrotSettleTicks) {
         // P += i * e^{-j phi};  N += i * e^{+j phi}
         rot_pr += ab.alpha * cph + ab.beta * sph;  rot_pi += ab.beta * cph - ab.alpha * sph;
         rot_nr += ab.alpha * cph - ab.beta * sph;  rot_ni += ab.beta * cph + ab.alpha * sph;
         rot_n++;
+        // Fresh phase only: C_f += i_f * e^{-j phi}
+        const int f = g_sampler.fresh_phase();
+        if (f >= 0 && f <= 2) {
+          rot_cr[f] += i3[f] * cph; rot_ci[f] -= i3[f] * sph; rot_cn[f]++;
+        }
       }
       const float vr = g_hrot_volts.load(std::memory_order_relaxed);
       vrot_a = vr * cph; vrot_b = vr * sph;
@@ -1120,7 +1145,29 @@ IRAM_ATTR void foc_task_fn(void *) {
         const float inv = 1.0f / (float)std::max(rot_n, 1);
         g_cap_buf[0][0] = rot_pr * inv; g_cap_buf[0][1] = rot_pi * inv; g_cap_buf[0][2] = (float)rot_n;
         g_cap_buf[1][0] = rot_nr * inv; g_cap_buf[1][1] = rot_ni * inv; g_cap_buf[1][2] = vr;
-        g_cap_n.store(2, std::memory_order_relaxed); g_cap_mode.store(4);
+        // Per-phase solve. Phase f sees i_f = Re(i e^{-j phi_f}), phi_f = 120 f deg, so
+        // C_f = (P a_f + M b_f) / 2 with a_f = e^{-j phi_f}, b_f = conj(a_f), M = conj(N).
+        // Two fresh phases -> two equations -> P and N. Valid for div 8 only (div 4
+        // gives each phase just two phasors per cycle).
+        int fa = -1, fb = -1;
+        for (int f = 0; f < 3; f++) {
+          if (rot_cn[f] > 0) { if (fa < 0) fa = f; else if (fb < 0) fb = f; }
+        }
+        if (fa >= 0 && fb >= 0) {
+          using cf = std::complex<float>;
+          const cf c1 = 2.0f * cf(rot_cr[fa], rot_ci[fa]) / (float)rot_cn[fa];
+          const cf c2 = 2.0f * cf(rot_cr[fb], rot_ci[fb]) / (float)rot_cn[fb];
+          const cf a1 = std::polar(1.0f, -kTwoPi * fa / 3.0f), a2 = std::polar(1.0f, -kTwoPi * fb / 3.0f);
+          const cf b1 = std::conj(a1), b2 = std::conj(a2);
+          const cf det = a1 * b2 - a2 * b1;
+          const cf P = (c1 * b2 - c2 * b1) / det;
+          const cf N = std::conj((a1 * c2 - a2 * c1) / det);
+          g_cap_buf[2][0] = P.real(); g_cap_buf[2][1] = P.imag(); g_cap_buf[2][2] = (float)(rot_cn[fa] + rot_cn[fb]);
+          g_cap_buf[3][0] = N.real(); g_cap_buf[3][1] = N.imag(); g_cap_buf[3][2] = (float)rot_div;
+        } else {
+          for (int r = 2; r < 4; r++) g_cap_buf[r][0] = g_cap_buf[r][1] = g_cap_buf[r][2] = 0.0f;
+        }
+        g_cap_n.store(4, std::memory_order_relaxed); g_cap_mode.store(4);
         rot_left_total = 0;
       }
     } else {
@@ -2163,7 +2210,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
-      "#        hscan <Vh> [Id] | hrot <Vh> [ms] | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -2697,8 +2744,9 @@ extern "C" void app_main(void) {
       fmt::print("#dead-time comp {:.3f} V, linear band +/-{:.2f} A\n", g_dt_comp_v.load(), g_dt_comp_band.load());
     } else if (strncmp(line, "hrot", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
       float vh = 0.05f;
-      int ms = 1000;
-      sscanf(line, "hrot %f %d", &vh, &ms);
+      int ms = 1000, div = g_hrot_div.load();
+      sscanf(line, "hrot %f %d %d", &vh, &ms, &div);
+      g_hrot_div.store(div == 4 ? 4 : 8);
       vh = std::clamp(vh, 0.0f, kHfiMaxVolts);
       ms = std::clamp(ms, 50, 5000);
       if (!g_sampler.is_enabled()) {
@@ -2709,7 +2757,9 @@ extern "C" void app_main(void) {
         g_cap_want.store(0); g_cap_n.store(0);
         g_hrot_volts.store(vh);
         g_hrot_left.store(ms * 20);
-        fmt::print("#hrot {:.3f} V for {} ms — 'capdump' when done: row0 = P (re, im, n), row1 = N (re, im, Vh)\n", vh, ms);
+        fmt::print("#hrot {:.3f} V for {} ms, fs/{} — 'capdump' when done: rows 0-1 = P, N from alpha-beta "
+                   "(re, im, n | Vh); rows 2-3 = P, N from fresh phases only (re, im, n | div)\n",
+                   vh, ms, g_hrot_div.load());
       }
     } else if (strncmp(line, "hfig", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
       float kp = g_hfi_pll_kp.load(), ki = g_hfi_pll_ki.load(), sg = g_hfi_sign.load();
@@ -2747,6 +2797,10 @@ extern "C" void app_main(void) {
         fmt::print("#hfi on vh={:.3f} V bias={:.2f} A track={}\n", g_hfi_volts.load(), g_hfi_bias.load(),
                    (int)g_hfi_track.load());
       }
+    } else if (sscanf(line, "smed %d", &x) == 1) {
+      // Sampler median-of-3: 1 = auto (bypassed while injecting), 0 = always off, 2 = always on
+      g_smed.store(std::clamp(x, 0, 2));
+      fmt::print("#sampler median {}\n", x == 0 ? "OFF" : x == 2 ? "ON (even while injecting)" : "AUTO (off while injecting)");
     } else if (sscanf(line, "sq %d", &x) == 1) {
       g_stream_quiet.store(x != 0);
       fmt::print("#stream {}\n", x ? "quiet" : "on");
@@ -2856,11 +2910,13 @@ extern "C" void app_main(void) {
             g_encoder->get_tracking_status() == espp::PaceRacerBoard::Encoder::TrackingStatus::LOST;
         float the = kEncToElec * (float)g_encoder->get_count() * kEncCntToRad + g_enc_ofs.load();
         the -= kTwoPi * floorf(the / kTwoPi);
+        // rpm is the 50 ms-filtered rotor rpm the speed loop uses; the BSP's raw
+        // get_rpm() is a 1 ms count difference and too noisy to read by eye.
         fmt::print("#enc cnt={} mech={:.2f}deg acc={:.1f}deg rpm={:.2f} field={} track={} btn={} "
                    "| elec={:.1f}deg ofs={:.1f}deg cal={:d} src={} | hall sec={} steps={} "
                    "rpm={:.1f}\n",
                    g_encoder->get_count(), g_encoder->get_mechanical_degrees(),
-                   g_encoder->get_degrees(), g_encoder->get_rpm(), fss, lost ? "LOST" : "OK",
+                   g_encoder->get_degrees(), g_enc_rpm_pub.load(std::memory_order_relaxed), fss, lost ? "LOST" : "OK",
                    g_encoder->get_push_button() ? 1 : 0, the * 180.0f / 3.14159265f,
                    g_enc_ofs.load() * 180.0f / 3.14159265f, g_enc_cal.load() ? 1 : 0,
                    g_theta_src.load() ? "ENC" : "HALL", g_hall_poller.sector(),

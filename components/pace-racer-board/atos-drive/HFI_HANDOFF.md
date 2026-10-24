@@ -40,9 +40,24 @@ Changes in `main/`:
 6. At 6 A I/f the current loop went unstable near 1400 rpm mech and the DRV latched 0x0622 (VDS HA+HC). 3 A I/f was fine to ~1400 rpm, pulled out above. Don't raise current without handling the dead-time relay behaviour.
 7. All standstill saliency numbers taken today (inverter ellipse |N|/|P| 0.62 at zero bias, rotor term 1.9 %) were with the rotor at ONE position (the 2 A alignments did not move it: 2 A is about the cogging torque). Saliency is UNRESOLVED, not absent.
 
+## Update 2026-10-23 evening: the measurement chain was the "saliency"
+
+Everything in "What was learned" items 3, 4 and 7 about saliency size is superseded. Two sampler effects were faking a large stator-fixed N:
+
+1. **Median-of-3 in `FocSampler::median_filter`** (NineBot glitch filter). At fs/4 it alone fakes |N|/|P| 0.11-1.0 and eats 29-71 % of |P| (simulated). Now bypassed while any injection runs (`smed 1` = auto, default; `smed 0` always off, `smed 2` force on for A/B). The slew gate widens to 10 A in that mode; the plausibility gate and trips are unchanged.
+2. **One phase per period (`m 1`, alternating)**: the other phase in every alpha-beta sample is 50 us stale. At fs/4 that alone fakes |N|/|P| 0.28-0.80; at fs/8 it fakes nothing. `hrot <Vh> [ms] [4|8]` now defaults to fs/8 (2.5 kHz) and also solves P, N from the fresh phase only (capdump rows 2-3; rows 0-1 are still alpha-beta). `m 2` is not an option: the post-hop conversion is corrupt.
+
+Also: `kHfiMaxVolts` 0.25 -> 1.0 (watch `rej`/max|A| in `s`; fs/4 at 0.4 V tripped the 5 A slew gate), and `enc` rpm now prints the 50 ms-filtered rotor rpm (the old 1 ms raw value read ~2x off at random, which was the "2.25x").
+
+**Result with the clean chain** (`tools/hfi_bench/enc_scan.py 0.25 3 800 15 out.json`: align with 3 A at 24 angles, release, read the encoder, `hrot 0.25 800 8`): |P| 2.25 A, rotor 2-theta term |Nr| 0.239 A = **10.6 % saliency**, residual 0.039. After subtracting the stator-fixed Ns and a fixed offset (137.7 deg in 2-theta at 0.25 V, 89.1 deg at 0.15 V: calibrate per Vh) the HFI angle matches the encoder to **3.8 deg rms, 8.1 deg max electrical**. At 0.15 V: 6.5 % saliency, 6.7 deg rms. |P| repeats to 0.5 % at a fixed position.
+
+Caveats: the rotor only rests at 6 cogging detents (60 deg elec apart), where e^{j2theta} and e^{-j4theta} are indistinguishable, so "2 theta" is assumed from physics until checked off-detent. Sign of theta (180 deg ambiguity) still needs a polarity test.
+
+Next: continuous rotating-injection demod + PLL (`hfi ... track` on the fs/8 P/N error, Ns and offset calibrated), compare `th_est` with the encoder while the rotor is turned slowly (this also breaks the detent alias), then polarity detection, then standstill start.
+
 ## Bench scripts (`tools/hfi_bench/`)
 
-`scpi.py HOST 'CMD'...` raw SCPI bound to en7 | `bootcap.py` arm scope on phase A, reset board, read RAW + bootlog (`--cmd 'rl 0.3 10'` sends a console command instead of resetting) | `rl_run.py 0.1 0.2 0.3 0.4` R/L steps + scope | `hfi_cap.py Vh bias` per-tick i/v capture under pulsating injection + lag correlation | `rot_cap.py Vh bias th` same for rotating injection + complex spectrum | `rot_scan.py Vh bias ms A1 A2 ...` rotating-injection saliency at several rotor angles (bias 0 = align with 2 A then release) + stationary/rotor split | `pin_scan.py`, `hscan_run.py`, `align_scan.py` pulsating variants | `spin_phase.py A rpm ramp` I/f spin + v-i phase fit | `coast_test.py`. All open `/dev/cu.usbmodem2101`; run from the venv.
+`scpi.py HOST 'CMD'...` raw SCPI bound to en7 | `bootcap.py` arm scope on phase A, reset board, read RAW + bootlog (`--cmd 'rl 0.3 10'` sends a console command instead of resetting) | `rl_run.py 0.1 0.2 0.3 0.4` R/L steps + scope | `hfi_cap.py Vh bias` per-tick i/v capture under pulsating injection + lag correlation | `rot_cap.py Vh bias th` same for rotating injection + complex spectrum | `rot_scan.py Vh bias ms A1 A2 ...` rotating-injection saliency at several rotor angles (bias 0 = align with 2 A then release) + stationary/rotor split | `pin_scan.py`, `hscan_run.py`, `align_scan.py` pulsating variants | `enc_scan.py Vh Ialign ms step out.json` encoder-truth saliency scan (fs/8, fresh-phase P/N) | `hsweep.py th|- reps div smed Vh...` repeatability/A-B at one position | `con.py 'cmd[@wait]'...` console one-shots | `spin_phase.py A rpm ramp` I/f spin + v-i phase fit | `coast_test.py`. All open `/dev/cu.usbmodem2101`; run from the venv.
 
 Console sequence that is known-good at 24 V: `ho 9999 9000 1` (no observer handoff), `vl 6`, `run 3 60 2` (7 Hz electrical = 210 rpm mech) spins reliably; `ecal 4`; `erun 3 300 3`.
 

@@ -257,6 +257,16 @@ public:
   void set_samples_per_isr(int n) { samples_per_isr_.store(n, std::memory_order_relaxed); }
   int samples_per_isr() const { return samples_per_isr_.load(std::memory_order_relaxed); }
 
+  /// HFI raw mode: skip the median-of-3 and widen the slew gate to 2x while
+  /// high-frequency injection runs. A median of 3 neighbours reshapes a signal
+  /// that repeats every 4-8 samples and fakes saliency. The plausibility gate
+  /// and the overcurrent trip are unchanged.
+  void set_raw_mode(bool on) { raw_mode_.store(on, std::memory_order_relaxed); }
+  bool raw_mode() const { return raw_mode_.load(std::memory_order_relaxed); }
+  /// Phase converted this tick: px or py in alternating mode, 3 when both were
+  /// read, -1 when nothing was committed. The other phase is a period stale.
+  int fresh_phase() const { return fresh_ph_.load(std::memory_order_relaxed); }
+
   int raw_x() const { return raw_x_.load(std::memory_order_relaxed); }
   int raw_y() const { return raw_y_.load(std::memory_order_relaxed); }
   int raw_zero(int p) const { return raw_zero_[p]; }
@@ -671,6 +681,12 @@ private:
     if (dev > max_plausible_counts_.load(std::memory_order_relaxed)) {
       imp_count_[phase].fetch_add(1, std::memory_order_relaxed);
       raw = h[2]; // non-physical amplitude -> hold, no escape credit
+    } else if (raw_mode_.load(std::memory_order_relaxed) && jump <= 2 * max_jump_counts_) {
+      reject_run_[phase] = 0; // HFI raw mode: pass through, keep the history live
+      h[0] = h[1];
+      h[1] = h[2];
+      h[2] = raw;
+      return raw;
     } else if (jump > max_jump_counts_) {
       if (++reject_run_[phase] >= kMaxRejectRun) {
         reject_run_[phase] = 0;
@@ -886,6 +902,7 @@ private:
       raw_x_.store(median_filter(px, new_x), std::memory_order_relaxed);
     if (upd_y)
       raw_y_.store(median_filter(py, new_y), std::memory_order_relaxed);
+    fresh_ph_.store(upd_x && upd_y ? 3 : upd_x ? px : upd_y ? py : -1, std::memory_order_relaxed);
 
     // Integer overcurrent trip. Consecutive samples only — a lone over-limit
     // sample is far more likely a conversion outside the window than a real fault.
@@ -968,6 +985,8 @@ private:
   std::atomic<int> phase_y_{1};
   std::atomic<int> raw_x_{0};
   std::atomic<int> raw_y_{0};
+  std::atomic<int> fresh_ph_{-1};
+  std::atomic<bool> raw_mode_{false};
 
   std::atomic<bool> enabled_{false};
   std::atomic<bool> tripped_{false};
