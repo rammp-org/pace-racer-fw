@@ -4,6 +4,37 @@ Read this first in a new session. Everything below was verified on hardware toda
 Memory notes with the same facts: `drone-motor-hfi-bench`, `mho984-scope-capture`,
 `rigol-dp2031-lan-scpi`.
 
+## START HERE (2026-10-24 ~00:30): state after the parallel-agent night
+
+Branch `alexchunlin/high-frequency-injection` @ the latest merge contains all five worker branches
+(console-stall, breakaway-tracking + smooth-hfi-drive, polarity-detection, boot-panic, hfi-higher-vh).
+Full reports: `hfi_reports/*.md` (copied from /tmp/hfi/reports; raw data still in /tmp/hfi).
+
+**First, physically:** the dyno board dropped off USB after a VM cycle at ~00:20 and needs a replug /
+reset. PSU (Rigol) is 6+6 V series, outputs on. Then:
+1. Build fresh: delete the generated `atos-drive/sdkconfig` (a static_assert now rejects stale ones; main
+   task stack must be 16 KB) and use a new `-B` dir: `idf.py -B build-int12b -DATOS_MOTOR=drone -DATOS_VBUS=12 build`.
+2. Flash, then VERIFY the running image (`tools/usb_reset.py --info` / version); OTA can roll back silently.
+3. `enc` must show cal=1 (else `eofs 316.35`).
+4. Acceptance for the untested zero-current-window fix: `tools/hfi_bench/hvh_accept.sh` (see hfi_reports/hfi-higher-vh.md).
+
+**Where HFI stands (12 V bus, Vh 0.17-0.20 V, fs/8 rotating injection, hrt observer):**
+- Standstill tracking ~5 deg; reverse HFI-driven `xrun 3 -30/-60 1` holds 10 s (hat-enc sd 12-14 deg).
+- Forward fails at one stick spot (enc ~175-188 deg elec): there the HFI measurement follows the drive-current
+  angle (~0.8 positive-feedback gain) and theta_hat creeps ~30 deg ahead; best forward 1/4 runs of 10 s.
+  Candidate fix in the tree, default off and never run on hardware: `hrtb` zero-current HFI windows (+ `hrtz`, xsl `eback`).
+- Polarity (`hpol`, encoder-free): 85 % at <= 3 A d pulses; magnet term ~2 % vs a stator term up to 4 %. Not a
+  safe seed alone; `hseed enc` stays the default. 4 A pulses were clean on the scope but a DRV fault 0x0628 followed.
+- Vh 0.25 V gave a 9.9 A scope peak with drive current: too close to the 10 A rule. 0.20 V (5.3 A) is the usable top.
+
+**Fixed tonight (keep):** console output no longer stalls the sampler ISR (stdout drained on TinyUSB's core,
+ISR in IRAM, ISR drops the injection on late samples, `hwd`); FOC CPU budget (no per-tick double trig);
+main-task stack overflow at boot (8 -> 16 KB) that corrupted intr/partition lists and probably the NVS encoder offset.
+
+**Bench process:** `/tmp/hfi/bench_lock.sh` (FIFO lock) + `hfi_reports/BENCH_RULES.md`. 7 DRV trips across the night,
+all recovered by VM cycle; causes: console stall (fixed), ungoverned torque runaways (now governed by default),
+CPU-budget console lag (fixed), one unexplained 0x0628 during 4 A polarity pulses.
+
 ## Hardware on the bench
 
 | Item | How to reach it | State |
