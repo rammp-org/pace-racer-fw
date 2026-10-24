@@ -15,8 +15,10 @@ def cmd(c, wait=0.4):
     while time.time() - t < wait: b += sp.read(8192)
     return b.decode(errors='replace')
 def enc():
-    t = cmd('enc', 0.3); m = re.search(r"acc=(-?[\d.]+)deg.*elec=(-?[\d.]+)deg", t)
-    return float(m.group(1)), float(m.group(2))
+    for _ in range(3):
+        t = cmd('enc', 0.3); m = re.search(r"acc=(-?[\d.]+)deg.*elec=(-?[\d.]+)deg", t)
+        if m: return float(m.group(1)), float(m.group(2))
+    return float('nan'), float('nan')
 num = r"([+-]?[\d.]+)"
 keys = ['flip', 'margin', 'snr', 'Y', 'K', 'k', 'kdeg', 'sel', 'i1', 'imax', 'move', 'th0', 'hat', 'enc', 'err']
 pat = (rf"#hpol flip={num} margin={num}% snr={num} Y={num}% K={num}% k={num}%@{num}deg sel={num} I1={num} A "
