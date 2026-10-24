@@ -59,6 +59,7 @@
 #include <type_traits>
 
 #include "driver/gpio.h"
+#include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -82,6 +83,18 @@
 
 #include "demo_link.hpp" // native USB: telemetry, console, OTA, reset, core dump
 #include "eth_link.hpp"  // the same service stream over TCP: OTA, console, reset
+
+// The main task runs app_main, whose own frame is ~4.6 KB (every hook, config and
+// lambda lives in it), and the console loop. Boot peaks at ~8.8 KB, in the float
+// prints of FocSampler::zero_calibrate. At the old 8 KB the task ran ~140 B past
+// the bottom of its stack into the heap block below it, so whichever object the
+// heap layout put there got overwritten: the interrupt-descriptor list (panic in
+// set_edge), the OTA partition descriptors (boot or OTA panic, rollback), the
+// running partition's label. The stack high-water mark did not show it: the
+// overflowing frame skipped the bottom bytes. 'bootlog' prints the true margin.
+static_assert(CONFIG_ESP_MAIN_TASK_STACK_SIZE >= 16384,
+              "main task stack below 16 KB: app_main overflows it (see above). A stale "
+              "sdkconfig keeps the old value: delete it or set CONFIG_ESP_MAIN_TASK_STACK_SIZE");
 
 using namespace std::chrono_literals;
 
@@ -1150,6 +1163,7 @@ struct DrvCheck {
 // flash (see the note in the DRV config retry loop). 'bootlog' replays them.
 std::array<DrvCheck, 12> g_drv_checks{};
 size_t g_drv_check_n = 0;
+TaskHandle_t g_main_task = nullptr; // app_main / console task, for its stack margin
 
 void drv_check(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd, const char *where) {
   std::error_code ec;
@@ -1188,6 +1202,7 @@ void drv_reset_pulse() {
 extern "C" void app_main(void) {
   espp::Logger logger({.tag = "sensorless", .level = espp::Logger::Verbosity::INFO});
   logger.info("Bootup — stage 1: synchronized sampler + FOC task (Clarke only, no rotation)");
+  g_main_task = xTaskGetCurrentTaskHandle();
 
   using Bsp = espp::PaceRacerBoard;
   auto &bsp = Bsp::get();
@@ -2001,6 +2016,11 @@ extern "C" void app_main(void) {
       }
       if (!named)
         fmt::print("#  boot was clean — the fault latches after boot\n");
+      fmt::print("#  nvs init: {}{}\n", esp_err_to_name(axiscfg::g_init_err),
+                 axiscfg::g_wiped ? " -> ERASED (calibration lost)" : "");
+      fmt::print("#  main task stack: {} B never used of {} | heap {}\n",
+                 (unsigned)uxTaskGetStackHighWaterMark(g_main_task), CONFIG_ESP_MAIN_TASK_STACK_SIZE,
+                 heap_caps_check_integrity_all(true) ? "intact" : "CORRUPT");
     } else if (strncmp(line, "sen", 3) == 0) {
       // sen <0|1> — turn the DRV8353 VSENSE overcurrent protection (SEN_OCP)
       // off or on. It trips when the SP pin exceeds the SEN_LVL threshold
