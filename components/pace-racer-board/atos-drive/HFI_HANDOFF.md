@@ -86,3 +86,21 @@ Console sequence that is known-good at 24 V: `ho 9999 9000 1` (no observer hando
 2. If viable: close the `hfi ... track` PLL on the rotating-injection error instead of the pulsating one (demod already exists), compare `th_est` against the encoder in the stream, then I/f-free standstill start.
 3. If not viable: I/f start + flux observer handoff is the fallback (`ho`, `mp`, λ to be measured from a coast capture with the encoder as truth).
 4. Fix the `enc` rpm scaling; make the reset path coast the DRV before `esp_restart` (OTA reboot showed a 2-7 A transient as the bridge died).
+
+## Update 2026-10-23 late: breakaway tracking (branch alexchunlin/hfi-breakaway-tracking)
+
+**Root cause of the 2.5 A loss is the measurement, not PLL bandwidth.** Mode-9 captures (`cap <every> <n> 9`: [enc, meas, hat], [i_fund a,b, omega_hat]) show the iq step shifting the raw HFI angle by -28 deg before the rotor moves. hat follows, so the true-frame current gains +d and the measurement shifts further (about 1.7 deg per deg of hat error), and the 2-theta branch flips within 12 deg of rotor travel. Under encoder drive (true current on q), the raw measurement stays within +/-35 deg even at +/-150 rad/s.
+
+**Current saliency.** The fit on mode-8 data (`tools/hfi_bench/hrt_nfit.py`) is w/|P| = e^{j2theta} A (1 + b|If|^2) + K If^2, with K = -0.0046+0.0412j and b = -0.0484+0.0493j per A^2 (12 V, Vh 0.17, off 149.2). At 2.5 A, |K If^2| (0.26 A) is larger than the weakened rotor term (0.21 A). `hrtn kr ki br bi` subtracts it (no theta needed). Load-offset means go from -23/-20/+37 deg to -2/+1/-5 deg on the e30/em30/I-f sets (I-f set held out), but the sd under motion stays 15-25 deg.
+
+**Mechanical model** (erun 2.5 A capture): Kt/J 4000 rad/s^2/A elec, B/J ~8 1/s, Coulomb 1300 rad/s^2, cogging -3000 cos 6th - 3100 sin 6th (detents at -7 + k*60 deg elec, matches every rest angle). `hrtm ktj bj l3 coul i0`, `hrtk ca cb`; i0 scales the PLL correction by 1/(1+|If|^2/i0^2) so the model carries high-current transients. `xiq <A> [vmax_rpm]` adds a governor; with it, braking is capped at |A|.
+
+**FOC budget.** espp `fast_sin` rounds in double. Per-tick trig in the tracker starved the console for 1.5-3 s (commands landed late, which caused a DRV trip). Trig now runs once per injection cycle, and the pulsating demod is gated off when only hrt runs. `s` prints `cavg` (13.7 us).
+
+**Result: acceptance NOT met.** Best settings (`xaccept.sh`: hrtg 600 100000 0.01 0 0.2 20, hrtm 4000 8 0 1300 1.5, hrtk -3000 -3100, hrtn as above, sg 0.02 0.5):
+- xrun 3 30 1: trips at 9.49 / 1.89 / 0.86 / 0.33 s (plain PLL: 0.29 s). The rotor mostly rocks in a detent at +/-80 rad/s.
+- xrun 3 -30 1: held 11 s (hat-enc +2.7 mean, 9.7 sd, 45 max), but only 100 deg mech of travel.
+- xrun 3 60 1: 1.56 s.
+- xiq 2.5 governed 100/200 rpm: about 0.35 s at 2.5 A. Ungoverned, it tracked the spin-up to ~650 rad/s elec, then lost lock and the DRV tripped (0x0624).
+
+Every remaining failure is a breakaway or rocking event at |I| > ~2 A. In those events the residual current-saliency error and the 6-theta cogging term (wrong once hat is 20 deg off) let hat walk away. Next steps: a cleaner static (id, iq) saliency map at 2-3 A (needs a locked rotor or a position loop), a speed loop that does not bang the 3 A ceiling, and a higher Vh-to-current ratio. **Never run eiq/xiq above breakaway ungoverned**: two DRV trips today came from free-rotor runaways (thousands of rpm).

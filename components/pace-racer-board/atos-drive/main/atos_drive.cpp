@@ -570,6 +570,10 @@ std::atomic<float> g_hrt_ktj{0.0f}; // rad/s^2 elec per A
 std::atomic<float> g_hrt_bj{0.0f};  // 1/s
 std::atomic<float> g_hrt_l3{0.0f};  // rad/s^3 per rad
 std::atomic<float> g_hrt_coul{0.0f}; // rad/s^2 Coulomb friction, saturating at 5 rad/s
+// HFI confidence: the PLL correction (kp, ki, l3) is scaled by 1 / (1 + |If|^2 / i0^2), so at
+// high drive current, where the current's own saliency swamps the rotor term, the mechanical
+// model carries theta_hat. 0 = off.
+std::atomic<float> g_hrt_i0{0.0f};
 // Cogging acceleration ca cos(6 theta) + cb sin(6 theta), rad/s^2 elec ('hrtk ca cb').
 // Drone motor, encoder fit 2026-10-23: -3000 -3100 (detents at -7 + k*60 deg elec).
 std::atomic<float> g_hrt_cog_a{0.0f}, g_hrt_cog_b{0.0f};
@@ -1330,7 +1334,7 @@ IRAM_ATTR void foc_task_fn(void *) {
           const cf ns(g_hrt_ns_re.load(std::memory_order_relaxed), g_hrt_ns_im.load(std::memory_order_relaxed));
           cf w = (hrt_N - ns) * hrt_P * std::polar(1.0f, 3.14159265f - g_hrt_off.load(std::memory_order_relaxed));
           // Drive-current saliency (see g_hrt_k_re): |P| and the b rotation once per injection cycle.
-          static float p_mag = 0.0f, b_rot = 0.0f;
+          static float p_mag = 0.0f, b_rot = 0.0f, conf = 1.0f;
           const float kre = g_hrt_k_re.load(std::memory_order_relaxed), kim = g_hrt_k_im.load(std::memory_order_relaxed);
           const cf ifc(g_hrt_ifa.load(std::memory_order_relaxed), g_hrt_ifb.load(std::memory_order_relaxed));
           if ((hrt_k & 7) == 0) {
@@ -1338,6 +1342,8 @@ IRAM_ATTR void foc_task_fn(void *) {
             const float m2 = std::norm(ifc);
             b_rot = atan2f(g_hrt_b_im.load(std::memory_order_relaxed) * m2,
                            1.0f + g_hrt_b_re.load(std::memory_order_relaxed) * m2);
+            const float i0 = g_hrt_i0.load(std::memory_order_relaxed);
+            conf = i0 > 0.0f ? 1.0f / (1.0f + m2 / (i0 * i0)) : 1.0f;
           }
           if (kre != 0.0f || kim != 0.0f)
             w -= p_mag * cf(kre, kim) * (ifc * ifc);
@@ -1359,7 +1365,7 @@ IRAM_ATTR void foc_task_fn(void *) {
           }
           const float e2 = remainderf(two_th - 2.0f * th_hat, kTwoPi); // 2-theta error, wrapped
           const float emax = g_hrt_emax.load(std::memory_order_relaxed);
-          const float e = std::clamp(0.5f * e2, -emax, emax);
+          const float e = std::clamp(0.5f * e2, -emax, emax) * conf;
           const float wlim = motor::kMaxRpm * kRpmToOmegaE;
           d_hat = std::clamp(d_hat + g_hrt_l3.load(std::memory_order_relaxed) * e * dt, -100.0f * wlim, 100.0f * wlim);
           w_hat += (g_hrt_ki.load(std::memory_order_relaxed) * e + g_hrt_ktj.load(std::memory_order_relaxed) * iq_h -
@@ -2476,7 +2482,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
-      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] | hrtk ca cb | hrtn kr ki br bi | hrtc c_abs c_q2 c_d | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] [i0] | hrtk ca cb | hrtn kr ki br bi | hrtc c_abs c_q2 c_d | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -2912,7 +2918,8 @@ extern "C" void app_main(void) {
         sscanf(line, "xiq %f %f", &amps, &vmax);
         amps = std::clamp(amps, -g_max_target.load(), g_max_target.load());
         g_hall_iq.store(amps);
-        g_hall_amps.store(g_max_target.load());
+        // with a governor its braking torque is capped at the commanded |A| (not the board max)
+        g_hall_amps.store(vmax > 0.0f ? std::fabs(amps) : g_max_target.load());
         g_hall_vmax.store(std::clamp(vmax, 0.0f, motor::kMaxRpm));
         g_hall_sub.store(HALL_TORQUE);
         g_theta_src.store(2);
@@ -3108,12 +3115,13 @@ extern "C" void app_main(void) {
       g_hrt_guard_deg.store(std::max(gdeg, 0.0f));
       fmt::print("#hfi encoder guard {:.0f} deg (0 = off)\n", g_hrt_guard_deg.load());
     } else if (strncmp(line, "hrtm", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
-      float ktj = g_hrt_ktj.load(), bj = g_hrt_bj.load(), l3 = g_hrt_l3.load(), coul = g_hrt_coul.load();
-      sscanf(line, "hrtm %f %f %f %f", &ktj, &bj, &l3, &coul);
+      float ktj = g_hrt_ktj.load(), bj = g_hrt_bj.load(), l3 = g_hrt_l3.load(), coul = g_hrt_coul.load(), i0 = g_hrt_i0.load();
+      sscanf(line, "hrtm %f %f %f %f %f", &ktj, &bj, &l3, &coul, &i0);
+      g_hrt_i0.store(std::max(i0, 0.0f));
       g_hrt_ktj.store(ktj); g_hrt_bj.store(std::max(bj, 0.0f)); g_hrt_l3.store(std::max(l3, 0.0f));
       g_hrt_coul.store(std::max(coul, 0.0f));
-      fmt::print("#hrt model Kt/J={:.0f} rad/s^2/A B/J={:.2f} 1/s l3={:.3g} coul={:.0f} cog={:.0f},{:.0f}\n", g_hrt_ktj.load(),
-                 g_hrt_bj.load(), g_hrt_l3.load(), g_hrt_coul.load(), g_hrt_cog_a.load(), g_hrt_cog_b.load());
+      fmt::print("#hrt model Kt/J={:.0f} rad/s^2/A B/J={:.2f} 1/s l3={:.3g} coul={:.0f} cog={:.0f},{:.0f} i0={:.2f} A\n", g_hrt_ktj.load(),
+                 g_hrt_bj.load(), g_hrt_l3.load(), g_hrt_coul.load(), g_hrt_cog_a.load(), g_hrt_cog_b.load(), g_hrt_i0.load());
     } else if (strncmp(line, "hrtn", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
       float kr = g_hrt_k_re.load(), ki = g_hrt_k_im.load(), br = g_hrt_b_re.load(), bi = g_hrt_b_im.load();
       sscanf(line, "hrtn %f %f %f %f", &kr, &ki, &br, &bi);

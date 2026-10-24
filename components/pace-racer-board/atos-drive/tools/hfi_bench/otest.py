@@ -30,6 +30,8 @@ print([l for l in cmd('s',0.5).splitlines() if l.startswith(('#stats','!'))])
 sp.close(); a=np.array(data); np.save(out,a)
 if mode==9: a=a[:len(a)//2*2].reshape(-1,6)
 if len(a) and mode in (5,9):
+    live=np.nonzero(np.diff(a[:,2]))[0]          # tracker stopped (guard/stop) -> theta_hat frozen: drop the tail
+    if len(live): a=a[:live[-1]+2]
     enc,meas,hat=a[:,0],a[:,1],a[:,2]
     he=(hat-enc+180)%360-180; me=(meas-enc+90)%180-90
     dt=every/20000
