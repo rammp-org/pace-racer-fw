@@ -178,6 +178,52 @@ public:
 
   void set_notify_task(TaskHandle_t t) { notify_task_ = t; }
 
+  // ---- Injection fallback (defence in depth for HFI) ------------------------
+  // HFI adds a high-frequency voltage that is only harmless while it keeps
+  // changing: frozen, the injection vector is DC across the winding, and on a
+  // ~3 uH motor 0.15 V ramps ~2.5 A per period into the DRV8353 VDS trip
+  // (2026-10-23, console output holding the control loop off for ~200 us).
+  // The bridge only changes when the FOC task writes, so anything that holds
+  // the task or this ISR off freezes the injection on the bridge.
+  //
+  // So the FOC task also publishes, every tick, the comparator values it would
+  // write WITHOUT the injection (set_fallback), and every duty write bumps a
+  // sequence (note_duty_write, under the duty lock). This ISR is the first
+  // thing to run after any hold-off, and it runs at TEP, half a period from the
+  // TEZ shadow load, so its three comparator writes are atomic on the bridge.
+  // It writes the injection-free duties when either
+  //   - its own entry is more than half a period late (the ISR was held off,
+  //     so the task never got a sample either), or
+  //   - no duty write has happened for `fallback_stale` consecutive samples
+  //     (the task is held off while samples keep arriving).
+  // Integer-only, no float. The fundamental voltage stays (zeroing it would
+  // short the back-EMF); only the injection is removed until the task's next
+  // write. Disarmed whenever no injection runs.
+  void set_duty_mux(portMUX_TYPE *m) { duty_mux_ = m; }
+  void note_duty_write() { duty_seq_.fetch_add(1, std::memory_order_relaxed); }
+  void set_fallback(bool armed, uint32_t ta, uint32_t tb, uint32_t tc) {
+    if (duty_mux_)
+      portENTER_CRITICAL(duty_mux_);
+    fb_ticks_[0] = ta;
+    fb_ticks_[1] = tb;
+    fb_ticks_[2] = tc;
+    fb_armed_ = armed;
+    if (duty_mux_)
+      portEXIT_CRITICAL(duty_mux_);
+  }
+  /// Stale-sample threshold, 0 = fallback off.
+  void set_fallback_stale(int k) { fb_stale_ticks_.store(k, std::memory_order_relaxed); }
+  int fallback_stale() const { return fb_stale_ticks_.load(std::memory_order_relaxed); }
+  struct FallbackStats {
+    uint32_t applied;  // ISR ticks that wrote the injection-free duties
+    uint32_t held_off; // ...of which triggered by a late ISR entry
+    uint32_t stale1;   // armed samples that found no write since the previous one
+    uint32_t stale_max; // longest run of samples without a write while armed
+  };
+  FallbackStats fallback_stats() const {
+    return {fb_applied_.load(), fb_held_off_.load(), fb_stale1_.load(), fb_stale_max_.load()};
+  }
+
   /// Register the sampling ISR on the requested edge. TEP (on_full) is the null
   /// vector on this board; TEZ is offered only for the stage-0 edge comparison.
   /// The MCPWM API requires the timer in its init state to attach callbacks, so
@@ -209,6 +255,8 @@ public:
   void disable() { enabled_.store(false, std::memory_order_release); }
   bool is_enabled() const { return enabled_.load(std::memory_order_acquire); }
   bool at_tep() const { return at_tep_; }
+  /// Conversions taken so far (stall probes watch it move).
+  uint32_t sample_count() const { return n_.load(std::memory_order_relaxed); }
   /// CPU the sampling ISR last ran on (-1 before the first sample).
   int isr_core() const { return isr_core_.load(std::memory_order_relaxed); }
 
@@ -457,6 +505,10 @@ public:
     late_count_.store(0);
     gap_max_.store(0);
     long_gaps_.store(0);
+    fb_applied_.store(0);
+    fb_held_off_.store(0);
+    fb_stale1_.store(0);
+    fb_stale_max_.store(0);
     clear_filter_counters();
     dbl_n_.store(0);
     dbl_dis_.store(0);
@@ -764,6 +816,11 @@ private:
     const bool had_last = have_last_entry_;
     last_entry_ = t_entry;
     have_last_entry_ = true;
+    // Before any early return: a late or discarded sample is exactly when the
+    // bridge may be sitting on a stale injection vector.
+    check_fallback(had_last &&
+                   gap > decimation_.load(std::memory_order_relaxed) * kPeriodCycles +
+                             kPeriodCycles / 2);
 
     if (cfg_.scope_pin != GPIO_NUM_NC)
       gpio_set_level(cfg_.scope_pin, 1);
@@ -966,6 +1023,43 @@ private:
     return hpw == pdTRUE;
   }
 
+  void check_fallback(bool held_off) {
+    const uint32_t seq = duty_seq_.load(std::memory_order_relaxed);
+    if (seq != fb_seen_seq_) {
+      fb_seen_seq_ = seq;
+      fb_stale_ = 0;
+    } else if (fb_stale_ < 0xffff) {
+      fb_stale_++;
+    }
+    if (!fb_armed_)
+      return; // racy read is fine: re-checked under the lock below
+    if (fb_stale_ == 1)
+      fb_stale1_.fetch_add(1, std::memory_order_relaxed);
+    if (fb_stale_ > fb_stale_max_.load(std::memory_order_relaxed))
+      fb_stale_max_.store(fb_stale_, std::memory_order_relaxed);
+    const uint32_t k = (uint32_t)fb_stale_ticks_.load(std::memory_order_relaxed);
+    if (k == 0 || !(held_off || fb_stale_ >= k))
+      return;
+    bool wrote = false;
+    if (duty_mux_)
+      portENTER_CRITICAL_ISR(duty_mux_);
+    // A task write that slipped in after the load above is fresher than the
+    // fallback: leave it (unless this entry was itself held off — then the
+    // write was computed from a pre-gap sample and still carries injection).
+    if (fb_armed_ && (held_off || duty_seq_.load(std::memory_order_relaxed) == seq)) {
+      for (int p = 0; p < 3; p++)
+        mcpwm_comparator_set_compare_value(cmp_[p], fb_ticks_[p]);
+      wrote = true;
+    }
+    if (duty_mux_)
+      portEXIT_CRITICAL_ISR(duty_mux_);
+    if (wrote) {
+      fb_applied_.fetch_add(1, std::memory_order_relaxed);
+      if (held_off)
+        fb_held_off_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
   static FocSampler *s_self;
 
   Config cfg_{};
@@ -1034,6 +1128,18 @@ private:
   std::atomic<uint32_t> gap_max_{0};   // cycles, see Stats::gap_max_us
   std::atomic<uint32_t> long_gaps_{0};
   std::atomic<int> isr_core_{-1};
+
+  // Injection fallback (see set_fallback). fb_ticks_/fb_armed_ are written by
+  // the FOC task and read by the ISR under duty_mux_; the rest is ISR scratch
+  // or stats.
+  portMUX_TYPE *duty_mux_{nullptr};
+  std::atomic<uint32_t> duty_seq_{0};
+  uint32_t fb_ticks_[3] = {0, 0, 0};
+  volatile bool fb_armed_{false};
+  std::atomic<int> fb_stale_ticks_{2};
+  uint32_t fb_seen_seq_{0};
+  uint32_t fb_stale_{0};
+  std::atomic<uint32_t> fb_applied_{0}, fb_held_off_{0}, fb_stale1_{0}, fb_stale_max_{0};
   // Per-phase filter counters (cleared on arm and on stats reset). These are
   // the H1-vs-H0 discriminator for the trip investigation: glitch-caused trips
   // show imp >> 0 with a flat capture baseline; a real-current trip shows

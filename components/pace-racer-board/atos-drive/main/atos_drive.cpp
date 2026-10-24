@@ -60,6 +60,9 @@
 #include <type_traits>
 
 #include "driver/gpio.h"
+#include "driver/gptimer.h"
+#include "soc/assist_debug_reg.h"
+#include "soc/system_reg.h"
 #include "driver/mcpwm_timer.h"
 #include "hal/mcpwm_ll.h"
 #include "esp_rom_sys.h"
@@ -331,6 +334,10 @@ std::shared_ptr<espp::BldcDriver> g_driver;
 static constexpr uint32_t kDutyHalfPeriodTicks = espp::BldcDriver::TICKS_PER_PERIOD / 2; // 2000
 static constexpr uint32_t kDutyGuardTicks = 240; // 3 us at 80 MHz
 static portMUX_TYPE g_duty_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint32_t duty_ticks(float d) {
+  d = std::clamp(d, 0.0f, 1.0f);
+  return (uint32_t)(d * (float)kDutyHalfPeriodTicks);
+}
 // defer_past_tez: wait until the counter has passed TEZ (counting up) before
 // writing, so the new duties always take effect at the NEXT TEZ, i.e. a fixed
 // two periods after the sample that produced them, whatever the compute time
@@ -345,11 +352,7 @@ static void set_duties(float a, float b, float c, bool defer_past_tez = false) {
     timer = sensorless::borrow_pwm_timer(*g_driver);
     cmp = &sensorless::borrow_pwm_comparators(*g_driver);
   }
-  auto ticks = [](float d) {
-    d = std::clamp(d, 0.0f, 1.0f);
-    return (uint32_t)(d * (float)kDutyHalfPeriodTicks);
-  };
-  const uint32_t ta = ticks(a), tb = ticks(b), tc = ticks(c);
+  const uint32_t ta = duty_ticks(a), tb = duty_ticks(b), tc = duty_ticks(c);
   // Counter position straight from the peripheral (group 0, timer 0: the BSP
   // creates the one and only MCPWM timer, and the sampler ISR already assumes
   // the same). The public driver has no phase getter in this IDF.
@@ -372,6 +375,7 @@ static void set_duties(float a, float b, float c, bool defer_past_tez = false) {
   mcpwm_comparator_set_compare_value((*cmp)[0], ta);
   mcpwm_comparator_set_compare_value((*cmp)[1], tb);
   mcpwm_comparator_set_compare_value((*cmp)[2], tc);
+  g_sampler.note_duty_write(); // the sampler's injection fallback watches for these
   taskEXIT_CRITICAL(&g_duty_mux);
 }
 std::shared_ptr<espp::PaceRacerBoard::Encoder> g_encoder; // MT6701 SSI, read by BSP task
@@ -1529,6 +1533,7 @@ IRAM_ATTR void foc_task_fn(void *) {
       pi_q.reset();
     }
     auto vab = foc::inverse_park({vd, vq}, s, c);
+    const auto vab_fund = vab; // before injection: the sampler's fallback target
     if (vinj != 0.0f) { // HFI: square-wave on the injection frame's d-axis
       vab.alpha += vinj * espp::fast_cos(hfi_th_inj);
       vab.beta += vinj * espp::fast_sin(hfi_th_inj);
@@ -1543,6 +1548,16 @@ IRAM_ATTR void foc_task_fn(void *) {
         dtc[p] = dtv * std::clamp(i3[p] / band, -1.0f, 1.0f);
     }
     const auto duties = foc::svpwm(vab, kBusVoltage, kMinDuty, kMaxDuty, dtv > 0.0f ? dtc : nullptr);
+    // Injection-free duties for the sampler ISR to fall back to if this task
+    // stops writing (foc_sampler.hpp, set_fallback). Armed only while injecting.
+    const bool injecting = vinj != 0.0f || vrot_a != 0.0f || vrot_b != 0.0f;
+    if (injecting) {
+      const auto base =
+          foc::svpwm(vab_fund, kBusVoltage, kMinDuty, kMaxDuty, dtv > 0.0f ? dtc : nullptr);
+      g_sampler.set_fallback(true, duty_ticks(base.a), duty_ticks(base.b), duty_ticks(base.c));
+    } else {
+      g_sampler.set_fallback(false, 0, 0, 0);
+    }
     set_duties(duties.a, duties.b, duties.c, /*defer_past_tez=*/hfi_on);
     if (g_auto_phase.load(std::memory_order_relaxed))
       g_sampler.select_lowest_two(duties.a, duties.b, duties.c);
@@ -1746,6 +1761,125 @@ void drv_reset_pulse() {
 
 } // namespace
 
+// ---- Stall probe ('pcprobe') ------------------------------------------------
+// Names whatever holds the control loop off. A 50 kHz GPTimer ISR on the core
+// OPPOSITE the sampler ISR watches the sampler's conversion count and the FOC
+// task's run count; while either has not moved for >= 4 probe ticks (80 us,
+// normal is 50 us) it records both cores' current PCs from the assist-debug
+// PC recorder. 'pcprobe' prints the distinct PCs with hit counts: resolve
+// them with xtensa-esp32s3-elf-addr2line -pfiaC -e build-*/pace_racer_atos_drive.elf.
+// Diagnostic only: off unless armed, ~2 % of one core while armed.
+namespace pcprobe {
+struct Hit {
+  uint32_t pc0, pc1;
+  uint8_t isr_stall, foc_stall;
+};
+constexpr int kN = 1024;
+Hit g_ring[kN];
+std::atomic<int> g_head{0};
+std::atomic<bool> g_armed{false};
+gptimer_handle_t g_timer = nullptr;
+uint32_t g_last_n = 0, g_last_r = 0, g_isr_stall = 0, g_foc_stall = 0;
+
+bool on_alarm(gptimer_handle_t, const gptimer_alarm_event_data_t *, void *) {
+  const uint32_t n = g_sampler.sample_count();
+  const uint32_t r = g_foc.task_runs.load(std::memory_order_relaxed);
+  g_isr_stall = (n != g_last_n) ? 0 : g_isr_stall + 1;
+  g_foc_stall = (r != g_last_r) ? 0 : g_foc_stall + 1;
+  g_last_n = n;
+  g_last_r = r;
+  if (g_isr_stall >= 4 || g_foc_stall >= 4) {
+    const int h = g_head.load(std::memory_order_relaxed);
+    if (h < kN) {
+      g_ring[h] = {REG_READ(ASSIST_DEBUG_CORE_0_RCD_PDEBUGPC_REG),
+                   REG_READ(ASSIST_DEBUG_CORE_1_RCD_PDEBUGPC_REG),
+                   (uint8_t)std::min<uint32_t>(g_isr_stall, 255),
+                   (uint8_t)std::min<uint32_t>(g_foc_stall, 255)};
+      g_head.store(h + 1, std::memory_order_relaxed);
+    }
+  }
+  return false;
+}
+
+// The GPTimer interrupt is allocated on the core that registers the callback.
+void setup_on_core(void *) {
+  gptimer_config_t tc = {};
+  tc.clk_src = GPTIMER_CLK_SRC_DEFAULT;
+  tc.direction = GPTIMER_COUNT_UP;
+  tc.resolution_hz = 1000000;
+  if (gptimer_new_timer(&tc, &g_timer) == ESP_OK) {
+    gptimer_event_callbacks_t cbs = {.on_alarm = on_alarm};
+    gptimer_register_event_callbacks(g_timer, &cbs, nullptr);
+    gptimer_alarm_config_t ac = {};
+    ac.alarm_count = 20; // 50 kHz
+    ac.reload_count = 0;
+    ac.flags.auto_reload_on_alarm = true;
+    gptimer_set_alarm_action(g_timer, &ac);
+    gptimer_enable(g_timer);
+  }
+  vTaskDelete(nullptr);
+}
+
+void arm(bool on) {
+  if (!g_timer) {
+    REG_SET_BIT(SYSTEM_CPU_PERI_CLK_EN_REG, SYSTEM_CLK_EN_ASSIST_DEBUG);
+    REG_CLR_BIT(SYSTEM_CPU_PERI_RST_EN_REG, SYSTEM_RST_EN_ASSIST_DEBUG);
+    REG_WRITE(ASSIST_DEBUG_CORE_0_RCD_PDEBUGENABLE_REG, 1);
+    REG_WRITE(ASSIST_DEBUG_CORE_0_RCD_RECORDING_REG, 1);
+    REG_WRITE(ASSIST_DEBUG_CORE_1_RCD_PDEBUGENABLE_REG, 1);
+    REG_WRITE(ASSIST_DEBUG_CORE_1_RCD_RECORDING_REG, 1);
+    const int core = g_sampler.isr_core() == 0 ? 1 : 0;
+    xTaskCreatePinnedToCore(setup_on_core, "pcprobe", 3072, nullptr, 5, nullptr, core);
+    for (int i = 0; i < 50 && !g_timer; i++)
+      vTaskDelay(1);
+    if (!g_timer)
+      return;
+  }
+  if (on == g_armed.load())
+    return;
+  if (on) {
+    g_head.store(0);
+    gptimer_start(g_timer);
+  } else {
+    gptimer_stop(g_timer);
+  }
+  g_armed.store(on);
+}
+
+void report() {
+  const int n = g_head.load();
+  struct Pc {
+    uint32_t pc;
+    int core, hits, max_stall;
+  };
+  std::array<Pc, 48> top{};
+  int ntop = 0, isr_hits = 0, foc_hits = 0;
+  for (int i = 0; i < n; i++) {
+    const auto &h = g_ring[i];
+    isr_hits += h.isr_stall >= 4;
+    foc_hits += h.foc_stall >= 4;
+    for (int c = 0; c < 2; c++) {
+      const uint32_t pc = c ? h.pc1 : h.pc0;
+      const int stall = std::max(h.isr_stall, h.foc_stall);
+      int k = 0;
+      while (k < ntop && !(top[k].pc == pc && top[k].core == c))
+        k++;
+      if (k == ntop && ntop < (int)top.size())
+        top[ntop++] = {pc, c, 0, 0};
+      if (k < ntop) {
+        top[k].hits++;
+        top[k].max_stall = std::max(top[k].max_stall, stall);
+      }
+    }
+  }
+  fmt::print("#pcprobe hits={} (isr stalled {}, foc stalled {}) of {} | 1 tick = 20 us\n", n,
+             isr_hits, foc_hits, kN);
+  for (int k = 0; k < ntop; k++)
+    fmt::print("#pc core{} 0x{:08x} hits={} max_stall={}\n", top[k].core, top[k].pc, top[k].hits,
+               top[k].max_stall);
+}
+} // namespace pcprobe
+
 extern "C" void app_main(void) {
   espp::Logger logger({.tag = "sensorless", .level = espp::Logger::Verbosity::INFO});
   logger.info("Bootup — stage 1: synchronized sampler + FOC task (Clarke only, no rotation)");
@@ -1835,6 +1969,7 @@ extern "C" void app_main(void) {
     return;
   }
   g_sampler.set_notify_task(g_foc_task);
+  g_sampler.set_duty_mux(&g_duty_mux);
 
   driver->enable();
   drv_check(bsp.gate_driver(), "after enable");
@@ -3074,6 +3209,21 @@ extern "C" void app_main(void) {
       fmt::print("#cores sampler_isr={} foc={} tinyusb={} console={}\n", g_sampler.isr_core(),
                  (int)xTaskGetCoreID(g_foc_task), usb ? (int)xTaskGetCoreID(usb) : -1,
                  (int)esp_cpu_get_core_id());
+    } else if (strncmp(line, "pcprobe", 7) == 0) {
+      // pcprobe 1 = arm (clears), pcprobe 0 = disarm, pcprobe = report.
+      if (sscanf(line, "pcprobe %d", &x) == 1) {
+        pcprobe::arm(x != 0);
+        fmt::print("#pcprobe {}\n", pcprobe::g_armed.load() ? "armed" : "off");
+      } else {
+        pcprobe::report();
+      }
+    } else if (sscanf(line, "hwd %d", &x) == 1) {
+      // hwd <n> — injection fallback: the sampler ISR removes the HFI injection
+      // from the bridge after n samples without a duty write (or one held-off
+      // ISR entry). 0 = off. Default 2.
+      g_sampler.set_fallback_stale(std::clamp(x, 0, 100));
+      fmt::print("#injection fallback after {} stale samples{}\n", g_sampler.fallback_stale(),
+                 x <= 0 ? " (OFF)" : "");
     } else if (sscanf(line, "cmir %d", &x) == 1) {
       // cmir <mask> — which stdout sinks get console output (timing A/B):
       // 1 UART0, 2 CDC, 4 WebUSB LOG frames, 8 ethernet. 15 = all (default).
@@ -3452,6 +3602,9 @@ extern "C" void app_main(void) {
                    runs ? (float)notes / (float)runs : 0.0f,
                    (float)g_foc.compute_cyc_max.load() / 240.0f, st.gap_max_us, st.long_gaps,
                    (float)g_foc.run_gap_cyc_max.load() / 240.0f);
+        if (const auto fb = g_sampler.fallback_stats(); fb.applied || fb.stale1 || fb.stale_max)
+          fmt::print("#injfb applied={} held_off={} stale1={} stale_max={} (hwd {})\n", fb.applied,
+                     fb.held_off, fb.stale1, fb.stale_max, g_sampler.fallback_stale());
         if (g_sampler.double_sample()) {
           auto db = g_sampler.dbl_stats();
           fmt::print("#dbl pairs={} dis={} spike: agree={} first={} second={} maxD={:.1f}A\n",
