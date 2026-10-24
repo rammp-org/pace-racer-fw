@@ -589,6 +589,19 @@ std::atomic<float> g_hrt_c_abs{0.0f}, g_hrt_c_q2{0.0f}, g_hrt_c_d{0.0f};
 // b -0.0484+0.0493j (A^-2). Refit if off changes. 0 = off.
 std::atomic<float> g_hrt_k_re{0.0f}, g_hrt_k_im{0.0f}, g_hrt_b_re{0.0f}, g_hrt_b_im{0.0f};
 std::atomic<float> g_hall_id{0.0f}; // HALL-mode d-axis current ('hid <A>', for offset maps)
+// Smooth low-speed drive on the encoder or HFI angle (HALL mode, theta source 1/2).
+// 'cff <cog> [coul]': torque feed-forward from the hrtm/hrtk model, iq += -cog * a_cog(theta)/(Kt/J)
+// (cancels the detent torque, so the rotor turns instead of rocking) and, in the speed
+// sub-mode, + coul * Coulomb/(Kt/J) in the set-point direction. Scales, 0 = off.
+std::atomic<float> g_cff_cog{0.0f}, g_cff_coul{0.0f};
+// 'xsl kp kd ki [rate] [tau_ms] [emax]': position-tracking speed loop for erun/xrun. The ramped
+// set-point is integrated into a reference angle; iq = kp * (ref - theta) + kd * (w_set - w) + ki * int
+// (A per rad / per rad/s / per rad s, electrical), rate-limited to 'rate' A/s (feed-forward excluded),
+// w low-passed with tau. The angle error is noisy by degrees, the speed by tens of rad/s, so most of
+// the stiffness sits on the angle and the speed term is small. The reference is held within emax rad
+// of the rotor (no wind-up while stuck). kp 0 = the old rpm PI ('sg').
+std::atomic<float> g_xsl_kp{0.0f}, g_xsl_kd{0.0f}, g_xsl_ki{0.0f}, g_xsl_rate{0.0f};
+std::atomic<float> g_xsl_tau{0.005f}, g_xsl_emax{1.0f};
 static constexpr int kHrotSettleTicks = 400;
 static constexpr int kHscanSettleTicks = 600;  // 30 ms
 static constexpr int kHscanAvgTicks = 2400;    // 120 ms
@@ -796,6 +809,7 @@ IRAM_ATTR void foc_task_fn(void *) {
     static uint32_t sp_align_left = 0, stop_ticks = 0;
     static bool stop_requested = false;
     static float h_set = 0.0f, h_integ = 0.0f, h_time = 0.0f; // HALL-mode speed loop
+    static bool xsl_reset = true;                              // 'xsl' loop state re-seeds on HALL entry
     const int mode = g_mode.load(std::memory_order_relaxed);
 
     // The duration budgets below (kEngageTicks, kStopUnloadTicks, ...) are
@@ -857,6 +871,7 @@ IRAM_ATTR void foc_task_fn(void *) {
       }
       h_integ = 0.0f;
       h_time = 0.0f;
+      xsl_reset = true;
       pi_d.reset();
       pi_q.reset();
     }
@@ -1069,11 +1084,59 @@ IRAM_ATTR void foc_task_fn(void *) {
           mstate = 'L';
         }
         g_hall_set_pub.store(h_set, std::memory_order_relaxed);
-        const float serr = std::clamp(h_set - rpm_meas, -kHallErrClampRpm, kHallErrClampRpm);
-        const float ki = g_spd_ki.load(std::memory_order_relaxed);
-        // ki = 0 is "integrator off": hold it at 0, the torque-mode seed included.
-        h_integ = ki > 0 ? std::clamp(h_integ + ki * serr * dt, -amps, amps) : 0.0f;
-        iqref = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + h_integ, -amps, amps);
+        const float xkp = g_xsl_kp.load(std::memory_order_relaxed);
+        if (xkp > 0.0f && esrc && sub == HALL_SPEED) {
+          // Position-tracking speed loop (see g_xsl_kp), electrical rad.
+          static float x_pos = 0.0f, x_ref = 0.0f, x_th = 0.0f, x_w = 0.0f, x_int = 0.0f, x_fb = 0.0f;
+          const float w_meas = tsrc == 2 ? g_hrt_omega.load(std::memory_order_relaxed) : rpm_meas * kRpmToOmegaE;
+          if (xsl_reset) {
+            xsl_reset = false;
+            x_pos = x_ref = x_int = x_fb = 0.0f;
+            x_th = th;
+            x_w = w_meas;
+          }
+          x_pos += remainderf(th - x_th, kTwoPi);
+          x_th = th;
+          const float w_set = h_set * kRpmToOmegaE;
+          x_ref += w_set * dt;
+          const float emax = g_xsl_emax.load(std::memory_order_relaxed);
+          const float ep = std::clamp(x_ref - x_pos, -emax, emax);
+          x_ref = x_pos + ep;
+          x_w += (w_meas - x_w) * std::min(1.0f, dt / std::max(g_xsl_tau.load(std::memory_order_relaxed), dt));
+          x_int = std::clamp(x_int + g_xsl_ki.load(std::memory_order_relaxed) * ep * dt, -0.5f * amps, 0.5f * amps);
+          const float fb = std::clamp(xkp * ep + g_xsl_kd.load(std::memory_order_relaxed) * (w_set - x_w) + x_int, -amps, amps);
+          const float rate = g_xsl_rate.load(std::memory_order_relaxed) * dt;
+          x_fb = rate > 0.0f ? x_fb + std::clamp(fb - x_fb, -rate, rate) : fb;
+          h_integ = x_int;
+          // Coulomb feed-forward in the set-point direction (saturates at 1 rad/s elec)
+          const float ktj = g_hrt_ktj.load(std::memory_order_relaxed);
+          const float coul_ff = ktj > 0.0f ? g_cff_coul.load(std::memory_order_relaxed) * g_hrt_coul.load(std::memory_order_relaxed) / ktj *
+                                                 std::clamp(w_set, -1.0f, 1.0f)
+                                           : 0.0f;
+          iqref = std::clamp(x_fb + coul_ff, -amps, amps);
+          mstate = 'X';
+        } else {
+          const float serr = std::clamp(h_set - rpm_meas, -kHallErrClampRpm, kHallErrClampRpm);
+          const float ki = g_spd_ki.load(std::memory_order_relaxed);
+          // ki = 0 is "integrator off": hold it at 0, the torque-mode seed included.
+          h_integ = ki > 0 ? std::clamp(h_integ + ki * serr * dt, -amps, amps) : 0.0f;
+          iqref = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + h_integ, -amps, amps);
+        }
+      }
+      // Cogging feed-forward (see g_cff_cog), once per 8 ticks (the FOC task has no per-tick trig budget).
+      if (esrc) {
+        static int cff_k = 0;
+        static float cff_iq = 0.0f;
+        const float cog = g_cff_cog.load(std::memory_order_relaxed), ktj = g_hrt_ktj.load(std::memory_order_relaxed);
+        if (cog != 0.0f && ktj > 0.0f) {
+          if ((cff_k++ & 7) == 0) {
+            float t6 = 6.0f * th;
+            t6 -= kTwoPi * floorf(t6 / kTwoPi);
+            cff_iq = -cog * (g_hrt_cog_a.load(std::memory_order_relaxed) * espp::fast_cos(t6) +
+                             g_hrt_cog_b.load(std::memory_order_relaxed) * espp::fast_sin(t6)) / ktj;
+          }
+          iqref = std::clamp(iqref + cff_iq, -amps, amps);
+        }
       }
       // Speed governor (see g_hall_vmax): torque in the direction of motion
       // rolls off to zero across a band and goes negative beyond it, whatever
@@ -2482,7 +2545,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
-      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] [i0] | hrtk ca cb | hrtn kr ki br bi | hrtc c_abs c_q2 c_d | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] [i0] | hrtk ca cb | hrtn kr ki br bi | cff cog [coul] | xsl kp kd ki [rate] [tau_ms] [emax] | hrtc c_abs c_q2 c_d | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -2897,20 +2960,27 @@ extern "C" void app_main(void) {
       if (g_hrt_volts.load() <= 0.0f || !g_hrt_seeded.load()) {
         fmt::print("! HFI tracker not running/seeded — start 'hrt <Vh> <ns_re> <ns_im> <off>' first\n");
       } else if (strncmp(line, "xrun", 4) == 0) {
-        float amps = 3.0f, rpm = 30.0f, ramp = 3.0f;
-        sscanf(line, "xrun %f %f %f", &amps, &rpm, &ramp);
+        // xrun <A> <rpm> [ramp_s] [vmax_rpm]: governor default max(4 |rpm|, 200) so a lost
+        // angle cannot run the free rotor away before the guard stops it.
+        float amps = 3.0f, rpm = 30.0f, ramp = 3.0f, vmax = -1.0f;
+        sscanf(line, "xrun %f %f %f %f", &amps, &rpm, &ramp, &vmax);
         amps = std::clamp(amps, 0.0f, g_max_target.load());
         if (ramp < 0.1f)
           ramp = 0.1f;
+        if (vmax < 0.0f)
+          vmax = std::max(4.0f * std::fabs(rpm), 200.0f);
+        g_hall_vmax.store(std::clamp(vmax, 0.0f, motor::kMaxRpm));
         g_hall_amps.store(amps);
         g_hall_rpm.store(std::clamp(rpm, -motor::kMaxRpm, motor::kMaxRpm));
         g_hall_ramp.store(std::fabs(rpm) / ramp);
         g_hall_sub.store(HALL_SPEED);
         g_theta_src.store(2);
         g_hrt_errmax.store(0.0f);
+        g_hrt_guard_err.store(0.0f);
         uncoast();
         g_mode.store(HALL);
-        fmt::print("#hfi speed: {:.0f} rpm over {:.1f}s, torque ceiling {:.1f}A\n", rpm, ramp, amps);
+        fmt::print("#hfi speed: {:.0f} rpm over {:.1f}s, torque ceiling {:.1f}A, governor {:.0f} rpm\n", rpm, ramp, amps,
+                   g_hall_vmax.load());
       } else {
         // xiq <A> [vmax_rpm]: optional speed governor (on omega_hat) so a free rotor
         // that snaps off its detent does not run away past where HFI can follow.
@@ -2924,6 +2994,7 @@ extern "C" void app_main(void) {
         g_hall_sub.store(HALL_TORQUE);
         g_theta_src.store(2);
         g_hrt_errmax.store(0.0f);
+        g_hrt_guard_err.store(0.0f);
         uncoast();
         g_mode.store(HALL);
         fmt::print("#hfi iq* {:.2f} A, governor {:.0f} rpm (0 = off)\n", amps, g_hall_vmax.load());
@@ -3132,6 +3203,21 @@ extern "C" void app_main(void) {
       sscanf(line, "hrtk %f %f", &ca, &cb);
       g_hrt_cog_a.store(ca); g_hrt_cog_b.store(cb);
       fmt::print("#hrt cogging {:.0f} cos6th {:+.0f} sin6th rad/s^2\n", ca, cb);
+    } else if (strncmp(line, "cff", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) {
+      float cog = g_cff_cog.load(), coul = g_cff_coul.load();
+      sscanf(line, "cff %f %f", &cog, &coul);
+      g_cff_cog.store(cog); g_cff_coul.store(coul);
+      fmt::print("#cff cogging x{:.2f} coulomb x{:.2f} (model Kt/J={:.0f} cog={:.0f},{:.0f} coul={:.0f})\n", cog, coul, g_hrt_ktj.load(),
+                 g_hrt_cog_a.load(), g_hrt_cog_b.load(), g_hrt_coul.load());
+    } else if (strncmp(line, "xsl", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) {
+      float kp = g_xsl_kp.load(), kd = g_xsl_kd.load(), ki = g_xsl_ki.load(), rate = g_xsl_rate.load();
+      float tau_ms = g_xsl_tau.load() * 1000.0f, emax = g_xsl_emax.load();
+      sscanf(line, "xsl %f %f %f %f %f %f", &kp, &kd, &ki, &rate, &tau_ms, &emax);
+      g_xsl_kp.store(std::max(kp, 0.0f)); g_xsl_kd.store(std::max(kd, 0.0f)); g_xsl_ki.store(std::max(ki, 0.0f));
+      g_xsl_rate.store(std::max(rate, 0.0f)); g_xsl_tau.store(std::max(tau_ms, 0.05f) * 1e-3f);
+      g_xsl_emax.store(std::clamp(emax, 0.05f, 6.0f));
+      fmt::print("#xsl kp={:.3f} A/rad kd={:.4f} A/(rad/s) ki={:.2f} A/(rad s) rate={:.0f} A/s tau={:.1f} ms emax={:.2f} rad (kp 0 = sg PI)\n",
+                 g_xsl_kp.load(), g_xsl_kd.load(), g_xsl_ki.load(), g_xsl_rate.load(), g_xsl_tau.load() * 1e3f, g_xsl_emax.load());
     } else if (strncmp(line, "hrtc", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
       float ca = g_hrt_c_abs.load(), cq = g_hrt_c_q2.load(), cd = g_hrt_c_d.load();
       sscanf(line, "hrtc %f %f %f", &ca, &cq, &cd);
