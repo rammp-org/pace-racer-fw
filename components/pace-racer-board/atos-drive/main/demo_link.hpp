@@ -200,6 +200,11 @@ public:
     log_sink_ = std::move(sink);
   }
 
+  /// stdout sinks to feed, for A/B timing work: bit 0 UART, 1 CDC, 2 vendor
+  /// LOG frames, 3 the extra sink (ethernet). Default all.
+  static void set_stdout_sinks(uint8_t mask) { s_sinks.store(mask, std::memory_order_relaxed); }
+  static uint8_t stdout_sinks() { return s_sinks.load(std::memory_order_relaxed); }
+
   bool vendor_connected() const { return usb_.is_vendor_connected(); }
   /// The vendor-stream dispatcher, for application modules (register before or
   /// after start(); handlers run on the USB worker task).
@@ -305,6 +310,7 @@ private:
   static constexpr size_t kRxCap = 2048;
   static inline DemoLink *s_instance{nullptr};
   static inline int s_uart_fd{-1};
+  static inline std::atomic<uint8_t> s_sinks{0x0f};
 
   static int vfs_open(const char *, int, int) { return 0; }
   static int vfs_close(int) { return 0; }
@@ -317,7 +323,8 @@ private:
     // A logging call made *by* the USB stack from inside a write would recurse
     // back into it; break the loop per task.
     static thread_local bool in_write = false;
-    if (s_uart_fd >= 0)
+    const uint8_t sinks = s_sinks.load(std::memory_order_relaxed);
+    if (s_uart_fd >= 0 && (sinks & 1))
       ::write(s_uart_fd, data, size);
     if (in_write)
       return static_cast<ssize_t>(size);
@@ -325,14 +332,14 @@ private:
     if (auto *self = s_instance) {
       auto &usb = self->usb_;
       const auto bytes = std::span<const uint8_t>(static_cast<const uint8_t *>(data), size);
-      if (usb.is_cdc_connected() && usb.cdc_write_available() >= size)
+      if ((sinks & 2) && usb.is_cdc_connected() && usb.cdc_write_available() >= size)
         usb.write_cdc(bytes);
       // Only while a dashboard session is streaming telemetry (same reason as
       // stream_on_start = false). 13 = frame overhead (9-byte header + CRC-32).
-      if (self->telemetry_.streaming() && usb.is_vendor_connected() &&
+      if ((sinks & 4) && self->telemetry_.streaming() && usb.is_vendor_connected() &&
           usb.vendor_write_available() >= size + 13)
         usb.write_vendor(espp::stream_frame::build_frame(true, kConsoleModule, kConsoleLog, bytes));
-      if (self->sink_mutex_.try_lock()) {
+      if ((sinks & 8) && self->sink_mutex_.try_lock()) {
         if (self->log_sink_)
           self->log_sink_(bytes);
         self->sink_mutex_.unlock();

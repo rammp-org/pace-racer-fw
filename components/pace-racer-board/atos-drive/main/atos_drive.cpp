@@ -273,6 +273,9 @@ struct FocState {
   std::atomic<uint32_t> task_runs{0};     // FOC-task wakeups
   std::atomic<uint32_t> notifications{0}; // sum of ulTaskNotifyTake() returns
   std::atomic<uint32_t> compute_cyc_max{0};
+  // Longest wake-to-wake interval of the FOC task: how long the bridge sat on
+  // one set of duties. Covers both a held-off ISR and a held-off task.
+  std::atomic<uint32_t> run_gap_cyc_max{0};
 
   void publish(const FocSnapshot &s) {
     uint32_t w[kSnapWords] = {};
@@ -702,6 +705,8 @@ IRAM_ATTR void foc_task_fn(void *) {
     float dt = have_last ? (float)(c0 - last_cyc) / 240.0e6f : 50.0e-6f;
     if (dt <= 0.0f || dt > 0.01f)
       dt = 50.0e-6f; // guard the first tick / long gaps
+    if (have_last && c0 - last_cyc > g_foc.run_gap_cyc_max.load(std::memory_order_relaxed))
+      g_foc.run_gap_cyc_max.store(c0 - last_cyc, std::memory_order_relaxed);
     last_cyc = c0;
     have_last = true;
 
@@ -3062,6 +3067,18 @@ extern "C" void app_main(void) {
     } else if (sscanf(line, "sq %d", &x) == 1) {
       g_stream_quiet.store(x != 0);
       fmt::print("#stream {}\n", x ? "quiet" : "on");
+    } else if (strcmp(line, "cores") == 0) {
+      // Where the timing-critical pieces run: the sampler ISR must not share a
+      // core with anything that holds long critical sections (see set_edge).
+      TaskHandle_t usb = xTaskGetHandle("TinyUSB");
+      fmt::print("#cores sampler_isr={} foc={} tinyusb={} console={}\n", g_sampler.isr_core(),
+                 (int)xTaskGetCoreID(g_foc_task), usb ? (int)xTaskGetCoreID(usb) : -1,
+                 (int)esp_cpu_get_core_id());
+    } else if (sscanf(line, "cmir %d", &x) == 1) {
+      // cmir <mask> — which stdout sinks get console output (timing A/B):
+      // 1 UART0, 2 CDC, 4 WebUSB LOG frames, 8 ethernet. 15 = all (default).
+      demo::DemoLink::set_stdout_sinks((uint8_t)(x & 0x0f));
+      fmt::print("#stdout sinks 0x{:x}\n", demo::DemoLink::stdout_sinks());
     } else if (strncmp(line, "capdump", 7) == 0) {
       const int n = g_cap_n.load();
       fmt::print("#capdump n={} every={} mode={}\n", n, g_cap_every.load(), g_cap_mode.load());
@@ -3426,13 +3443,15 @@ extern "C" void app_main(void) {
         // move), max|A| = largest raw conversion seen. Cleared here and on arm.
         fmt::print("#stats n={} en={:d} late={} ({:.1f}%) isr={:.1f}/{:.1f}/{:.1f}us | "
                    "imp={}/{}/{} rej={}/{}/{} esc={}/{}/{} max|A|={:.0f}/{:.0f}/{:.0f} | "
-                   "foc runs={} coalesce={:.2f} cmax={:.0f}us\n",
+                   "foc runs={} coalesce={:.2f} cmax={:.0f}us | gap isr={:.0f}us long={} "
+                   "foc={:.0f}us\n",
                    st.count, g_sampler.is_enabled() ? 1 : 0, st.late,
                    100.0f * (float)st.late / (float)st.count, st.min_us, st.avg_us, st.max_us,
                    st.imp[0], st.imp[1], st.imp[2], st.rej[0], st.rej[1], st.rej[2], st.esc[0],
                    st.esc[1], st.esc[2], st.max_amps[0], st.max_amps[1], st.max_amps[2], runs,
                    runs ? (float)notes / (float)runs : 0.0f,
-                   (float)g_foc.compute_cyc_max.load() / 240.0f);
+                   (float)g_foc.compute_cyc_max.load() / 240.0f, st.gap_max_us, st.long_gaps,
+                   (float)g_foc.run_gap_cyc_max.load() / 240.0f);
         if (g_sampler.double_sample()) {
           auto db = g_sampler.dbl_stats();
           fmt::print("#dbl pairs={} dis={} spike: agree={} first={} second={} maxD={:.1f}A\n",
@@ -3442,6 +3461,7 @@ extern "C" void app_main(void) {
       }
       g_sampler.reset_stats();
       g_foc.compute_cyc_max.store(0);
+      g_foc.run_gap_cyc_max.store(0);
     } else if (line[0] == 'r') {
       std::error_code rec;
       auto regs = bsp.gate_driver()->read_all_registers(rec);

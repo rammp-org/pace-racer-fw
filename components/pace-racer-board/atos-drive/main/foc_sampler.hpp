@@ -209,6 +209,8 @@ public:
   void disable() { enabled_.store(false, std::memory_order_release); }
   bool is_enabled() const { return enabled_.load(std::memory_order_acquire); }
   bool at_tep() const { return at_tep_; }
+  /// CPU the sampling ISR last ran on (-1 before the first sample).
+  int isr_core() const { return isr_core_.load(std::memory_order_relaxed); }
 
   /// Select which two phases the ISR samples; the third is reconstructed from
   /// ia+ib+ic=0. Pick the two *lowest*-duty phases: their low sides conduct
@@ -424,6 +426,8 @@ public:
     uint32_t count;
     float min_us, avg_us, max_us;
     uint32_t late;
+    float gap_max_us;    // longest ISR entry-to-entry gap (nominal: decimation x 50 us)
+    uint32_t long_gaps;  // entries more than half a period late (a held-off ISR)
     uint32_t imp[3], rej[3], esc[3]; // per-phase filter counters, see members
     float max_amps[3];               // largest |raw| conversion seen per phase
   };
@@ -435,6 +439,8 @@ public:
     st.avg_us = (float)cyc_sum_.load() * s;
     st.max_us = (float)cyc_max_.load() / 240.0f;
     st.late = late_count_.load();
+    st.gap_max_us = (float)gap_max_.load() / 240.0f;
+    st.long_gaps = long_gaps_.load();
     for (int p = 0; p < 3; p++) {
       st.imp[p] = imp_count_[p].load();
       st.rej[p] = rej_count_[p].load();
@@ -449,6 +455,8 @@ public:
     cyc_min_.store(0xffffffff);
     cyc_max_.store(0);
     late_count_.store(0);
+    gap_max_.store(0);
+    long_gaps_.store(0);
     clear_filter_counters();
     dbl_n_.store(0);
     dbl_dis_.store(0);
@@ -750,6 +758,8 @@ private:
     // fired late (preempted before it even started) and its sample lands outside
     // the null window.
     const uint32_t t_entry = esp_cpu_get_cycle_count();
+    if (!have_last_entry_)
+      isr_core_.store(esp_cpu_get_core_id(), std::memory_order_relaxed);
     const uint32_t gap = t_entry - last_entry_;
     const bool had_last = have_last_entry_;
     last_entry_ = t_entry;
@@ -874,6 +884,12 @@ private:
     // bad channels (see the capture dump: glitches coincide with long gap/elapsed).
     const uint32_t expected_gap = decimation_.load(std::memory_order_relaxed) * kPeriodCycles;
     const uint32_t code_budget = kLateCodeCycles + (took_pair ? kDblExtraCycles : 0);
+    if (had_last) {
+      if (gap > gap_max_.load(std::memory_order_relaxed))
+        gap_max_.store(gap, std::memory_order_relaxed);
+      if (gap > expected_gap + kPeriodCycles / 2)
+        long_gaps_.fetch_add(1, std::memory_order_relaxed);
+    }
     const bool late =
         (had_last && gap > expected_gap + kLateGapMarginCycles) || (elapsed > code_budget);
     if (late) {
@@ -1015,6 +1031,9 @@ private:
   std::atomic<uint32_t> cyc_max_{0};
   std::atomic<uint64_t> cyc_sum_{0};
   std::atomic<uint32_t> late_count_{0};
+  std::atomic<uint32_t> gap_max_{0};   // cycles, see Stats::gap_max_us
+  std::atomic<uint32_t> long_gaps_{0};
+  std::atomic<int> isr_core_{-1};
   // Per-phase filter counters (cleared on arm and on stats reset). These are
   // the H1-vs-H0 discriminator for the trip investigation: glitch-caused trips
   // show imp >> 0 with a flat capture baseline; a real-current trip shows
