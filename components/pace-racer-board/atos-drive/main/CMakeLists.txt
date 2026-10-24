@@ -16,3 +16,8 @@ endif()
 if(DEFINED ATOS_VBUS)
   target_compile_definitions(${COMPONENT_LIB} PRIVATE ATOS_VBUS=${ATOS_VBUS})
 endif()
+
+# Core for the sampling ISR (see set_edge_on_core): idf.py -DATOS_SAMPLER_CORE=1 build
+if(DEFINED ATOS_SAMPLER_CORE)
+  target_compile_definitions(${COMPONENT_LIB} PRIVATE ATOS_SAMPLER_CORE=${ATOS_SAMPLER_CORE})
+endif()

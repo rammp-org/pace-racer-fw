@@ -1880,6 +1880,33 @@ void report() {
 }
 } // namespace pcprobe
 
+// The MCPWM driver allocates the timer interrupt lazily, on the core that
+// registers the first callback, so the sampling ISR's core is chosen by WHICH
+// TASK calls set_edge() first. Run that call on `core`.
+#ifndef ATOS_SAMPLER_CORE
+#define ATOS_SAMPLER_CORE 0
+#endif
+static bool set_edge_on_core(int core, espp::Logger &logger) {
+  struct Ctx {
+    espp::Logger *logger;
+    bool ok;
+    SemaphoreHandle_t done;
+  } ctx{&logger, false, xSemaphoreCreateBinary()};
+  auto fn = [](void *p) {
+    auto *c = static_cast<Ctx *>(p);
+    c->ok = g_sampler.set_edge(true /*TEP*/, *c->logger);
+    xSemaphoreGive(c->done);
+    vTaskDelete(nullptr);
+  };
+  if (xTaskCreatePinnedToCore(fn, "set_edge", 4096, &ctx, 10, nullptr, core) != pdPASS) {
+    vSemaphoreDelete(ctx.done);
+    return false;
+  }
+  xSemaphoreTake(ctx.done, portMAX_DELAY);
+  vSemaphoreDelete(ctx.done);
+  return ctx.ok;
+}
+
 extern "C" void app_main(void) {
   espp::Logger logger({.tag = "sensorless", .level = espp::Logger::Verbosity::INFO});
   logger.info("Bootup — stage 1: synchronized sampler + FOC task (Clarke only, no rotation)");
@@ -1983,7 +2010,7 @@ extern "C" void app_main(void) {
   drv_check(bsp.gate_driver(), "after zero cal");
   set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
 
-  if (!g_sampler.set_edge(true /*TEP*/, logger))
+  if (!set_edge_on_core(ATOS_SAMPLER_CORE, logger))
     return;
   drv_check(bsp.gate_driver(), "after set_edge");
   set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
@@ -3227,7 +3254,8 @@ extern "C" void app_main(void) {
     } else if (sscanf(line, "cmir %d", &x) == 1) {
       // cmir <mask> — which stdout sinks get console output (timing A/B):
       // 1 UART0, 2 CDC, 4 WebUSB LOG frames, 8 ethernet. 15 = all (default).
-      demo::DemoLink::set_stdout_sinks((uint8_t)(x & 0x0f));
+      // +16 = USB writes inline from the printing task (old path, A/B only).
+      demo::DemoLink::set_stdout_sinks((uint8_t)(x & 0x1f));
       fmt::print("#stdout sinks 0x{:x}\n", demo::DemoLink::stdout_sinks());
     } else if (strncmp(line, "capdump", 7) == 0) {
       const int n = g_cap_n.load();
@@ -3594,14 +3622,14 @@ extern "C" void app_main(void) {
         fmt::print("#stats n={} en={:d} late={} ({:.1f}%) isr={:.1f}/{:.1f}/{:.1f}us | "
                    "imp={}/{}/{} rej={}/{}/{} esc={}/{}/{} max|A|={:.0f}/{:.0f}/{:.0f} | "
                    "foc runs={} coalesce={:.2f} cmax={:.0f}us | gap isr={:.0f}us long={} "
-                   "foc={:.0f}us\n",
+                   "foc={:.0f}us late_code={}\n",
                    st.count, g_sampler.is_enabled() ? 1 : 0, st.late,
                    100.0f * (float)st.late / (float)st.count, st.min_us, st.avg_us, st.max_us,
                    st.imp[0], st.imp[1], st.imp[2], st.rej[0], st.rej[1], st.rej[2], st.esc[0],
                    st.esc[1], st.esc[2], st.max_amps[0], st.max_amps[1], st.max_amps[2], runs,
                    runs ? (float)notes / (float)runs : 0.0f,
                    (float)g_foc.compute_cyc_max.load() / 240.0f, st.gap_max_us, st.long_gaps,
-                   (float)g_foc.run_gap_cyc_max.load() / 240.0f);
+                   (float)g_foc.run_gap_cyc_max.load() / 240.0f, st.late_code);
         if (const auto fb = g_sampler.fallback_stats(); fb.applied || fb.stale1 || fb.stale_max)
           fmt::print("#injfb applied={} held_off={} stale1={} stale_max={} (hwd {})\n", fb.applied,
                      fb.held_off, fb.stale1, fb.stale_max, g_sampler.fallback_stale());

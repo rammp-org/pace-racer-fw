@@ -43,6 +43,7 @@
 #include "esp_private/adc_share_hw_ctrl.h"
 #include "hal/adc_hal_common.h"
 #include "hal/adc_oneshot_hal.h"
+#include "hal/mcpwm_ll.h"
 
 #include "adc_fast.h"
 #include "logger.hpp"
@@ -192,8 +193,9 @@ public:
   // thing to run after any hold-off, and it runs at TEP, half a period from the
   // TEZ shadow load, so its three comparator writes are atomic on the bridge.
   // It writes the injection-free duties when either
-  //   - its own entry is more than half a period late (the ISR was held off,
-  //     so the task never got a sample either), or
+  //   - this sample is late (entry or in-ISR, see on_sample): a late sample is
+  //     discarded without waking the task, so the bridge would otherwise hold
+  //     the last injection vector for another period, or
   //   - no duty write has happened for `fallback_stale` consecutive samples
   //     (the task is held off while samples keep arriving).
   // Integer-only, no float. The fundamental voltage stays (zeroing it would
@@ -216,7 +218,7 @@ public:
   int fallback_stale() const { return fb_stale_ticks_.load(std::memory_order_relaxed); }
   struct FallbackStats {
     uint32_t applied;  // ISR ticks that wrote the injection-free duties
-    uint32_t held_off; // ...of which triggered by a late ISR entry
+    uint32_t held_off; // ...of which triggered by a late sample
     uint32_t stale1;   // armed samples that found no write since the previous one
     uint32_t stale_max; // longest run of samples without a write while armed
   };
@@ -476,6 +478,7 @@ public:
     uint32_t late;
     float gap_max_us;    // longest ISR entry-to-entry gap (nominal: decimation x 50 us)
     uint32_t long_gaps;  // entries more than half a period late (a held-off ISR)
+    uint32_t late_code;  // late samples caused by in-ISR time, not by a late entry
     uint32_t imp[3], rej[3], esc[3]; // per-phase filter counters, see members
     float max_amps[3];               // largest |raw| conversion seen per phase
   };
@@ -489,6 +492,7 @@ public:
     st.late = late_count_.load();
     st.gap_max_us = (float)gap_max_.load() / 240.0f;
     st.long_gaps = long_gaps_.load();
+    st.late_code = late_code_.load();
     for (int p = 0; p < 3; p++) {
       st.imp[p] = imp_count_[p].load();
       st.rej[p] = rej_count_[p].load();
@@ -505,6 +509,7 @@ public:
     late_count_.store(0);
     gap_max_.store(0);
     long_gaps_.store(0);
+    late_code_.store(0);
     fb_applied_.store(0);
     fb_held_off_.store(0);
     fb_stale1_.store(0);
@@ -646,6 +651,7 @@ private:
   static constexpr uint32_t kPeriodCycles = 12000;
   static constexpr uint32_t kLateGapMarginCycles = 1200; // 5 us late entry
   static constexpr uint32_t kLateCodeCycles = 2400;      // 10 us of in-ISR work (normal ~7.9 us)
+  static constexpr uint32_t kFallbackGuardTicks = 400;   // 5 us at the 80 MHz MCPWM clock
 
   static int med3(int a, int b, int c) {
     return std::max(std::min(a, b), std::min(std::max(a, b), c));
@@ -818,9 +824,8 @@ private:
     have_last_entry_ = true;
     // Before any early return: a late or discarded sample is exactly when the
     // bridge may be sitting on a stale injection vector.
-    check_fallback(had_last &&
-                   gap > decimation_.load(std::memory_order_relaxed) * kPeriodCycles +
-                             kPeriodCycles / 2);
+    check_fallback(had_last && gap > decimation_.load(std::memory_order_relaxed) * kPeriodCycles +
+                                         kLateGapMarginCycles);
 
     if (cfg_.scope_pin != GPIO_NUM_NC)
       gpio_set_level(cfg_.scope_pin, 1);
@@ -951,6 +956,10 @@ private:
         (had_last && gap > expected_gap + kLateGapMarginCycles) || (elapsed > code_budget);
     if (late) {
       late_count_.fetch_add(1, std::memory_order_relaxed);
+      if (elapsed > code_budget) {
+        late_code_.fetch_add(1, std::memory_order_relaxed);
+        apply_fallback(/*held_off=*/true, 0); // a late entry already did, at entry
+      }
       // A SUSTAINED run of late samples means the control loop is effectively
       // dead while the bridge holds its last duties — that must not stand.
       // Declare a fault: disable and signal the stream task, which forces the
@@ -1040,6 +1049,18 @@ private:
     const uint32_t k = (uint32_t)fb_stale_ticks_.load(std::memory_order_relaxed);
     if (k == 0 || !(held_off || fb_stale_ >= k))
       return;
+    apply_fallback(held_off, seq);
+  }
+
+  void apply_fallback(bool held_off, uint32_t seq) {
+    if (!fb_armed_ || fb_stale_ticks_.load(std::memory_order_relaxed) == 0)
+      return;
+    // Same TEZ guard as set_duties(): a slow (in-ISR late) path could land
+    // its three writes across the shadow load. Skip; the next sample retries.
+    mcpwm_dev_t *dev = MCPWM_LL_GET_HW(0);
+    if (mcpwm_ll_timer_get_count_direction(dev, 0) == MCPWM_TIMER_DIRECTION_DOWN &&
+        mcpwm_ll_timer_get_count_value(dev, 0) < kFallbackGuardTicks)
+      return;
     bool wrote = false;
     if (duty_mux_)
       portENTER_CRITICAL_ISR(duty_mux_);
@@ -1127,6 +1148,7 @@ private:
   std::atomic<uint32_t> late_count_{0};
   std::atomic<uint32_t> gap_max_{0};   // cycles, see Stats::gap_max_us
   std::atomic<uint32_t> long_gaps_{0};
+  std::atomic<uint32_t> late_code_{0};
   std::atomic<int> isr_core_{-1};
 
   // Injection fallback (see set_fallback). fb_ticks_/fb_armed_ are written by
