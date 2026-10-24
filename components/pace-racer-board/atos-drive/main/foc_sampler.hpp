@@ -798,7 +798,9 @@ private:
 
   // Not IRAM_ATTR: MCPWM_ISR_IRAM_SAFE=n, so this ISR runs with the flash cache
   // enabled and may live in flash like any other code (marking it IRAM here also
-  // mis-orders the literal pool at -O2 -> "dangerous relocation").
+  // mis-orders the literal pool at -O2 -> "dangerous relocation"). It is placed
+  // in IRAM by symbol instead (main/linker.lf, foc_sampler_isr): from flash,
+  // cache misses under console + HFI load stretched it past its 10 us budget.
   static bool isr_trampoline(mcpwm_timer_handle_t t, const mcpwm_timer_event_data_t *ed,
                              void *ctx) {
     return s_self ? s_self->on_sample() : false;
@@ -822,10 +824,12 @@ private:
     const bool had_last = have_last_entry_;
     last_entry_ = t_entry;
     have_last_entry_ = true;
-    // Before any early return: a late or discarded sample is exactly when the
-    // bridge may be sitting on a stale injection vector.
-    check_fallback(had_last && gap > decimation_.load(std::memory_order_relaxed) * kPeriodCycles +
-                                         kLateGapMarginCycles);
+    // Injection fallback bookkeeping (see set_fallback). The comparator write
+    // itself waits until after the conversion so it never delays the sample.
+    const bool late_entry =
+        had_last && gap > decimation_.load(std::memory_order_relaxed) * kPeriodCycles +
+                              kLateGapMarginCycles;
+    const bool fb_due = fallback_due(late_entry);
 
     if (cfg_.scope_pin != GPIO_NUM_NC)
       gpio_set_level(cfg_.scope_pin, 1);
@@ -874,6 +878,8 @@ private:
         pending_ph_ = px;
         if (cfg_.scope_pin != GPIO_NUM_NC)
           gpio_set_level(cfg_.scope_pin, 0);
+        if (fb_due)
+          apply_fallback(true); // discarded tick: the task will not write either
         return false;
       }
       adc_oneshot_hal_convert(&hal_, &raw);
@@ -954,12 +960,12 @@ private:
     }
     const bool late =
         (had_last && gap > expected_gap + kLateGapMarginCycles) || (elapsed > code_budget);
+    if (fb_due || late)
+      apply_fallback(late || late_entry);
     if (late) {
       late_count_.fetch_add(1, std::memory_order_relaxed);
-      if (elapsed > code_budget) {
+      if (elapsed > code_budget)
         late_code_.fetch_add(1, std::memory_order_relaxed);
-        apply_fallback(/*held_off=*/true, 0); // a late entry already did, at entry
-      }
       // A SUSTAINED run of late samples means the control loop is effectively
       // dead while the bridge holds its last duties — that must not stand.
       // Declare a fault: disable and signal the stream task, which forces the
@@ -1032,8 +1038,11 @@ private:
     return hpw == pdTRUE;
   }
 
-  void check_fallback(bool held_off) {
+  // ISR entry: track how many samples have passed without a duty write and
+  // decide whether this one should restore the injection-free duties.
+  bool fallback_due(bool late_entry) {
     const uint32_t seq = duty_seq_.load(std::memory_order_relaxed);
+    fb_check_seq_ = seq;
     if (seq != fb_seen_seq_) {
       fb_seen_seq_ = seq;
       fb_stale_ = 0;
@@ -1041,18 +1050,19 @@ private:
       fb_stale_++;
     }
     if (!fb_armed_)
-      return; // racy read is fine: re-checked under the lock below
+      return false; // racy read is fine: re-checked under the lock in apply_fallback
     if (fb_stale_ == 1)
       fb_stale1_.fetch_add(1, std::memory_order_relaxed);
     if (fb_stale_ > fb_stale_max_.load(std::memory_order_relaxed))
       fb_stale_max_.store(fb_stale_, std::memory_order_relaxed);
     const uint32_t k = (uint32_t)fb_stale_ticks_.load(std::memory_order_relaxed);
-    if (k == 0 || !(held_off || fb_stale_ >= k))
-      return;
-    apply_fallback(held_off, seq);
+    return k != 0 && (late_entry || fb_stale_ >= k);
   }
 
-  void apply_fallback(bool held_off, uint32_t seq) {
+  // held_off: this sample is late/discarded, so the task gets no sample and a
+  // task write that lands meanwhile was computed before the gap.
+  void apply_fallback(bool held_off) {
+    const uint32_t seq = fb_check_seq_;
     if (!fb_armed_ || fb_stale_ticks_.load(std::memory_order_relaxed) == 0)
       return;
     // Same TEZ guard as set_duties(): a slow (in-ISR late) path could land
@@ -1160,6 +1170,7 @@ private:
   volatile bool fb_armed_{false};
   std::atomic<int> fb_stale_ticks_{2};
   uint32_t fb_seen_seq_{0};
+  uint32_t fb_check_seq_{0}; // duty_seq_ as seen at this ISR's entry
   uint32_t fb_stale_{0};
   std::atomic<uint32_t> fb_applied_{0}, fb_held_off_{0}, fb_stale1_{0}, fb_stale_max_{0};
   // Per-phase filter counters (cleared on arm and on stats reset). These are

@@ -42,3 +42,16 @@ entries:
 archive: libespp__bldc_driver.a
 entries:
     * (noflash)
+
+# The sampling ISR's own methods, by symbol (they are header inlines compiled
+# into atos_drive.cpp.obj, so the archive/object mappings above cannot reach
+# them, and IRAM_ATTR on them fails to link). Measured 2026-10-23: from flash,
+# with console output and the HFI tracker loading the shared I-cache, 0.5 % of
+# samples ran past the 10 us in-ISR budget (late_code) and were discarded.
+[mapping:foc_sampler_isr]
+archive: libmain.a
+entries:
+    atos_drive:_ZN10sensorless10FocSampler14isr_trampolineEP13mcpwm_timer_tPK24mcpwm_timer_event_data_tPv (noflash)
+    atos_drive:_ZN10sensorless10FocSampler9on_sampleEv (noflash)
+    atos_drive:_ZN10sensorless10FocSampler13median_filterEii (noflash)
+    atos_drive:_ZN10sensorless10FocSampler14apply_fallbackEb (noflash)
