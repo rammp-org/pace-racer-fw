@@ -43,6 +43,7 @@
 #include "esp_private/adc_share_hw_ctrl.h"
 #include "hal/adc_hal_common.h"
 #include "hal/adc_oneshot_hal.h"
+#include "hal/mcpwm_ll.h"
 
 #include "adc_fast.h"
 #include "logger.hpp"
@@ -178,6 +179,53 @@ public:
 
   void set_notify_task(TaskHandle_t t) { notify_task_ = t; }
 
+  // ---- Injection fallback (defence in depth for HFI) ------------------------
+  // HFI adds a high-frequency voltage that is only harmless while it keeps
+  // changing: frozen, the injection vector is DC across the winding, and on a
+  // ~3 uH motor 0.15 V ramps ~2.5 A per period into the DRV8353 VDS trip
+  // (2026-10-23, console output holding the control loop off for ~200 us).
+  // The bridge only changes when the FOC task writes, so anything that holds
+  // the task or this ISR off freezes the injection on the bridge.
+  //
+  // So the FOC task also publishes, every tick, the comparator values it would
+  // write WITHOUT the injection (set_fallback), and every duty write bumps a
+  // sequence (note_duty_write, under the duty lock). This ISR is the first
+  // thing to run after any hold-off, and it runs at TEP, half a period from the
+  // TEZ shadow load, so its three comparator writes are atomic on the bridge.
+  // It writes the injection-free duties when either
+  //   - this sample is late (entry or in-ISR, see on_sample): a late sample is
+  //     discarded without waking the task, so the bridge would otherwise hold
+  //     the last injection vector for another period, or
+  //   - no duty write has happened for `fallback_stale` consecutive samples
+  //     (the task is held off while samples keep arriving).
+  // Integer-only, no float. The fundamental voltage stays (zeroing it would
+  // short the back-EMF); only the injection is removed until the task's next
+  // write. Disarmed whenever no injection runs.
+  void set_duty_mux(portMUX_TYPE *m) { duty_mux_ = m; }
+  void note_duty_write() { duty_seq_.fetch_add(1, std::memory_order_relaxed); }
+  void set_fallback(bool armed, uint32_t ta, uint32_t tb, uint32_t tc) {
+    if (duty_mux_)
+      portENTER_CRITICAL(duty_mux_);
+    fb_ticks_[0] = ta;
+    fb_ticks_[1] = tb;
+    fb_ticks_[2] = tc;
+    fb_armed_ = armed;
+    if (duty_mux_)
+      portEXIT_CRITICAL(duty_mux_);
+  }
+  /// Stale-sample threshold, 0 = fallback off.
+  void set_fallback_stale(int k) { fb_stale_ticks_.store(k, std::memory_order_relaxed); }
+  int fallback_stale() const { return fb_stale_ticks_.load(std::memory_order_relaxed); }
+  struct FallbackStats {
+    uint32_t applied;  // ISR ticks that wrote the injection-free duties
+    uint32_t held_off; // ...of which triggered by a late sample
+    uint32_t stale1;   // armed samples that found no write since the previous one
+    uint32_t stale_max; // longest run of samples without a write while armed
+  };
+  FallbackStats fallback_stats() const {
+    return {fb_applied_.load(), fb_held_off_.load(), fb_stale1_.load(), fb_stale_max_.load()};
+  }
+
   /// Register the sampling ISR on the requested edge. TEP (on_full) is the null
   /// vector on this board; TEZ is offered only for the stage-0 edge comparison.
   /// The MCPWM API requires the timer in its init state to attach callbacks, so
@@ -209,6 +257,10 @@ public:
   void disable() { enabled_.store(false, std::memory_order_release); }
   bool is_enabled() const { return enabled_.load(std::memory_order_acquire); }
   bool at_tep() const { return at_tep_; }
+  /// Conversions taken so far (stall probes watch it move).
+  uint32_t sample_count() const { return n_.load(std::memory_order_relaxed); }
+  /// CPU the sampling ISR last ran on (-1 before the first sample).
+  int isr_core() const { return isr_core_.load(std::memory_order_relaxed); }
 
   /// Select which two phases the ISR samples; the third is reconstructed from
   /// ia+ib+ic=0. Pick the two *lowest*-duty phases: their low sides conduct
@@ -424,6 +476,9 @@ public:
     uint32_t count;
     float min_us, avg_us, max_us;
     uint32_t late;
+    float gap_max_us;    // longest ISR entry-to-entry gap (nominal: decimation x 50 us)
+    uint32_t long_gaps;  // entries more than half a period late (a held-off ISR)
+    uint32_t late_code;  // late samples caused by in-ISR time, not by a late entry
     uint32_t imp[3], rej[3], esc[3]; // per-phase filter counters, see members
     float max_amps[3];               // largest |raw| conversion seen per phase
   };
@@ -435,6 +490,9 @@ public:
     st.avg_us = (float)cyc_sum_.load() * s;
     st.max_us = (float)cyc_max_.load() / 240.0f;
     st.late = late_count_.load();
+    st.gap_max_us = (float)gap_max_.load() / 240.0f;
+    st.long_gaps = long_gaps_.load();
+    st.late_code = late_code_.load();
     for (int p = 0; p < 3; p++) {
       st.imp[p] = imp_count_[p].load();
       st.rej[p] = rej_count_[p].load();
@@ -449,6 +507,13 @@ public:
     cyc_min_.store(0xffffffff);
     cyc_max_.store(0);
     late_count_.store(0);
+    gap_max_.store(0);
+    long_gaps_.store(0);
+    late_code_.store(0);
+    fb_applied_.store(0);
+    fb_held_off_.store(0);
+    fb_stale1_.store(0);
+    fb_stale_max_.store(0);
     clear_filter_counters();
     dbl_n_.store(0);
     dbl_dis_.store(0);
@@ -586,6 +651,7 @@ private:
   static constexpr uint32_t kPeriodCycles = 12000;
   static constexpr uint32_t kLateGapMarginCycles = 1200; // 5 us late entry
   static constexpr uint32_t kLateCodeCycles = 2400;      // 10 us of in-ISR work (normal ~7.9 us)
+  static constexpr uint32_t kFallbackGuardTicks = 400;   // 5 us at the 80 MHz MCPWM clock
 
   static int med3(int a, int b, int c) {
     return std::max(std::min(a, b), std::min(std::max(a, b), c));
@@ -732,7 +798,9 @@ private:
 
   // Not IRAM_ATTR: MCPWM_ISR_IRAM_SAFE=n, so this ISR runs with the flash cache
   // enabled and may live in flash like any other code (marking it IRAM here also
-  // mis-orders the literal pool at -O2 -> "dangerous relocation").
+  // mis-orders the literal pool at -O2 -> "dangerous relocation"). It is placed
+  // in IRAM by symbol instead (main/linker.lf, foc_sampler_isr): from flash,
+  // cache misses under console + HFI load stretched it past its 10 us budget.
   static bool isr_trampoline(mcpwm_timer_handle_t t, const mcpwm_timer_event_data_t *ed,
                              void *ctx) {
     return s_self ? s_self->on_sample() : false;
@@ -750,10 +818,18 @@ private:
     // fired late (preempted before it even started) and its sample lands outside
     // the null window.
     const uint32_t t_entry = esp_cpu_get_cycle_count();
+    if (!have_last_entry_)
+      isr_core_.store(esp_cpu_get_core_id(), std::memory_order_relaxed);
     const uint32_t gap = t_entry - last_entry_;
     const bool had_last = have_last_entry_;
     last_entry_ = t_entry;
     have_last_entry_ = true;
+    // Injection fallback bookkeeping (see set_fallback). The comparator write
+    // itself waits until after the conversion so it never delays the sample.
+    const bool late_entry =
+        had_last && gap > decimation_.load(std::memory_order_relaxed) * kPeriodCycles +
+                              kLateGapMarginCycles;
+    const bool fb_due = fallback_due(late_entry);
 
     if (cfg_.scope_pin != GPIO_NUM_NC)
       gpio_set_level(cfg_.scope_pin, 1);
@@ -802,6 +878,8 @@ private:
         pending_ph_ = px;
         if (cfg_.scope_pin != GPIO_NUM_NC)
           gpio_set_level(cfg_.scope_pin, 0);
+        if (fb_due)
+          apply_fallback(true); // discarded tick: the task will not write either
         return false;
       }
       adc_oneshot_hal_convert(&hal_, &raw);
@@ -874,10 +952,20 @@ private:
     // bad channels (see the capture dump: glitches coincide with long gap/elapsed).
     const uint32_t expected_gap = decimation_.load(std::memory_order_relaxed) * kPeriodCycles;
     const uint32_t code_budget = kLateCodeCycles + (took_pair ? kDblExtraCycles : 0);
+    if (had_last) {
+      if (gap > gap_max_.load(std::memory_order_relaxed))
+        gap_max_.store(gap, std::memory_order_relaxed);
+      if (gap > expected_gap + kPeriodCycles / 2)
+        long_gaps_.fetch_add(1, std::memory_order_relaxed);
+    }
     const bool late =
         (had_last && gap > expected_gap + kLateGapMarginCycles) || (elapsed > code_budget);
+    if (fb_due || late)
+      apply_fallback(late || late_entry);
     if (late) {
       late_count_.fetch_add(1, std::memory_order_relaxed);
+      if (elapsed > code_budget)
+        late_code_.fetch_add(1, std::memory_order_relaxed);
       // A SUSTAINED run of late samples means the control loop is effectively
       // dead while the bridge holds its last duties — that must not stand.
       // Declare a fault: disable and signal the stream task, which forces the
@@ -950,6 +1038,59 @@ private:
     return hpw == pdTRUE;
   }
 
+  // ISR entry: track how many samples have passed without a duty write and
+  // decide whether this one should restore the injection-free duties.
+  bool fallback_due(bool late_entry) {
+    const uint32_t seq = duty_seq_.load(std::memory_order_relaxed);
+    fb_check_seq_ = seq;
+    if (seq != fb_seen_seq_) {
+      fb_seen_seq_ = seq;
+      fb_stale_ = 0;
+    } else if (fb_stale_ < 0xffff) {
+      fb_stale_++;
+    }
+    if (!fb_armed_)
+      return false; // racy read is fine: re-checked under the lock in apply_fallback
+    if (fb_stale_ == 1)
+      fb_stale1_.fetch_add(1, std::memory_order_relaxed);
+    if (fb_stale_ > fb_stale_max_.load(std::memory_order_relaxed))
+      fb_stale_max_.store(fb_stale_, std::memory_order_relaxed);
+    const uint32_t k = (uint32_t)fb_stale_ticks_.load(std::memory_order_relaxed);
+    return k != 0 && (late_entry || fb_stale_ >= k);
+  }
+
+  // held_off: this sample is late/discarded, so the task gets no sample and a
+  // task write that lands meanwhile was computed before the gap.
+  void apply_fallback(bool held_off) {
+    const uint32_t seq = fb_check_seq_;
+    if (!fb_armed_ || fb_stale_ticks_.load(std::memory_order_relaxed) == 0)
+      return;
+    // Same TEZ guard as set_duties(): a slow (in-ISR late) path could land
+    // its three writes across the shadow load. Skip; the next sample retries.
+    mcpwm_dev_t *dev = MCPWM_LL_GET_HW(0);
+    if (mcpwm_ll_timer_get_count_direction(dev, 0) == MCPWM_TIMER_DIRECTION_DOWN &&
+        mcpwm_ll_timer_get_count_value(dev, 0) < kFallbackGuardTicks)
+      return;
+    bool wrote = false;
+    if (duty_mux_)
+      portENTER_CRITICAL_ISR(duty_mux_);
+    // A task write that slipped in after the load above is fresher than the
+    // fallback: leave it (unless this entry was itself held off — then the
+    // write was computed from a pre-gap sample and still carries injection).
+    if (fb_armed_ && (held_off || duty_seq_.load(std::memory_order_relaxed) == seq)) {
+      for (int p = 0; p < 3; p++)
+        mcpwm_comparator_set_compare_value(cmp_[p], fb_ticks_[p]);
+      wrote = true;
+    }
+    if (duty_mux_)
+      portEXIT_CRITICAL_ISR(duty_mux_);
+    if (wrote) {
+      fb_applied_.fetch_add(1, std::memory_order_relaxed);
+      if (held_off)
+        fb_held_off_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+
   static FocSampler *s_self;
 
   Config cfg_{};
@@ -1015,6 +1156,23 @@ private:
   std::atomic<uint32_t> cyc_max_{0};
   std::atomic<uint64_t> cyc_sum_{0};
   std::atomic<uint32_t> late_count_{0};
+  std::atomic<uint32_t> gap_max_{0};   // cycles, see Stats::gap_max_us
+  std::atomic<uint32_t> long_gaps_{0};
+  std::atomic<uint32_t> late_code_{0};
+  std::atomic<int> isr_core_{-1};
+
+  // Injection fallback (see set_fallback). fb_ticks_/fb_armed_ are written by
+  // the FOC task and read by the ISR under duty_mux_; the rest is ISR scratch
+  // or stats.
+  portMUX_TYPE *duty_mux_{nullptr};
+  std::atomic<uint32_t> duty_seq_{0};
+  uint32_t fb_ticks_[3] = {0, 0, 0};
+  volatile bool fb_armed_{false};
+  std::atomic<int> fb_stale_ticks_{2};
+  uint32_t fb_seen_seq_{0};
+  uint32_t fb_check_seq_{0}; // duty_seq_ as seen at this ISR's entry
+  uint32_t fb_stale_{0};
+  std::atomic<uint32_t> fb_applied_{0}, fb_held_off_{0}, fb_stale1_{0}, fb_stale_max_{0};
   // Per-phase filter counters (cleared on arm and on stats reset). These are
   // the H1-vs-H0 discriminator for the trip investigation: glitch-caused trips
   // show imp >> 0 with a flat capture baseline; a real-current trip shows

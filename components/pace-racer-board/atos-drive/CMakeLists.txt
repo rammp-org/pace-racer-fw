@@ -10,7 +10,7 @@ set(EXTRA_COMPONENT_DIRS
 
 set(
   COMPONENTS
-  "main esptool_py pace-racer-board rammp_rtps_interface nvs_flash"
+  "main esptool_py pace-racer-board rammp_rtps_interface nvs_flash esp_driver_gptimer"
   CACHE STRING
   "List of components to include"
   )
