@@ -28,6 +28,14 @@
 // to (a) the primary UART console if the build has one, (b) the CDC interface,
 // and (c) a console-module LOG frame on the vendor stream. All three are
 // best-effort and non-blocking: logging must never stall a control loop.
+//
+// The USB sinks are fed by a drain task pinned to TinyUSB's own core, never by
+// the printing task: a TinyUSB write runs its FIFO copy inside a spinlock
+// critical section (dcd_edpt_xfer_fifo), which on the printing task's core
+// masks every interrupt up to level 3 and spins against the TinyUSB task on
+// the other. On the PACE RACER that core is the one with the PWM sampling ISR:
+// a 3000-row capdump made 2.1 % of the samples late, each late sample skips
+// a control update, and runs of them froze the duties for 220 us (2026-10-23).
 
 #include <atomic>
 #include <chrono>
@@ -50,6 +58,9 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_vfs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/stream_buffer.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 #include "coredump.hpp"
@@ -200,6 +211,12 @@ public:
     log_sink_ = std::move(sink);
   }
 
+  /// stdout sinks to feed, for A/B timing work: bit 0 UART, 1 CDC, 2 vendor
+  /// LOG frames, 3 the extra sink (ethernet). Default all. Bit 4 = write the
+  /// USB sinks inline from the printing task (the pre-drain behaviour).
+  static void set_stdout_sinks(uint8_t mask) { s_sinks.store(mask, std::memory_order_relaxed); }
+  static uint8_t stdout_sinks() { return s_sinks.load(std::memory_order_relaxed); }
+
   bool vendor_connected() const { return usb_.is_vendor_connected(); }
   /// The vendor-stream dispatcher, for application modules (register before or
   /// after start(); handlers run on the USB worker task).
@@ -305,6 +322,13 @@ private:
   static constexpr size_t kRxCap = 2048;
   static inline DemoLink *s_instance{nullptr};
   static inline int s_uart_fd{-1};
+  static inline std::atomic<uint8_t> s_sinks{0x0f};
+  // stdout bytes on their way to the USB sinks (see the header comment).
+  static constexpr size_t kTxBufBytes = 8192;
+  static inline StreamBufferHandle_t s_tx{nullptr};
+  static inline std::mutex s_tx_mutex; // stream buffers take one writer at a time
+  static inline TaskHandle_t s_tx_task{nullptr};
+  static inline thread_local bool s_in_write{false};
 
   static int vfs_open(const char *, int, int) { return 0; }
   static int vfs_close(int) { return 0; }
@@ -316,23 +340,24 @@ private:
   static ssize_t vfs_write(int, const void *data, size_t size) {
     // A logging call made *by* the USB stack from inside a write would recurse
     // back into it; break the loop per task.
-    static thread_local bool in_write = false;
-    if (s_uart_fd >= 0)
+    bool &in_write = s_in_write;
+    const uint8_t sinks = s_sinks.load(std::memory_order_relaxed);
+    if (s_uart_fd >= 0 && (sinks & 1))
       ::write(s_uart_fd, data, size);
     if (in_write)
       return static_cast<ssize_t>(size);
     in_write = true;
     if (auto *self = s_instance) {
-      auto &usb = self->usb_;
       const auto bytes = std::span<const uint8_t>(static_cast<const uint8_t *>(data), size);
-      if (usb.is_cdc_connected() && usb.cdc_write_available() >= size)
-        usb.write_cdc(bytes);
-      // Only while a dashboard session is streaming telemetry (same reason as
-      // stream_on_start = false). 13 = frame overhead (9-byte header + CRC-32).
-      if (self->telemetry_.streaming() && usb.is_vendor_connected() &&
-          usb.vendor_write_available() >= size + 13)
-        usb.write_vendor(espp::stream_frame::build_frame(true, kConsoleModule, kConsoleLog, bytes));
-      if (self->sink_mutex_.try_lock()) {
+      if (s_tx && !(sinks & 0x10)) {
+        // Bounded wait for room (a bulk dump outruns USB only with the UART
+        // tee off), then drop: never block a printer indefinitely.
+        std::lock_guard<std::mutex> lk(s_tx_mutex);
+        xStreamBufferSend(s_tx, data, size, pdMS_TO_TICKS(20));
+      } else {
+        self->usb_sinks(bytes, sinks);
+      }
+      if ((sinks & 8) && self->sink_mutex_.try_lock()) {
         if (self->log_sink_)
           self->log_sink_(bytes);
         self->sink_mutex_.unlock();
@@ -342,7 +367,54 @@ private:
     return static_cast<ssize_t>(size);
   }
 
+  void usb_sinks(std::span<const uint8_t> bytes, uint8_t sinks) {
+    if ((sinks & 2) && usb_.is_cdc_connected() && usb_.cdc_write_available() >= bytes.size())
+      usb_.write_cdc(bytes);
+    // Only while a dashboard session is streaming telemetry (same reason as
+    // stream_on_start = false). 13 = frame overhead (9-byte header + CRC-32).
+    if ((sinks & 4) && telemetry_.streaming() && usb_.is_vendor_connected() &&
+        usb_.vendor_write_available() >= bytes.size() + 13)
+      usb_.write_vendor(
+          espp::stream_frame::build_frame(true, kConsoleModule, kConsoleLog, bytes));
+  }
+
+  // Drains s_tx into the USB sinks, on TinyUSB's core. Waits (bounded) for CDC
+  // room instead of dropping: the printer is already decoupled.
+  static void tx_task(void *) {
+    s_in_write = true; // whatever the USB stack logs from here goes to the UART only
+    static uint8_t chunk[512];
+    for (;;) {
+      const size_t n = xStreamBufferReceive(s_tx, chunk, sizeof(chunk), portMAX_DELAY);
+      auto *self = s_instance;
+      if (!self || n == 0)
+        continue;
+      const uint8_t sinks = s_sinks.load(std::memory_order_relaxed);
+      auto &usb = self->usb_;
+      for (int i = 0; i < 50 && (sinks & 2) && usb.is_cdc_connected() &&
+                      usb.cdc_write_available() < n;
+           i++)
+        vTaskDelay(1);
+      self->usb_sinks(std::span<const uint8_t>(chunk, n), sinks);
+    }
+  }
+
+  void start_tx_task() {
+    TaskHandle_t tusb = xTaskGetHandle("TinyUSB");
+    const BaseType_t core = tusb ? xTaskGetCoreID(tusb) : tskNO_AFFINITY;
+    s_tx = xStreamBufferCreate(kTxBufBytes, 1);
+    if (!s_tx)
+      return;
+    // Below TinyUSB (5): it has to run to drain the FIFO this task fills.
+    if (xTaskCreatePinnedToCore(tx_task, "con_tx", 4096, nullptr, 3, &s_tx_task, core) != pdPASS) {
+      vStreamBufferDelete(s_tx);
+      s_tx = nullptr;
+      return;
+    }
+    logger_.info("stdout -> USB drained on core {}", (int)core);
+  }
+
   void route_stdout() {
+    start_tx_task();
 #if defined(CONFIG_ESP_CONSOLE_UART_NUM) && CONFIG_ESP_CONSOLE_UART_NUM >= 0
     char uart[16];
     std::snprintf(uart, sizeof(uart), "/dev/uart/%d", CONFIG_ESP_CONSOLE_UART_NUM);

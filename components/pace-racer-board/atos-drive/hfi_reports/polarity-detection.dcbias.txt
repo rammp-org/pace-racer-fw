@@ -1,0 +1,13 @@
+DC-bias method (v1, commit e41c0d5): hrt 0.17 V running, +,-,-,+ Id pulses along theta_hat, compare |P| and N_rot.
+Position enc ~351 deg elec (th 0 aligned). 2 A 20 ms reps 2: north start -8.07% (wrong flip), south start -2.20% (right flip).
+reps 4 x8 runs alternating branches: margins +5.59 -4.89 -0.03 -0.02 -0.99 -0.46 (2A 20/40ms), -4.90 +0.23 (3A); per-cycle scatter +-0.2 A (~10 % of |P|=2.33),
+|snr| mostly < 2. |P| shifts 2.33 -> 2.56..2.75 A between 2 A and 3 A bias (dead-time effect >> saturation). Rotor moved 1-5.7 deg elec during pulses.
+Conclusion: polarity term <= ~3 % buried in bias-dependent dead-time noise; abandoned.
+2nd-harmonic method (v2, zero-mean pulsating d injection 1.25 kHz, no bias), enc ~351:
+Vp 0.10: I1 0.68-0.71 A (dead time eats most of the 0.10 V), k 1.3-2.0 % at +90, -44, +131 deg (north frame x2, south x1)
+Vp 0.14: I1 1.8-1.95 A, south frame: k 1.66%@-34, 1.15%@-25 (magnetic prediction for south: -142; model of DC offset x dead time: -27..-40)
+=> 2nd harmonic dominated by dead-time x DC-offset artefact because i_d crosses zero.
+v3 biased pulsating d at 1.25 kHz (b +/-2 A ABBA, Vp 0.035 -> I1 1.43 A, imax 3.8 A): Y north frame -1.3/-2.7 %, south +2.7/-0.4 % (snr 8-11 on the clear ones)
+Vp 0.024 (I1 1.0 A, imax 3.4-3.6 A incl. transients), 6 blocks x 80 ms: b=2: N -1.18 (snr -2.6), S +1.22 (5.7), S +1.87 (10.0), S -0.85 (-2.0, wrong);
+b=1.5: N -4.07 (-14.1), S -0.71 (-1.7, wrong). Sign: Y < 0 on north (opposite of the textbook). Block scatter +-1 %. K (2nd harmonic) inconsistent.
+Move 0.5-4.6 deg elec.

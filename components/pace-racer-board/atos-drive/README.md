@@ -133,6 +133,9 @@ A third topic per axis, `rammp/mib/motor_tuning/<axis>` (`MotorTuning`:
 `kTune*` bounds in `motor_params.hpp`, and applies on its next tick in any
 state, without resetting the integrator. `MotorState` echoes `tuning_ack` and
 the three values in force (SI; the console's `sg`/`hpll` are A/rpm and Hz).
+API v3 (2026-10-19, D38): a negative `speed_kp`/`speed_ki` sets that gain to
+exactly 0 (0 still means unchanged), and with ki = 0 both speed loops hold
+the integrator at 0, so it empties instead of freezing (`sg <kp> 0` too).
 `persist` = the stream task writes the live values to NVS (`spd_kp`,
 `spd_ki`, `pll_hz`), restored at boot over the per-source defaults. Console:
 
@@ -213,6 +216,6 @@ loop is tracking, 0 outside a speed loop. Verified on drive_left: `hv 20` at
 - Two boards on one network; induced VDS/thermal/sampler faults; any load.
 - The hub motor: quadrature encoder source (PCNT) with hall-edge sync, R/L
   measurement, current-loop retune. `ATOS_MOTOR=hub20` only swaps constants.
-- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic); no git stamp yet.
+- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic, 0.3.0 with true-zero gains); no git stamp yet.
 - espp on the board keeps reader proxies of dead host participants (one extra
   copy of every sample per MIB restart). Needs a fix in espp itself.
