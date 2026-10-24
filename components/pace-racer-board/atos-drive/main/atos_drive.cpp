@@ -558,12 +558,13 @@ std::atomic<bool> g_hrt_seeded{false};
 std::atomic<float> g_hrt_guard_deg{60.0f};
 std::atomic<float> g_hrt_guard_err{0.0f}; // error at the last guard trip, deg (0 = never)   // theta_hat valid (polarity picked; see seeding note)
 std::atomic<float> g_hrt_rpm{0.0f};      // rotor rpm from omega_hat, 20 ms LPF (speed feedback for xrun) // fundamental current, alpha-beta mean over one injection cycle            // sampler median: 1 = auto (off while injecting), 0 = off, 2 = on
-// Polarity test ('hpol [Vp] [bias] [ms] [blocks] [metric] [psi]'): hrt knows
+// Polarity test ('hpol [Vp] [bias] [ms] [blocks] [div] [ysign] [metric] [psi]'): hrt knows
 // theta only mod 180. At standstill the rotating injection pauses; along the
 // frozen theta_hat the d current is held at +b, then -b (ABBA over the blocks),
-// with a small pulsating voltage Vp cos(phi) on top (phi steps 1/16 turn per
-// tick = 1.25 kHz, or 2.5 / 5 kHz with div 8 / 4). +b along the magnet's north adds to its flux and saturates
-// the iron: the incremental Ld drops, so the HF current is larger at +b than
+// with a small pulsating voltage Vp cos(phi) on top (div ticks per cycle:
+// 16 / 8 / 4 = 1.25 / 2.5 / 5 kHz; 8 is the one that works). +b along the
+// magnet's north adds to its flux and saturates the iron: the incremental Ld
+// drops, so the HF current is larger at +b than
 // at -b (Y, the decision by default), and the flux lambda(i) = L i + a i^2
 // (a < 0 on north) grows a 2nd harmonic whose k = I2 conj(I1)^2 / |I1|^3 lies
 // along psi = 90 deg - arg Z(2w) (~37 deg) on north (K, reported, 'metric 1').
@@ -572,7 +573,9 @@ std::atomic<float> g_hrt_rpm{0.0f};      // rotor rpm from omega_hat, 20 ms LPF 
 // both earlier tries, +/-Id under the rotating injection and zero-mean
 // pulsating injection. Margin in %, negative = theta_hat was the south end: add
 // 180 deg. q current stays 0; the rotor only sees torque through the frame
-// error (encoder 'move' reports it).
+// error (encoder 'move' reports it). Drone bench 2026-10-23 (12 V, b 2.2 A, div 8):
+// magnet term ~2 % against a stator-fixed term up to 4 % ('hpolcal'), 85 % right
+// over 6 detents - not yet a safe seed on its own; keep hguard on.
 // 'hseed enc|pol|none' picks how hrt seeds the branch: encoder (bench truth),
 // this test (automatic once hrt has its first estimate, HOLD only; xrun/xiq stay
 // locked until it decides), or whatever atan2 gives.

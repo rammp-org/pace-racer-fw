@@ -11,11 +11,15 @@ def cmd(c, wait=0.4):
     while time.time() - t < wait: b += sp.read(8192)
     return b.decode(errors='replace')
 def enc():
-    t = cmd('enc', 0.3); m = re.search(r"acc=(-?[\d.]+)deg.*elec=(-?[\d.]+)deg", t)
-    return float(m.group(1)), float(m.group(2))
+    for _ in range(3):
+        t = cmd('enc', 0.3); m = re.search(r"acc=(-?[\d.]+)deg.*elec=(-?[\d.]+)deg", t)
+        if m: return float(m.group(1)), float(m.group(2))
+    return float('nan'), float('nan')
 def hrt():
-    t = cmd('hrt', 0.3); m = re.search(r"#hrt vh=([\d.]+).*last_trip_err=(-?[\d.]+)", t)
-    return float(m.group(1)), float(m.group(2))
+    for _ in range(3):
+        t = cmd('hrt', 0.3); m = re.search(r"#hrt vh=([\d.]+).*last_trip_err=(-?[\d.]+)", t)
+        if m: return float(m.group(1)), float(m.group(2))
+    return float('nan'), float('nan')
 line = lambda t, p: next((l for l in t.splitlines() if l.startswith(p)), t.strip()[-160:])
 cmd('sq 1', 0.3); cmd('dtc 0', 0.3); cmd('hguard 60', 0.3); print(line(cmd('hseed pol', 0.3), '#'))
 trips = 0
