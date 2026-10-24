@@ -8,7 +8,7 @@ import os
 out, vh, cal, th0 = sys.argv[1], float(sys.argv[2]), sys.argv[3], float(sys.argv[4]); iq = float(sys.argv[5]) if len(sys.argv) > 5 else 0.9
 HN = os.environ.get('HN', 'hrtn -0.0046 0.0412 -0.0484 0.0493')
 STEPS = [(0, 0)] + [(d, iq) for d in (0, -0.5, -1.0, 0.5)] + [(0, 0)] + [(d, -iq) for d in (0, -0.5, -1.0, 0.5)] + [(0, 0)]
-HOLD_S, EV = 0.7, 100
+HOLD_S, EV = 0.7, 130
 sp = serial.Serial('/dev/cu.usbmodem2101', 115200, timeout=0.2); sp.read(65536)
 def cmd(c, wait=0.4):
     sp.write((c + '\n').encode()); t = time.time(); b = b''

@@ -8,11 +8,11 @@ def w(c): s.sendall((c + "\n").encode()); time.sleep(0.12)
 def q(c): w(c); return f.readline().decode().strip()
 def block():
     assert f.read(1) == b"#"; n = int(f.read(1)); ln = int(f.read(n)); d = f.read(ln); f.readline(); return d
-w(':STOP'); w(':CHAN1:UNIT VOLT'); w(':CHAN1:PROB 1'); w(':CHAN1:SCAL 0.03'); w(':CHAN1:OFFS 0')
-w(f':TIM:SCAL {tdiv}'); w(':TIM:MODE MAIN'); w(f':TIM:OFFS {4*tdiv}'); w(':ACQ:MDEP 1M'); w(':ACQ:TYPE PEAK')
+w('*CLS'); w(':STOP'); w(':CHAN1:UNIT VOLT'); w(':CHAN1:PROB 1'); w(':CHAN1:SCAL 0.03'); w(':CHAN1:OFFS 0')
+w(f':TIM:SCAL {tdiv}'); w(':TIM:MODE MAIN'); w(f':TIM:OFFS {4*tdiv}'); w(':ACQ:MDEP 100k'); w(':ACQ:TYPE PEAK')
 w(':TRIG:MODE EDGE'); w(':TRIG:EDGE:SOUR CHAN1'); w(':TRIG:EDGE:SLOP POS'); w(f':TRIG:EDGE:LEV {lev/100}'); w(':TRIG:SWE SING'); w(':SING')
 time.sleep(max(1.2, 1.2 * tdiv))
-print('armed', q(':TRIG:STAT?'), 'mode', q(':TIM:MODE?'), 'acq', q(':ACQ:TYPE?'), 'srat', q(':ACQ:SRAT?'), flush=True)
+w('*CLS'); print('armed', q(':TRIG:STAT?'), 'srat', q(':ACQ:SRAT?'), flush=True)
 sp = serial.Serial('/dev/cu.usbmodem2101', 115200, timeout=0.2); sp.read(65536)
 def cmd(c, wt=0.4):
     sp.write((c + '\n').encode()); t = time.time(); b = b''

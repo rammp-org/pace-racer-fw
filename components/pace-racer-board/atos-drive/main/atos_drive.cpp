@@ -591,6 +591,15 @@ std::atomic<float> g_hrt_stic{0.0f};
 // At a real snap-off theta_hat lags first (e_lp has the model's sign), so the gate stays open. 0 = off.
 std::atomic<float> g_hrt_zg{0.0f}, g_hrt_ztau{0.02f};
 std::atomic<uint32_t> g_hrt_zn{0}, g_hrt_zgated{0}; // ticks with the gate armed / gate < 0.5 (reset by xrun/xiq)
+// Zero-current HFI windows ('hrtb per_ms wid_ms settle_ms [boost] [cout] [wmax]'), HFI drive (xrun/xiq) only. Under
+// drive current the HFI angle follows the current vector at some rotor positions (the forward stick spot: rotor stuck
+// at enc 175-178 deg elec under ~1.45 A, theta_hat +45 deg ahead, current in the -d/+q quadrant, measurement +28 deg
+// mean / +-40 deg noise, 0.17 and 0.20 V alike), while at zero current the 0.20/0.25 V scans match the encoder to
+// ~2 deg at every detent. Every per_ms the drive current is commanded to 0 for wid_ms (only while |omega_hat| < wmax
+// rad/s elec, 0 = always); after settle_ms the PLL error is weighted by boost (clean measurement), outside the
+// clean part by cout x the i0 confidence. 0 = off.
+std::atomic<float> g_hrtb_per{0.0f}, g_hrtb_wid{0.0f}, g_hrtb_settle{0.0f}, g_hrtb_boost{1.0f}, g_hrtb_cout{1.0f}, g_hrtb_wmax{0.0f};
+std::atomic<int> g_hrtb_state{-1}; // -1 off, 0 driving, 1 window settling, 2 window clean (HALL branch -> tracker, same tick)
 // HFI confidence: the PLL correction (kp, ki, l3) is scaled by 1 / (1 + |If|^2 / i0^2), so at
 // high drive current, where the current's own saliency swamps the rotor term, the mechanical
 // model carries theta_hat. 0 = off.
@@ -1189,6 +1198,28 @@ IRAM_ATTR void foc_task_fn(void *) {
           iqref = std::clamp(iqref, rev_cap, fwd_cap);
         }
       }
+      // Zero-current HFI windows (see g_hrtb_per).
+      {
+        static uint32_t bl_k = 0;
+        int st = -1;
+        const float per_ms = g_hrtb_per.load(std::memory_order_relaxed);
+        const float wmax = g_hrtb_wmax.load(std::memory_order_relaxed);
+        if (tsrc == 2 && per_ms > 0.0f) {
+          st = 0;
+          const uint32_t per = std::max<uint32_t>(in_ticks((uint32_t)(per_ms * 20.0f)), 2);
+          if (++bl_k >= per) bl_k = 0;
+          if (wmax > 0.0f && fabsf(g_hrt_omega.load(std::memory_order_relaxed)) >= wmax) {
+            bl_k = std::max(bl_k, in_ticks((uint32_t)(g_hrtb_wid.load(std::memory_order_relaxed) * 20.0f))); // stay out of the window
+          } else if (bl_k < in_ticks((uint32_t)(g_hrtb_wid.load(std::memory_order_relaxed) * 20.0f))) {
+            st = bl_k < in_ticks((uint32_t)(g_hrtb_settle.load(std::memory_order_relaxed) * 20.0f)) ? 1 : 2;
+            iqref = 0.0f;
+            idref = 0.0f;
+          }
+        } else {
+          bl_k = 0;
+        }
+        g_hrtb_state.store(st, std::memory_order_relaxed);
+      }
       // Frame continuity for STOPPING (trip/'stop'/thermal all exit through it).
       sp_theta = th;
       sp_omega = esrc ? rpm_meas * kRpmToOmegaE : g_hall_drive.omega_e();
@@ -1463,7 +1494,12 @@ IRAM_ATTR void foc_task_fn(void *) {
           const float e2 = remainderf(two_th - 2.0f * th_hat, kTwoPi); // 2-theta error, wrapped
           const float emax = g_hrt_emax.load(std::memory_order_relaxed);
           const float e_raw = std::clamp(0.5f * e2, -emax, emax);
-          const float e = e_raw * conf;
+          float e = e_raw * conf;
+          if (mode == HALL) { // zero-current windows (see g_hrtb_per)
+            const int bst = g_hrtb_state.load(std::memory_order_relaxed);
+            if (bst == 2) e = e_raw * g_hrtb_boost.load(std::memory_order_relaxed);
+            else if (bst >= 0) e *= g_hrtb_cout.load(std::memory_order_relaxed);
+          }
           const float wlim = motor::kMaxRpm * kRpmToOmegaE;
           d_hat = std::clamp(d_hat + g_hrt_l3.load(std::memory_order_relaxed) * e * dt, -100.0f * wlim, 100.0f * wlim);
           float a_drv = g_hrt_ktj.load(std::memory_order_relaxed) * iq_h + a_cog + d_hat;
@@ -2753,7 +2789,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
-      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] [i0] [stic] | hrtk ca cb | hrtz ge_deg [tau_ms] | hrtn kr ki br bi | cff cog [coul] | xsl kp kd ki [rate] [tau_ms] [emax] [eback] | hrtc c_abs c_q2 c_d [c_q] | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] [i0] [stic] | hrtk ca cb | hrtz ge_deg [tau_ms] | hrtb per_ms wid_ms settle_ms [boost] [cout] [wmax] | hrtn kr ki br bi | cff cog [coul] | xsl kp kd ki [rate] [tau_ms] [emax] [eback] | hrtc c_abs c_q2 c_d [c_q] | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -3406,6 +3442,16 @@ extern "C" void app_main(void) {
       fmt::print("#hrt model Kt/J={:.0f} rad/s^2/A B/J={:.2f} 1/s l3={:.3g} coul={:.0f} cog={:.0f},{:.0f} i0={:.2f} A stic={:.0f}\n", g_hrt_ktj.load(),
                  g_hrt_bj.load(), g_hrt_l3.load(), g_hrt_coul.load(), g_hrt_cog_a.load(), g_hrt_cog_b.load(), g_hrt_i0.load(),
                  g_hrt_stic.load());
+    } else if (strncmp(line, "hrtb", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+      float per = g_hrtb_per.load(), wid = g_hrtb_wid.load(), st = g_hrtb_settle.load(), bo = g_hrtb_boost.load(),
+            co = g_hrtb_cout.load(), wm = g_hrtb_wmax.load();
+      sscanf(line, "hrtb %f %f %f %f %f %f", &per, &wid, &st, &bo, &co, &wm);
+      g_hrtb_wid.store(std::clamp(wid, 0.0f, 50.0f)); g_hrtb_settle.store(std::clamp(st, 0.0f, 50.0f));
+      g_hrtb_boost.store(std::clamp(bo, 0.0f, 10.0f)); g_hrtb_cout.store(std::clamp(co, 0.0f, 1.0f));
+      g_hrtb_wmax.store(std::max(wm, 0.0f));
+      g_hrtb_per.store(per > 0.0f ? std::max(per, g_hrtb_wid.load() + 0.5f) : 0.0f);
+      fmt::print("#hrt zero-current windows every {:.1f} ms, {:.1f} ms wide, settle {:.1f} ms, boost {:.2f}, cout {:.2f}, wmax {:.0f} rad/s (per 0 = off)\n",
+                 g_hrtb_per.load(), g_hrtb_wid.load(), g_hrtb_settle.load(), g_hrtb_boost.load(), g_hrtb_cout.load(), g_hrtb_wmax.load());
     } else if (strncmp(line, "hrtz", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
       float ge = g_hrt_zg.load() * 57.29578f, tau_ms = g_hrt_ztau.load() * 1000.0f;
       sscanf(line, "hrtz %f %f", &ge, &tau_ms);
