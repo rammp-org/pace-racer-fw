@@ -22,7 +22,7 @@ trips = 0
 for X in xs:
     cmd('hrt 0', 0.2); cmd(f'th {X}', 0.2); cmd('id 3', 0.6); cmd('id 0', 0.4)
     acc0, e0 = enc(); _, lt0 = hrt()
-    cmd(f'hrt {vh} {nr} {ni} {off}', 0.8)        # seeds, runs hpol (~0.3 s), marks seeded
+    cmd(f'hrt {vh} {nr} {ni} {off}', 1.6)        # seeds, runs hpol (~0.9 s), marks seeded
     pol = line(cmd('hpol', 0.3), ('#hpol', '!'))
     r = line(cmd(f'xiq {iq}', hold), ('#', '!'))
     v1, lt1 = hrt(); acc1, e1 = enc()

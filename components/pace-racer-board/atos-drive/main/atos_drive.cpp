@@ -576,20 +576,25 @@ std::atomic<float> g_hrt_rpm{0.0f};      // rotor rpm from omega_hat, 20 ms LPF 
 // 'hseed enc|pol|none' picks how hrt seeds the branch: encoder (bench truth),
 // this test (automatic once hrt has its first estimate, HOLD only; xrun/xiq stay
 // locked until it decides), or whatever atan2 gives.
-std::atomic<float> g_hpol_volts{0.035f}; // pulsating amplitude, V (~1 A at 1.25 kHz)
-std::atomic<float> g_hpol_bias{2.0f};    // d bias, A (peak |id| = bias + HF amplitude, keep <= 3)
-std::atomic<float> g_hpol_ms{40.0f};     // measurement per segment, after the settle
+std::atomic<float> g_hpol_volts{0.03f};  // pulsating amplitude, V (~0.6 A at 2.5 kHz)
+std::atomic<float> g_hpol_bias{2.0f};    // d bias, A (peak |id| = bias + HF amplitude; above ~2 A, -b on north can flip the rotor)
+std::atomic<float> g_hpol_ms{60.0f};     // measurement per segment, after the settle
 // Segment timing ('hpolt <gap_ms> <settle_ticks> <ramp_ticks>'). gap 0 = continuous
 // (each segment ramps from the previous bias); gap > 0 = pulses from 0 A with no
 // injection in between. Above 3 A the console enforces the short-pulse envelope.
 std::atomic<int> g_hpol_gap_ms{0};
 std::atomic<int> g_hpol_settle{208};     // ticks from segment start (incl. the ramp) to the measurement
 std::atomic<int> g_hpol_ramp{100};       // bias ramp, ticks
-std::atomic<int> g_hpol_blocks{4};       // +b/-b pairs
-std::atomic<int> g_hpol_div{16};         // ticks per HF cycle: 16, 8 or 4 (1.25 / 2.5 / 5 kHz)
+std::atomic<int> g_hpol_blocks{6};       // +b/-b pairs
+std::atomic<int> g_hpol_div{8};          // ticks per HF cycle: 16, 8 or 4 (1.25 / 2.5 / 5 kHz; 4 aliases with m 1 sampling)
 std::atomic<float> g_hpol_ysign{1.0f};   // +1: north = larger HF current at +b (textbook); -1: the opposite
 std::atomic<int> g_hpol_metric{0};       // decide on 0 = ysign * Y, 1 = K
 std::atomic<float> g_hpol_psi{37.0f};    // north direction of k, deg
+// Stator-fixed part of Y ('hpolcal c1 s1 c3 s3', %): the inverter / sensing makes Y
+// depend on the frame angle itself, Ystat(th) = c1 cos th + s1 sin th + c3 cos 3th +
+// s3 sin 3th, odd under th + 180 like the magnet term. Fitted on the bench against
+// the encoder (pol_scan.py + pol_analyze.py) and subtracted before the decision.
+std::atomic<float> g_hpol_cal[4] = {0.0f, 0.0f, 0.0f, 0.0f};
 std::atomic<int> g_hpol_req{0};          // console -> FOC: start a test
 std::atomic<int> g_hpol_state{0};        // 0 never ran, 1 running, 2 done, -1 aborted
 std::atomic<int> g_hrt_seed{1};          // 0 none, 1 encoder, 2 polarity test
@@ -597,7 +602,8 @@ static constexpr int kHpolMaxBlocks = 8;
 static constexpr int kHpolHoldTicks = 400;   // hrt filters stay frozen this long after the test
 static constexpr float kHpolAbortMargin = 2.5f; // abort on any d sample above bias + this (and >= 4 A)
 struct HpolResult {
-  float y_pct;          // HF admittance ratio +b / -b - 1, %
+  float y_pct;          // HF admittance ratio +b / -b - 1 minus Ystat, %
+  float ystat_pct;      // the stator-fixed part subtracted (hpolcal), %
   float kproj_pct;      // 2nd harmonic projected on psi, %
   float k_pct, k_deg;   // 2nd harmonic k: magnitude (% of |I1|) and angle
   float margin_pct;     // the chosen metric
@@ -1451,12 +1457,15 @@ IRAM_ATTR void foc_task_fn(void *) {
               const cf rot = std::polar(1.0f, -g_hpol_psi.load(std::memory_order_relaxed) * (3.14159265f / 180.0f));
               auto kof = [](cf h1, cf h2) { const float a = std::max(std::abs(h1), 1e-9f); return h2 * std::conj(h1 * h1) / (a * a * a); };
               const int nb = pol_nseg / 2, sel = g_hpol_metric.load(std::memory_order_relaxed) ? 1 : 0;
+              const float ystat = g_hpol_cal[0].load(std::memory_order_relaxed) * pol_c + g_hpol_cal[1].load(std::memory_order_relaxed) * pol_s +
+                                  g_hpol_cal[2].load(std::memory_order_relaxed) * cosf(3.0f * pol_th) +
+                                  g_hpol_cal[3].load(std::memory_order_relaxed) * sinf(3.0f * pol_th);
               float ysum = 0.0f, ksum = 0.0f, msum = 0.0f, msq = 0.0f, h1abs = 0.0f;
               cf kacc = 0.0f;
               for (int c = 0; c < nb; c++) {
                 int ip = 2 * c, im = 2 * c + 1;
                 if (seg_sign(ip) < 0.0f) std::swap(ip, im);
-                const float y = 100.0f * (std::abs(pol_h1[ip]) / std::max(std::abs(pol_h1[im]), 1e-9f) - 1.0f);
+                const float y = 100.0f * (std::abs(pol_h1[ip]) / std::max(std::abs(pol_h1[im]), 1e-9f) - 1.0f) - ystat;
                 const cf kc = 0.5f * (kof(pol_h1[ip], pol_h2[ip]) + kof(pol_h1[im], pol_h2[im]));
                 const float kp = 100.0f * (kc * rot).real();
                 ysum += y; ksum += kp; kacc += kc;
@@ -1465,7 +1474,8 @@ IRAM_ATTR void foc_task_fn(void *) {
                 g_hpol_blk[c] = m; msum += m; msq += m * m;
               }
               HpolResult r{};
-              r.y_pct = ysum / (float)nb;
+              r.y_pct = ysum / (float)nb; // stator part removed
+              r.ystat_pct = ystat;
               r.kproj_pct = ksum / (float)nb;
               kacc /= (float)nb;
               r.k_pct = 100.0f * std::abs(kacc);
@@ -3210,6 +3220,12 @@ extern "C" void app_main(void) {
       else if (strstr(line, "none")) g_hrt_seed.store(0);
       static constexpr const char *kSeedNames[] = {"none", "enc", "pol"};
       fmt::print("#hrt seed {} (takes effect at the next hrt start)\n", kSeedNames[g_hrt_seed.load()]);
+    } else if (strncmp(line, "hpolcal", 7) == 0) {
+      // hpolcal c1 s1 c3 s3 — stator-fixed Y table (%), see g_hpol_cal; 'hpolcal 0 0 0 0' = off
+      float c[4] = {g_hpol_cal[0].load(), g_hpol_cal[1].load(), g_hpol_cal[2].load(), g_hpol_cal[3].load()};
+      sscanf(line, "hpolcal %f %f %f %f", &c[0], &c[1], &c[2], &c[3]);
+      for (int i = 0; i < 4; i++) g_hpol_cal[i].store(c[i]);
+      fmt::print("#hpol stator Y = {:+.2f} cos + {:+.2f} sin + {:+.2f} cos3 + {:+.2f} sin3 (%)\n", c[0], c[1], c[2], c[3]);
     } else if (strncmp(line, "hpolt", 5) == 0) {
       // hpolt <gap_ms> <settle_ticks> <ramp_ticks> — hpol segment timing (see g_hpol_gap_ms)
       int gap = g_hpol_gap_ms.load(), st = g_hpol_settle.load(), rp = g_hpol_ramp.load();
@@ -3273,10 +3289,10 @@ extern "C" void app_main(void) {
         }
         fmt::print("#hpol flip={} margin={:+.3f}% snr={:.1f} Y={:+.3f}% K={:+.3f}% k={:.3f}%@{:.1f}deg sel={} I1={:.3f} A "
                    "imax={:.2f} A move={:.2f} deg th0={:.1f} hat={:.1f} enc={:.1f} err={:+.1f} vp={:.3f} b={:.2f} div={} "
-                   "ysign={:+.0f} gap={} ms={:.1f} blk=",
+                   "ysign={:+.0f} gap={} ms={:.1f} ystat={:+.2f} blk=",
                    r.flip, r.margin_pct, r.snr, r.y_pct, r.kproj_pct, r.k_pct, r.k_deg, r.metric_sel, r.i1, r.imax,
                    r.move_deg, r.th_deg, g_hrt_theta.load() * 57.29578f, ee * 57.29578f, err, g_hpol_volts.load(),
-                   g_hpol_bias.load(), g_hpol_div.load(), g_hpol_ysign.load(), g_hpol_gap_ms.load(), g_hpol_ms.load());
+                   g_hpol_bias.load(), g_hpol_div.load(), g_hpol_ysign.load(), g_hpol_gap_ms.load(), g_hpol_ms.load(), r.ystat_pct);
         for (int b = 0; b < r.blocks; b++) fmt::print("{}{:+.3f}", b ? "," : "", g_hpol_blk[b]);
         fmt::print("\n");
       }
