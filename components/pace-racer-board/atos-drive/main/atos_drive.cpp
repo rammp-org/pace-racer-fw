@@ -570,6 +570,11 @@ std::atomic<float> g_hrt_ktj{0.0f}; // rad/s^2 elec per A
 std::atomic<float> g_hrt_bj{0.0f};  // 1/s
 std::atomic<float> g_hrt_l3{0.0f};  // rad/s^3 per rad
 std::atomic<float> g_hrt_coul{0.0f}; // rad/s^2 Coulomb friction, saturating at 5 rad/s
+// Static friction ('hrtm ... stic'), rad/s^2: below 5 rad/s the model friction also cancels up to
+// this much drive acceleration, fading out as |omega_hat| reaches 5 rad/s (Karnopp-style), so a rotor
+// held in a detent is not predicted to accelerate (omega_hat otherwise swings tens of rad/s per
+// ampere and a speed loop on it limit-cycles). 0 = off.
+std::atomic<float> g_hrt_stic{0.0f};
 // HFI confidence: the PLL correction (kp, ki, l3) is scaled by 1 / (1 + |If|^2 / i0^2), so at
 // high drive current, where the current's own saliency swamps the rotor term, the mechanical
 // model carries theta_hat. 0 = off.
@@ -581,6 +586,9 @@ std::atomic<float> g_hrt_cog_a{0.0f}, g_hrt_cog_b{0.0f};
 // per A^2 of iq, per A of id, theta_hat-frame fundamental), subtracted from the
 // measured theta. Sign-symmetric in iq on the drone motor (-21 deg at 2.5 A).
 std::atomic<float> g_hrt_c_abs{0.0f}, g_hrt_c_q2{0.0f}, g_hrt_c_d{0.0f};
+// Signed iq term (deg per A, 4th 'hrtc' arg). With hrtn on, the drone motor's residual under drive is
+// +5..+8 deg/A of theta_hat-frame iq (2026-10-23, 30-60 rpm both directions).
+std::atomic<float> g_hrt_c_q{0.0f};
 // Drive-current saliency ('hrtn kr ki br bi'). With the tracker's w = (N - Ns) P e^{j(180 - off)}
 // normalised by |P|, the drone motor fits w = e^{j2theta} A (1 + b |If|^2) + K If^2 (If = stationary
 // fundamental): the current saturates its own axis (K) and weakens the rotor term (b). At 2.5 A
@@ -1088,15 +1096,17 @@ IRAM_ATTR void foc_task_fn(void *) {
         if (xkp > 0.0f && esrc && sub == HALL_SPEED) {
           // Position-tracking speed loop (see g_xsl_kp), electrical rad.
           static float x_pos = 0.0f, x_ref = 0.0f, x_th = 0.0f, x_w = 0.0f, x_int = 0.0f, x_fb = 0.0f;
-          const float w_meas = tsrc == 2 ? g_hrt_omega.load(std::memory_order_relaxed) : rpm_meas * kRpmToOmegaE;
           if (xsl_reset) {
             xsl_reset = false;
             x_pos = x_ref = x_int = x_fb = 0.0f;
             x_th = th;
-            x_w = w_meas;
+            x_w = tsrc == 2 ? g_hrt_omega.load(std::memory_order_relaxed) : rpm_meas * kRpmToOmegaE;
           }
-          x_pos += remainderf(th - x_th, kTwoPi);
+          const float dth = remainderf(th - x_th, kTwoPi);
+          x_pos += dth;
           x_th = th;
+          // HFI: omega_hat (the observer state, smoother than d theta_hat/dt); encoder: d theta/dt (enc_rpm_f lags 50 ms)
+          const float w_meas = tsrc == 2 ? g_hrt_omega.load(std::memory_order_relaxed) : dth / dt;
           const float w_set = h_set * kRpmToOmegaE;
           x_ref += w_set * dt;
           const float emax = g_xsl_emax.load(std::memory_order_relaxed);
@@ -1411,6 +1421,7 @@ IRAM_ATTR void foc_task_fn(void *) {
           if (kre != 0.0f || kim != 0.0f)
             w -= p_mag * cf(kre, kim) * (ifc * ifc);
           const float comp = (g_hrt_c_abs.load(std::memory_order_relaxed) * fabsf(iq_h) +
+                              g_hrt_c_q.load(std::memory_order_relaxed) * iq_h +
                               g_hrt_c_q2.load(std::memory_order_relaxed) * iq_h * iq_h +
                               g_hrt_c_d.load(std::memory_order_relaxed) * id_h) * (3.14159265f / 180.0f);
           float two_th = atan2f(w.imag(), w.real()) - b_rot - 2.0f * comp;
@@ -1431,9 +1442,12 @@ IRAM_ATTR void foc_task_fn(void *) {
           const float e = std::clamp(0.5f * e2, -emax, emax) * conf;
           const float wlim = motor::kMaxRpm * kRpmToOmegaE;
           d_hat = std::clamp(d_hat + g_hrt_l3.load(std::memory_order_relaxed) * e * dt, -100.0f * wlim, 100.0f * wlim);
-          w_hat += (g_hrt_ki.load(std::memory_order_relaxed) * e + g_hrt_ktj.load(std::memory_order_relaxed) * iq_h -
-                    g_hrt_bj.load(std::memory_order_relaxed) * w_hat -
-                    g_hrt_coul.load(std::memory_order_relaxed) * std::clamp(w_hat * 0.2f, -1.0f, 1.0f) + a_cog + d_hat) * dt;
+          float a_drv = g_hrt_ktj.load(std::memory_order_relaxed) * iq_h + a_cog + d_hat;
+          const float stic = g_hrt_stic.load(std::memory_order_relaxed);
+          if (stic > 0.0f) // static friction (see g_hrt_stic)
+            a_drv -= std::clamp(a_drv, -stic, stic) * std::max(0.0f, 1.0f - fabsf(w_hat) * 0.2f);
+          w_hat += (g_hrt_ki.load(std::memory_order_relaxed) * e + a_drv - g_hrt_bj.load(std::memory_order_relaxed) * w_hat -
+                    g_hrt_coul.load(std::memory_order_relaxed) * std::clamp(w_hat * 0.2f, -1.0f, 1.0f)) * dt;
           w_hat = std::clamp(w_hat, -motor::kMaxRpm * kRpmToOmegaE, motor::kMaxRpm * kRpmToOmegaE);
           th_hat += (w_hat + g_hrt_kp.load(std::memory_order_relaxed) * e) * dt;
           th_hat -= kTwoPi * floorf(th_hat / kTwoPi);
@@ -2545,7 +2559,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
-      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] [i0] | hrtk ca cb | hrtn kr ki br bi | cff cog [coul] | xsl kp kd ki [rate] [tau_ms] [emax] | hrtc c_abs c_q2 c_d | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] [i0] [stic] | hrtk ca cb | hrtn kr ki br bi | cff cog [coul] | xsl kp kd ki [rate] [tau_ms] [emax] | hrtc c_abs c_q2 c_d [c_q] | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -3187,12 +3201,15 @@ extern "C" void app_main(void) {
       fmt::print("#hfi encoder guard {:.0f} deg (0 = off)\n", g_hrt_guard_deg.load());
     } else if (strncmp(line, "hrtm", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
       float ktj = g_hrt_ktj.load(), bj = g_hrt_bj.load(), l3 = g_hrt_l3.load(), coul = g_hrt_coul.load(), i0 = g_hrt_i0.load();
-      sscanf(line, "hrtm %f %f %f %f %f", &ktj, &bj, &l3, &coul, &i0);
+      float stic = g_hrt_stic.load();
+      sscanf(line, "hrtm %f %f %f %f %f %f", &ktj, &bj, &l3, &coul, &i0, &stic);
+      g_hrt_stic.store(std::max(stic, 0.0f));
       g_hrt_i0.store(std::max(i0, 0.0f));
       g_hrt_ktj.store(ktj); g_hrt_bj.store(std::max(bj, 0.0f)); g_hrt_l3.store(std::max(l3, 0.0f));
       g_hrt_coul.store(std::max(coul, 0.0f));
-      fmt::print("#hrt model Kt/J={:.0f} rad/s^2/A B/J={:.2f} 1/s l3={:.3g} coul={:.0f} cog={:.0f},{:.0f} i0={:.2f} A\n", g_hrt_ktj.load(),
-                 g_hrt_bj.load(), g_hrt_l3.load(), g_hrt_coul.load(), g_hrt_cog_a.load(), g_hrt_cog_b.load(), g_hrt_i0.load());
+      fmt::print("#hrt model Kt/J={:.0f} rad/s^2/A B/J={:.2f} 1/s l3={:.3g} coul={:.0f} cog={:.0f},{:.0f} i0={:.2f} A stic={:.0f}\n", g_hrt_ktj.load(),
+                 g_hrt_bj.load(), g_hrt_l3.load(), g_hrt_coul.load(), g_hrt_cog_a.load(), g_hrt_cog_b.load(), g_hrt_i0.load(),
+                 g_hrt_stic.load());
     } else if (strncmp(line, "hrtn", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
       float kr = g_hrt_k_re.load(), ki = g_hrt_k_im.load(), br = g_hrt_b_re.load(), bi = g_hrt_b_im.load();
       sscanf(line, "hrtn %f %f %f %f", &kr, &ki, &br, &bi);
@@ -3219,10 +3236,10 @@ extern "C" void app_main(void) {
       fmt::print("#xsl kp={:.3f} A/rad kd={:.4f} A/(rad/s) ki={:.2f} A/(rad s) rate={:.0f} A/s tau={:.1f} ms emax={:.2f} rad (kp 0 = sg PI)\n",
                  g_xsl_kp.load(), g_xsl_kd.load(), g_xsl_ki.load(), g_xsl_rate.load(), g_xsl_tau.load() * 1e3f, g_xsl_emax.load());
     } else if (strncmp(line, "hrtc", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
-      float ca = g_hrt_c_abs.load(), cq = g_hrt_c_q2.load(), cd = g_hrt_c_d.load();
-      sscanf(line, "hrtc %f %f %f", &ca, &cq, &cd);
-      g_hrt_c_abs.store(ca); g_hrt_c_q2.store(cq); g_hrt_c_d.store(cd);
-      fmt::print("#hrt load offset {:.2f}*|iq| {:+.2f}*iq^2 {:+.2f}*id deg\n", ca, cq, cd);
+      float ca = g_hrt_c_abs.load(), cq = g_hrt_c_q2.load(), cd = g_hrt_c_d.load(), cl = 0.0f;
+      sscanf(line, "hrtc %f %f %f %f", &ca, &cq, &cd, &cl);
+      g_hrt_c_abs.store(ca); g_hrt_c_q2.store(cq); g_hrt_c_d.store(cd); g_hrt_c_q.store(cl);
+      fmt::print("#hrt load offset {:.2f}*|iq| {:+.2f}*iq^2 {:+.2f}*id {:+.2f}*iq deg\n", ca, cq, cd, cl);
     } else if (strncmp(line, "hid ", 4) == 0) {
       float a = 0.0f;
       sscanf(line, "hid %f", &a);
