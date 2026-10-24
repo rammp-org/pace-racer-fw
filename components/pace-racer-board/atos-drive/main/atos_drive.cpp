@@ -446,7 +446,7 @@ static constexpr float kEncGear = motor::kEncGear; // encoder revs per rotor rev
 static constexpr float kEncToElec = (float)kPolePairs / kEncGear; // 6.0 on the NineBot, -2.0 on the drone
 static constexpr float kEncCntToRad = 6.28318530718f / 16384.0f;
 static constexpr float kEncRpmTau = 0.05f; // LPF on encoder-derived rotor rpm
-std::atomic<int> g_theta_src{0};           // HALL-mode angle source: 0 = hall table, 1 = encoder
+std::atomic<int> g_theta_src{0};           // HALL-mode angle source: 0 = hall table, 1 = encoder, 2 = HFI (hrt)
 // ATOS feedback source (NVS 'fb'): true = the drive commutates and measures on
 // the halls, false = on the encoder. The console spin commands still pick their
 // own source; this only decides what the supervisor's hooks ask for.
@@ -531,7 +531,33 @@ static constexpr int kHscanAngles = 36;
 std::atomic<int> g_hrot_left{0};
 std::atomic<float> g_hrot_volts{0.0f};
 std::atomic<int> g_hrot_div{8};        // ticks per injection revolution: 4 or 8
-std::atomic<int> g_smed{1};            // sampler median: 1 = auto (off while injecting), 0 = off, 2 = on
+std::atomic<int> g_smed{1};
+// Continuous rotating-injection tracker ('hrt <Vh> [ns_re ns_im off_deg]'):
+// fs/8 vector, each phase demodulated on its fresh samples through a one-cycle
+// boxcar (exact DC / other-sequence rejection), P/N solved per tick, low-passed.
+// The stator-fixed Ns (inverter + sampling) is subtracted and the 2-theta offset
+// removed: 2 theta = arg(N - Ns) + arg(P) + 180 deg - off. A PLL in the 2-theta
+// domain gives theta_hat / omega_hat. Ns and off come from tools/hfi_bench/
+// enc_scan.py at the same Vh. 'hrt' alone prints status; capture mode 5 logs
+// encoder theta, measured theta, theta_hat (deg) per row.
+std::atomic<float> g_hrt_volts{0.0f};
+std::atomic<float> g_hrt_ns_re{0.0f}, g_hrt_ns_im{0.0f};
+std::atomic<float> g_hrt_off{0.0f};      // rad, 2-theta domain
+std::atomic<float> g_hrt_kp{300.0f};     // rad/s per rad of theta error
+std::atomic<float> g_hrt_ki{30000.0f};   // rad/s^2 per rad
+std::atomic<float> g_hrt_lpf{0.01f};     // per-tick LPF coefficient on P (does not rotate: filter hard)
+std::atomic<float> g_hrt_lpfn{0.2f};     // per-tick LPF on N (rotates at 2 omega: a slow filter lags; the PLL smooths)
+std::atomic<bool> g_hrt_drive{false};    // HOLD frame follows theta_hat
+std::atomic<float> g_hrt_emax{0.35f};    // PLL error clamp, rad of theta: a one-tick spike can't flip the 2-theta branch
+std::atomic<float> g_hrt_theta{0.0f}, g_hrt_omega{0.0f}, g_hrt_meas{0.0f};
+std::atomic<float> g_hrt_pr{0.0f}, g_hrt_pi{0.0f}, g_hrt_nr{0.0f}, g_hrt_ni{0.0f};
+std::atomic<float> g_hrt_ifa{0.0f}, g_hrt_ifb{0.0f};
+std::atomic<bool> g_hrt_seeded{false};
+// Bench guard while driving on HFI: |theta_hat - encoder| above this (deg elec)
+// for 10 ms stops the drive. 0 disables. The encoder is only a test-bench net.
+std::atomic<float> g_hrt_guard_deg{60.0f};
+std::atomic<float> g_hrt_guard_err{0.0f}; // error at the last guard trip, deg (0 = never)   // theta_hat valid (polarity picked; see seeding note)
+std::atomic<float> g_hrt_rpm{0.0f};      // rotor rpm from omega_hat, 20 ms LPF (speed feedback for xrun) // fundamental current, alpha-beta mean over one injection cycle            // sampler median: 1 = auto (off while injecting), 0 = off, 2 = on
 static constexpr int kHrotSettleTicks = 400;
 static constexpr int kHscanSettleTicks = 600;  // 30 ms
 static constexpr int kHscanAvgTicks = 2400;    // 120 ms
@@ -706,6 +732,7 @@ IRAM_ATTR void foc_task_fn(void *) {
     const int px = g_sampler.phase_x();
     const int py = g_sampler.phase_y();
     float i3[3];
+    const int fresh_ph = g_sampler.fresh_phase(); // label read with the currents, not 400 lines later
     i3[px] = g_sampler.amps_x();
     i3[py] = g_sampler.amps_y();
     i3[3 - px - py] = -(i3[px] + i3[py]);
@@ -793,7 +820,10 @@ IRAM_ATTR void foc_task_fn(void *) {
     }
     if (mode == HALL && prev_mode != HALL) {
       // bumpless: setpoint = actual speed, from whichever sensor will drive
-      h_set = g_theta_src.load(std::memory_order_relaxed) ? enc_rpm_f : g_hall_drive.rpm_filtered();
+      {
+        const int ts = g_theta_src.load(std::memory_order_relaxed);
+        h_set = ts == 2 ? g_hrt_rpm.load(std::memory_order_relaxed) : ts ? enc_rpm_f : g_hall_drive.rpm_filtered();
+      }
       h_integ = 0.0f;
       h_time = 0.0f;
       pi_d.reset();
@@ -934,10 +964,33 @@ IRAM_ATTR void foc_task_fn(void *) {
       // iq. Works from 0 rpm under load — where the observer can't. The
       // encoder source has no stall blind spot: the angle stays live between
       // hall edges instead of freezing while the rotor creeps.
-      const bool esrc = g_theta_src.load(std::memory_order_relaxed) != 0;
-      const float rpm_meas = esrc ? enc_rpm_f : g_hall_drive.rpm_filtered();
+      const int tsrc = g_theta_src.load(std::memory_order_relaxed);
+      const bool esrc = tsrc != 0;
+      const float rpm_meas = tsrc == 2 ? g_hrt_rpm.load(std::memory_order_relaxed)
+                                       : esrc ? enc_rpm_f : g_hall_drive.rpm_filtered();
       const float amps = g_hall_amps.load(std::memory_order_relaxed);
-      th = esrc ? enc_theta_e : g_hall_drive.theta();
+      if (tsrc == 2) {
+        // HFI: last tick's estimate advanced by one tick of omega_hat (the tracker runs after this)
+        th = g_hrt_theta.load(std::memory_order_relaxed) + g_hrt_omega.load(std::memory_order_relaxed) * dt;
+        th -= kTwoPi * floorf(th / kTwoPi);
+        static int guard_ticks = 0;
+        const float gd = g_hrt_guard_deg.load(std::memory_order_relaxed);
+        const float gerr = remainderf(th - enc_theta_e, kTwoPi) * (180.0f / 3.14159265f);
+        if (gd > 0.0f && g_encoder && fabsf(gerr) > gd) {
+          if (++guard_ticks >= in_ticks(200)) {
+            guard_ticks = 0;
+            g_hrt_guard_err.store(gerr, std::memory_order_relaxed);
+            g_mode.store(STOPPING);
+            g_id_target.store(0);
+            g_iq_target.store(0);
+            g_hrt_volts.store(0.0f, std::memory_order_relaxed);
+          }
+        } else {
+          guard_ticks = 0;
+        }
+      } else {
+        th = esrc ? enc_theta_e : g_hall_drive.theta();
+      }
       idref = 0.0f;
       const int sub = g_hall_sub.load(std::memory_order_relaxed);
       if (sub == HALL_TORQUE) {
@@ -1107,7 +1160,8 @@ IRAM_ATTR void foc_task_fn(void *) {
     const float hfi_vh = g_hfi_volts.load(std::memory_order_relaxed);
     const bool scanning = g_hscan_left.load(std::memory_order_relaxed) > 0;
     const bool rotating = g_hrot_left.load(std::memory_order_relaxed) > 0;
-    const bool hfi_on = (hfi_vh > 0.0f || scanning || rotating) && (mode == HOLD || mode == SPIN || mode == HALL);
+    const bool hrt_on = g_hrt_volts.load(std::memory_order_relaxed) > 0.0f && !rotating;
+    const bool hfi_on = (hfi_vh > 0.0f || scanning || rotating || hrt_on) && (mode == HOLD || mode == SPIN || mode == HALL);
     {
       const int smed = g_smed.load(std::memory_order_relaxed);
       g_sampler.set_raw_mode(smed == 0 || (smed == 1 && hfi_on));
@@ -1132,7 +1186,7 @@ IRAM_ATTR void foc_task_fn(void *) {
         rot_nr += ab.alpha * cph - ab.beta * sph;  rot_ni += ab.beta * cph + ab.alpha * sph;
         rot_n++;
         // Fresh phase only: C_f += i_f * e^{-j phi}
-        const int f = g_sampler.fresh_phase();
+        const int f = fresh_ph;
         if (f >= 0 && f <= 2) {
           rot_cr[f] += i3[f] * cph; rot_ci[f] -= i3[f] * sph; rot_cn[f]++;
         }
@@ -1172,6 +1226,101 @@ IRAM_ATTR void foc_task_fn(void *) {
       }
     } else {
       rot_left_total = 0;
+    }
+
+    // ---- Continuous rotating-injection tracker ('hrt') ----
+    static float hrt_meas_deg = 0.0f;
+    {
+      using cf = std::complex<float>;
+      static int hrt_k = 0, hrt_ticks = 0;
+      static cf hrt_ring[3][4]; static int hrt_ri[3] = {}, hrt_fill[3] = {};
+      static cf hrt_P{0.0f, 0.0f}, hrt_N{0.0f, 0.0f};
+      static float th_hat = 0.0f, w_hat = 0.0f;
+      if (hrt_on && hfi_on) {
+        if (hrt_ticks == 0) {
+          hrt_k = 0;
+          for (int f = 0; f < 3; f++) { hrt_ri[f] = 0; hrt_fill[f] = 0; for (auto &z : hrt_ring[f]) z = 0.0f; }
+          hrt_P = hrt_N = 0.0f; w_hat = 0.0f;
+        }
+        hrt_ticks++;
+        {
+          static float fa_ring[8] = {}, fb_ring[8] = {};
+          fa_ring[hrt_k & 7] = ab.alpha; fb_ring[hrt_k & 7] = ab.beta;
+          float sa = 0.0f, sb = 0.0f;
+          for (int j = 0; j < 8; j++) { sa += fa_ring[j]; sb += fb_ring[j]; }
+          g_hrt_ifa.store(sa * 0.125f, std::memory_order_relaxed); g_hrt_ifb.store(sb * 0.125f, std::memory_order_relaxed);
+        }
+        static constexpr float kC8[8] = {1.0f, 0.70710678f, 0.0f, -0.70710678f, -1.0f, -0.70710678f, 0.0f, 0.70710678f};
+        const float cph = kC8[hrt_k & 7], sph = kC8[(hrt_k + 6) & 7]; // sin(x) = cos(x - 90 deg)
+        const int f = fresh_ph;
+        if (f >= 0 && f <= 2) {
+          hrt_ring[f][hrt_ri[f]] = cf(i3[f] * cph, -i3[f] * sph); // i_f e^{-j phi}
+          hrt_ri[f] = (hrt_ri[f] + 1) & 3;
+          if (hrt_fill[f] < 4) hrt_fill[f]++;
+        }
+        const int fa = g_sampler.phase_x(), fb = g_sampler.phase_y();
+        bool have = false;
+        if (hrt_fill[fa] == 4 && hrt_fill[fb] == 4) {
+          // one injection cycle per phase: C_f = 2 * mean = (P a_f + conj(N) b_f)
+          cf c1 = 0.0f, c2 = 0.0f;
+          for (int j = 0; j < 4; j++) { c1 += hrt_ring[fa][j]; c2 += hrt_ring[fb][j]; }
+          c1 *= 0.5f; c2 *= 0.5f;
+          // Phase-pair constants change only with 'p x y': cache them.
+          static int pa = -1, pb = -1; static cf a1, a2, b1, b2, inv_det;
+          if (fa != pa || fb != pb) {
+            pa = fa; pb = fb;
+            a1 = std::polar(1.0f, -kTwoPi * fa / 3.0f); a2 = std::polar(1.0f, -kTwoPi * fb / 3.0f);
+            b1 = std::conj(a1); b2 = std::conj(a2);
+            inv_det = 1.0f / (a1 * b2 - a2 * b1);
+          }
+          const cf P = (c1 * b2 - c2 * b1) * inv_det;
+          const cf N = std::conj((a1 * c2 - a2 * c1) * inv_det);
+          hrt_P += (P - hrt_P) * g_hrt_lpf.load(std::memory_order_relaxed);
+          hrt_N += (N - hrt_N) * g_hrt_lpfn.load(std::memory_order_relaxed);
+          have = hrt_ticks > 200;
+        }
+        if (have) {
+          const cf ns(g_hrt_ns_re.load(std::memory_order_relaxed), g_hrt_ns_im.load(std::memory_order_relaxed));
+          const cf w = (hrt_N - ns) * hrt_P * std::polar(1.0f, 3.14159265f - g_hrt_off.load(std::memory_order_relaxed));
+          const float two_th = atan2f(w.imag(), w.real());
+          float meas = 0.5f * two_th; // theta mod 180, in [-90, 90)
+          if (hrt_ticks == 201) {
+            // Seed on the first estimate. HFI sees 2 theta, so theta is only known mod 180:
+            // until a polarity test exists, pick the branch nearer the encoder when there is one.
+            th_hat = meas;
+            if (g_encoder && g_enc_cal.load(std::memory_order_relaxed) &&
+                fabsf(remainderf(meas + 3.14159265f - enc_theta_e, kTwoPi)) < fabsf(remainderf(meas - enc_theta_e, kTwoPi)))
+              th_hat = meas + 3.14159265f;
+            g_hrt_seeded.store(true, std::memory_order_relaxed);
+          }
+          const float e2 = remainderf(two_th - 2.0f * th_hat, kTwoPi); // 2-theta error, wrapped
+          const float emax = g_hrt_emax.load(std::memory_order_relaxed);
+          const float e = std::clamp(0.5f * e2, -emax, emax);
+          w_hat += g_hrt_ki.load(std::memory_order_relaxed) * e * dt;
+          w_hat = std::clamp(w_hat, -motor::kMaxRpm * kRpmToOmegaE, motor::kMaxRpm * kRpmToOmegaE);
+          th_hat += (w_hat + g_hrt_kp.load(std::memory_order_relaxed) * e) * dt;
+          th_hat -= kTwoPi * floorf(th_hat / kTwoPi);
+          meas -= kTwoPi * floorf(meas / kTwoPi);
+          hrt_meas_deg = meas * (180.0f / 3.14159265f);
+          g_hrt_meas.store(meas, std::memory_order_relaxed);
+          g_hrt_theta.store(th_hat, std::memory_order_relaxed);
+          g_hrt_omega.store(w_hat, std::memory_order_relaxed);
+          {
+            static float rpm_f = 0.0f;
+            rpm_f += (w_hat / kRpmToOmegaE - rpm_f) * std::min(1.0f, dt / 0.02f);
+            g_hrt_rpm.store(rpm_f, std::memory_order_relaxed);
+          }
+          if (g_hrt_drive.load(std::memory_order_relaxed) && mode == HOLD) th = th_hat;
+        }
+        g_hrt_pr.store(hrt_P.real(), std::memory_order_relaxed); g_hrt_pi.store(hrt_P.imag(), std::memory_order_relaxed);
+        g_hrt_nr.store(hrt_N.real(), std::memory_order_relaxed); g_hrt_ni.store(hrt_N.imag(), std::memory_order_relaxed);
+        const float vr = g_hrt_volts.load(std::memory_order_relaxed);
+        vrot_a = vr * cph; vrot_b = vr * sph;
+        hrt_k++;
+      } else {
+        hrt_ticks = 0;
+        g_hrt_seeded.store(false, std::memory_order_relaxed);
+      }
     }
     if (hfi_on) {
       // Demodulation: delta of the stationary-frame current, rotated into the
@@ -1424,6 +1573,7 @@ IRAM_ATTR void foc_task_fn(void *) {
           const int n = g_cap_n.load(std::memory_order_relaxed);
           if (n < want && n < kCapMax) {
             const int cm = g_cap_mode.load(std::memory_order_relaxed);
+            bool continue_cap = true; // false: the mode already advanced g_cap_n itself
             if (cm == 1) {
               g_cap_buf[n][0] = ab.alpha;
               g_cap_buf[n][1] = ab.beta;
@@ -1440,13 +1590,38 @@ IRAM_ATTR void foc_task_fn(void *) {
               g_cap_buf[n][0] = th * (180.0f / 3.14159265f);
               g_cap_buf[n][1] = ee * (180.0f / 3.14159265f);
               g_cap_buf[n][2] = dq.q;
+            } else if (cm == 8) { // hrt model data, 3 rows per sample: [enc, N], [P, iq], [i_fund ab, id]
+              if (n + 3 <= want && n + 3 <= kCapMax) {
+                g_cap_buf[n][0] = enc_theta_e * (180.0f / 3.14159265f);
+                g_cap_buf[n][1] = g_hrt_nr.load(std::memory_order_relaxed);
+                g_cap_buf[n][2] = g_hrt_ni.load(std::memory_order_relaxed);
+                g_cap_buf[n + 1][0] = g_hrt_pr.load(std::memory_order_relaxed);
+                g_cap_buf[n + 1][1] = g_hrt_pi.load(std::memory_order_relaxed);
+                g_cap_buf[n + 1][2] = dq.q;
+                g_cap_buf[n + 2][0] = g_hrt_ifa.load(std::memory_order_relaxed);
+                g_cap_buf[n + 2][1] = g_hrt_ifb.load(std::memory_order_relaxed);
+                g_cap_buf[n + 2][2] = dq.d;
+                g_cap_n.store(n + 3, std::memory_order_relaxed);
+              } else {
+                g_cap_want.store(0, std::memory_order_relaxed);
+              }
+              continue_cap = false;
+            } else if (cm == 6 || cm == 7) { // hrt raw: encoder theta, N (6) or P (7) re, im
+              g_cap_buf[n][0] = enc_theta_e * (180.0f / 3.14159265f);
+              g_cap_buf[n][1] = cm == 6 ? g_hrt_nr.load(std::memory_order_relaxed) : g_hrt_pr.load(std::memory_order_relaxed);
+              g_cap_buf[n][2] = cm == 6 ? g_hrt_ni.load(std::memory_order_relaxed) : g_hrt_pi.load(std::memory_order_relaxed);
+            } else if (cm == 5) { // hrt: encoder theta, measured theta (mod 180), theta_hat
+              g_cap_buf[n][0] = enc_theta_e * (180.0f / 3.14159265f);
+              g_cap_buf[n][1] = hrt_meas_deg;
+              g_cap_buf[n][2] = g_hrt_theta.load(std::memory_order_relaxed) * (180.0f / 3.14159265f);
             } else {
               g_cap_buf[n][0] =
                   g_encoder ? g_encoder->get_radians() / kEncGear * (180.0f / 3.14159265f) : 0.0f;
               g_cap_buf[n][1] = enc_rpm_f;
               g_cap_buf[n][2] = dq.q;
             }
-            g_cap_n.store(n + 1, std::memory_order_relaxed);
+            if (continue_cap)
+              g_cap_n.store(n + 1, std::memory_order_relaxed);
           } else {
             g_cap_want.store(0, std::memory_order_relaxed);
           }
@@ -1591,7 +1766,12 @@ extern "C" void app_main(void) {
   motor_cfg.zero_electric_offset = 1e-6f;
   motor_cfg.sensor_direction = espp::detail::SensorDirection::CLOCKWISE;
   if (!bsp.init_motor(motor_cfg,
-                      {.power_supply_voltage = kBusVoltage, .limit_voltage = kBusVoltage})) {
+                      // intr_priority 2: the sampler ISR must outrank SPI (encoder, 1 kHz),
+                      // I2C and Ethernet or ~5% of samples land late (BSP DriverConfig docs;
+                      // seen again 2026-10-23 when an unrelated change shifted task timing).
+                      // 3 starved the console while driving.
+                      {.power_supply_voltage = kBusVoltage, .limit_voltage = kBusVoltage,
+                       .intr_priority = 2})) {
     logger.error("BSP motor init failed");
     return;
   }
@@ -2210,7 +2390,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
-      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -2261,7 +2441,7 @@ extern "C" void app_main(void) {
     {
       static constexpr const char *kDrives[] = {"run",  "hrun", "sine", "hiq", "erun", "eiq",
                                                 "epos", "rl",   "ecal", "id ", "iq ",  "th ",
-                                                "hv"};
+                                                "hv",   "xrun", "xiq"};
       bool drives = false;
       for (const char *d : kDrives)
         if (strncmp(line, d, strlen(d)) == 0)
@@ -2490,6 +2670,8 @@ extern "C" void app_main(void) {
     } else if (strncmp(line, "stop", 4) == 0) {
       // Gentle stop: targets to 0 with the PI INTACT in a still-rotating frame
       // (no bemf transient), then the FOC task requests Hi-Z coast ~100 ms in.
+      g_hrt_volts.store(0.0f);
+      g_hrt_drive.store(false);
       g_id_target.store(0);
       g_iq_target.store(0);
       if (g_sampler.is_enabled() && g_mode.load() != HOLD) {
@@ -2615,6 +2797,38 @@ extern "C" void app_main(void) {
         uncoast();
         g_mode.store(HALL);
         fmt::print("#hall iq* {:.2f} A (absolute angle — holds torque at stall)\n", amps);
+      }
+    } else if (strncmp(line, "xrun", 4) == 0 || strncmp(line, "xiq", 3) == 0) {
+      // HFI-drive modes: the HALL machinery with theta = hrt's theta_hat and
+      // speed from omega_hat. 'hrt <Vh> <ns> <off>' must be running and seeded.
+      if (g_hrt_volts.load() <= 0.0f || !g_hrt_seeded.load()) {
+        fmt::print("! HFI tracker not running/seeded — start 'hrt <Vh> <ns_re> <ns_im> <off>' first\n");
+      } else if (strncmp(line, "xrun", 4) == 0) {
+        float amps = 3.0f, rpm = 30.0f, ramp = 3.0f;
+        sscanf(line, "xrun %f %f %f", &amps, &rpm, &ramp);
+        amps = std::clamp(amps, 0.0f, g_max_target.load());
+        if (ramp < 0.1f)
+          ramp = 0.1f;
+        g_hall_amps.store(amps);
+        g_hall_rpm.store(std::clamp(rpm, -motor::kMaxRpm, motor::kMaxRpm));
+        g_hall_ramp.store(std::fabs(rpm) / ramp);
+        g_hall_sub.store(HALL_SPEED);
+        g_theta_src.store(2);
+        uncoast();
+        g_mode.store(HALL);
+        fmt::print("#hfi speed: {:.0f} rpm over {:.1f}s, torque ceiling {:.1f}A\n", rpm, ramp, amps);
+      } else {
+        float amps = 0.0f;
+        sscanf(line, "xiq %f", &amps);
+        amps = std::clamp(amps, -g_max_target.load(), g_max_target.load());
+        g_hall_iq.store(amps);
+        g_hall_amps.store(g_max_target.load());
+        g_hall_vmax.store(0.0f);
+        g_hall_sub.store(HALL_TORQUE);
+        g_theta_src.store(2);
+        uncoast();
+        g_mode.store(HALL);
+        fmt::print("#hfi iq* {:.2f} A\n", amps);
       }
     } else if (strncmp(line, "erun", 4) == 0 || strncmp(line, "eiq", 3) == 0) {
       // Encoder-drive modes: the HALL machinery with theta = 6*enc + ofs.
@@ -2797,6 +3011,50 @@ extern "C" void app_main(void) {
         fmt::print("#hfi on vh={:.3f} V bias={:.2f} A track={}\n", g_hfi_volts.load(), g_hfi_bias.load(),
                    (int)g_hfi_track.load());
       }
+    } else if (strncmp(line, "hguard ", 7) == 0) {
+      float gdeg = g_hrt_guard_deg.load();
+      sscanf(line, "hguard %f", &gdeg);
+      g_hrt_guard_deg.store(std::max(gdeg, 0.0f));
+      fmt::print("#hfi encoder guard {:.0f} deg (0 = off)\n", g_hrt_guard_deg.load());
+    } else if (strncmp(line, "hrtg", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+      float kp = g_hrt_kp.load(), ki = g_hrt_ki.load(), lpf = g_hrt_lpf.load(), lpfn = g_hrt_lpfn.load();
+      int drive = g_hrt_drive.load() ? 1 : 0;
+      float emax_deg = g_hrt_emax.load() * 57.29578f;
+      sscanf(line, "hrtg %f %f %f %d %f %f", &kp, &ki, &lpf, &drive, &lpfn, &emax_deg);
+      g_hrt_emax.store(std::clamp(emax_deg, 1.0f, 90.0f) / 57.29578f);
+      g_hrt_kp.store(kp); g_hrt_ki.store(ki); g_hrt_lpf.store(std::clamp(lpf, 0.001f, 1.0f)); g_hrt_drive.store(drive != 0);
+      g_hrt_lpfn.store(std::clamp(lpfn, 0.001f, 1.0f));
+      fmt::print("#hrt gains kp={:.0f} ki={:.0f} lpf P={:.3f} N={:.3f} drive={} emax={:.0f} deg\n", kp, ki, g_hrt_lpf.load(),
+                 g_hrt_lpfn.load(), drive, g_hrt_emax.load() * 57.29578f);
+    } else if (strncmp(line, "hrt", 3) == 0 && (line[3] == ' ' || line[3] == '\0')) {
+      float vh = -1.0f, nr = g_hrt_ns_re.load(), ni = g_hrt_ns_im.load(), off = g_hrt_off.load() * (180.0f / 3.14159265f);
+      const int got = sscanf(line, "hrt %f %f %f %f", &vh, &nr, &ni, &off);
+      if (got >= 1) {
+        if (vh > 0.0f && !g_sampler.is_enabled()) {
+          fmt::print("! sampler disabled — 'e 1' first\n");
+        } else {
+          g_hrt_ns_re.store(nr); g_hrt_ns_im.store(ni); g_hrt_off.store(off * (3.14159265f / 180.0f));
+          if (vh > 0.0f) {
+            uncoast();
+            const int m = g_mode.load();
+            if (m != HOLD && m != SPIN && m != HALL) g_mode.store(HOLD);
+          }
+          g_hrt_volts.store(std::clamp(vh, 0.0f, kHfiMaxVolts));
+          fmt::print("#hrt {:.3f} V fs/8, Ns {:.4f}{:+.4f}j A, off {:.1f} deg\n", g_hrt_volts.load(), nr, ni, off);
+        }
+      } else {
+        const float pr = g_hrt_pr.load(), pi = g_hrt_pi.load(), nr2 = g_hrt_nr.load(), ni2 = g_hrt_ni.load();
+        float ee = 0.0f;
+        if (g_encoder) {
+          ee = kEncToElec * (float)g_encoder->get_count() * kEncCntToRad + g_enc_ofs.load();
+          ee -= kTwoPi * floorf(ee / kTwoPi);
+        }
+        fmt::print("#hrt vh={:.3f} P={:.4f},{:.4f} N={:.4f},{:.4f} meas={:.1f} hat={:.1f} enc={:.1f} deg w={:.1f} rad/s drive={} "
+                   "rpm={:.1f} guard={:.0f} last_trip_err={:.1f}\n",
+                   g_hrt_volts.load(), pr, pi, nr2, ni2, g_hrt_meas.load() * 57.29578f,
+                   g_hrt_theta.load() * 57.29578f, ee * 57.29578f, g_hrt_omega.load(), g_hrt_drive.load() ? 1 : 0,
+                   g_hrt_rpm.load(), g_hrt_guard_deg.load(), g_hrt_guard_err.load());
+      }
     } else if (sscanf(line, "smed %d", &x) == 1) {
       // Sampler median-of-3: 1 = auto (bypassed while injecting), 0 = always off, 2 = always on
       g_smed.store(std::clamp(x, 0, 2));
@@ -2819,7 +3077,7 @@ extern "C" void app_main(void) {
       // per row (20 = 1 kHz), mode 0 = pos/rpm/iq, 1 = ialpha/ibeta/valpha.
       int every = 20, n = kCapMax, cmode = 0;
       sscanf(line, "cap %d %d %d", &every, &n, &cmode);
-      g_cap_mode.store(std::clamp(cmode, 0, 2));
+      g_cap_mode.store(cmode >= 5 && cmode <= 8 ? cmode : std::clamp(cmode, 0, 2));
       g_cap_every.store(std::clamp(every, 1, 20000));
       g_cap_n.store(0);
       g_cap_want.store(std::clamp(n, 1, (int)kCapMax));
@@ -2919,7 +3177,7 @@ extern "C" void app_main(void) {
                    g_encoder->get_degrees(), g_enc_rpm_pub.load(std::memory_order_relaxed), fss, lost ? "LOST" : "OK",
                    g_encoder->get_push_button() ? 1 : 0, the * 180.0f / 3.14159265f,
                    g_enc_ofs.load() * 180.0f / 3.14159265f, g_enc_cal.load() ? 1 : 0,
-                   g_theta_src.load() ? "ENC" : "HALL", g_hall_poller.sector(),
+                   g_theta_src.load() == 2 ? "HFI" : g_theta_src.load() ? "ENC" : "HALL", g_hall_poller.sector(),
                    g_hall_poller.steps(), g_hall_drive.rpm_filtered());
       }
     } else if (strncmp(line, "hset", 4) == 0) {

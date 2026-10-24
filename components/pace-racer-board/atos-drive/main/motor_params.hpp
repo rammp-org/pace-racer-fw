@@ -97,7 +97,11 @@ inline constexpr float kMaxAccelRpmS = 0.0f;
 inline constexpr float kObsR = 0.036f;    // ohm/phase: 'rl' 0.1..0.4 V slope, 24 V, 2026-10-23
 inline constexpr float kObsL = 3.0e-6f;   // H/phase: 2.3 A per 0.42 us edge at 24 V (loop L 4.4 uH = 1.5 Lph)
 inline constexpr float kObsLambda = 0.001f; // Wb, placeholder; read 'flux' at speed
+#ifdef ATOS_VBUS // -DATOS_VBUS=12: lower bus for HFI (dead-time error and PWM ripple scale with it)
+inline constexpr float kBusVoltage = (float)ATOS_VBUS;
+#else
 inline constexpr float kBusVoltage = 24.0f;
+#endif
 // Current-loop PI at ~2000 rad/s (Kp/L = 2000, Ki/Kp = R/L) from the measured
 // R/L. Dead-time voltage error measured 0.13 V at 24 V / 20 kHz: 3.6 A worth
 // of offset at this resistance, so small-signal work needs an Id bias. Deliberately soft: with L this small the plant pole is at 20 krad/s

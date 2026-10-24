@@ -11,3 +11,8 @@ elseif(ATOS_MOTOR STREQUAL "flatbot")
 elseif(ATOS_MOTOR STREQUAL "drone")
   target_compile_definitions(${COMPONENT_LIB} PRIVATE ATOS_MOTOR_DRONE)
 endif()
+
+# Bus voltage override for profiles that honour it (drone): idf.py -DATOS_VBUS=12 build
+if(DEFINED ATOS_VBUS)
+  target_compile_definitions(${COMPONENT_LIB} PRIVATE ATOS_VBUS=${ATOS_VBUS})
+endif()
