@@ -558,41 +558,47 @@ std::atomic<bool> g_hrt_seeded{false};
 std::atomic<float> g_hrt_guard_deg{60.0f};
 std::atomic<float> g_hrt_guard_err{0.0f}; // error at the last guard trip, deg (0 = never)   // theta_hat valid (polarity picked; see seeding note)
 std::atomic<float> g_hrt_rpm{0.0f};      // rotor rpm from omega_hat, 20 ms LPF (speed feedback for xrun) // fundamental current, alpha-beta mean over one injection cycle            // sampler median: 1 = auto (off while injecting), 0 = off, 2 = on
-// Polarity test ('hpol [Vp] [ms] [psi_deg] [blocks]'): hrt knows theta only mod
-// 180. At standstill the rotating injection pauses and a zero-mean pulsating
-// voltage Vp cos(phi), phi stepping 1/16 turn per tick (1.25 kHz), is applied
-// along the frozen theta_hat. The d current's flux lambda(i) = L i + a i^2 is
-// asymmetric: the half-wave towards the magnet's north adds to its flux and
-// saturates the iron (a < 0), towards south it relieves it (a > 0), so the
-// current grows a 2nd harmonic whose sign tells north from south. Dead time is
-// an odd nonlinearity (only odd harmonics) and the mean current is 0 (no
-// torque, the rotor does not move). k = I2 conj(I1)^2 / |I1|^3 is latency-free
-// and lies along psi = 90 deg - arg Z(2w) (~37 deg from R/L) on north; the
-// margin is Re(k e^{-j psi}) in % of |I1|, negative = theta_hat was the south
-// end: add 180 deg. First tried: +/-Id pulses comparing |P| - the polarity term
-// (<= 3 %) drowned in the bias-dependent dead-time change of |P| (10 %).
+// Polarity test ('hpol [Vp] [bias] [ms] [blocks] [metric] [psi]'): hrt knows
+// theta only mod 180. At standstill the rotating injection pauses; along the
+// frozen theta_hat the d current is held at +b, then -b (ABBA over the blocks),
+// with a small pulsating voltage Vp cos(phi) on top (phi steps 1/16 turn per
+// tick, 1.25 kHz). +b along the magnet's north adds to its flux and saturates
+// the iron: the incremental Ld drops, so the HF current is larger at +b than
+// at -b (Y, the decision by default), and the flux lambda(i) = L i + a i^2
+// (a < 0 on north) grows a 2nd harmonic whose k = I2 conj(I1)^2 / |I1|^3 lies
+// along psi = 90 deg - arg Z(2w) (~37 deg) on north (K, reported, 'metric 1').
+// b must exceed the HF amplitude: if i_d crosses zero the dead time (and any
+// current-sensor offset) distorts it far more than the magnet does - that sank
+// both earlier tries, +/-Id under the rotating injection and zero-mean
+// pulsating injection. Margin in %, negative = theta_hat was the south end: add
+// 180 deg. q current stays 0; the rotor only sees torque through the frame
+// error (encoder 'move' reports it).
 // 'hseed enc|pol|none' picks how hrt seeds the branch: encoder (bench truth),
 // this test (automatic once hrt has its first estimate, HOLD only; xrun/xiq stay
 // locked until it decides), or whatever atan2 gives.
-std::atomic<float> g_hpol_volts{0.10f}; // pulsating amplitude, V
-std::atomic<int> g_hpol_ms{200};        // measurement time (after a 20 ms settle)
-std::atomic<float> g_hpol_psi{37.0f};   // north direction of k, deg
-std::atomic<int> g_hpol_blocks{4};      // measurement split for the snr
-std::atomic<int> g_hpol_req{0};         // console -> FOC: start a test
-std::atomic<int> g_hpol_state{0};       // 0 never ran, 1 running, 2 done, -1 aborted
-std::atomic<int> g_hrt_seed{1};         // 0 none, 1 encoder, 2 polarity test
+std::atomic<float> g_hpol_volts{0.035f}; // pulsating amplitude, V (~1 A at 1.25 kHz)
+std::atomic<float> g_hpol_bias{2.0f};    // d bias, A (peak |id| = bias + HF amplitude, keep <= 3)
+std::atomic<int> g_hpol_ms{40};          // measurement per segment (after a 10 ms settle)
+std::atomic<int> g_hpol_blocks{4};       // +b/-b pairs
+std::atomic<int> g_hpol_metric{0};       // decide on 0 = Y, 1 = K
+std::atomic<float> g_hpol_psi{37.0f};    // north direction of k, deg
+std::atomic<int> g_hpol_req{0};          // console -> FOC: start a test
+std::atomic<int> g_hpol_state{0};        // 0 never ran, 1 running, 2 done, -1 aborted
+std::atomic<int> g_hrt_seed{1};          // 0 none, 1 encoder, 2 polarity test
 static constexpr int kHpolMaxBlocks = 8;
-static constexpr int kHpolSettleTicks = 400; // 20 ms, a multiple of 16
+static constexpr int kHpolSettleTicks = 208; // ~10 ms, a multiple of 16
 static constexpr int kHpolHoldTicks = 400;   // hrt filters stay frozen this long after the test
 static constexpr float kHpolMaxAmps = 4.0f;  // abort on any d sample above this
 struct HpolResult {
-  float k_pct, k_deg;   // 2nd-harmonic ratio k: magnitude (% of |I1|) and angle
-  float margin_pct;     // Re(k e^{-j psi}), %
+  float y_pct;          // HF admittance ratio +b / -b - 1, %
+  float kproj_pct;      // 2nd harmonic projected on psi, %
+  float k_pct, k_deg;   // 2nd harmonic k: magnitude (% of |I1|) and angle
+  float margin_pct;     // the chosen metric
   float snr;            // mean / standard error over the blocks (0 if 1 block)
-  float i1, imax;       // fundamental amplitude and largest |id| sample, A
+  float i1, imax;       // HF amplitude and largest |id| sample, A
   float move_deg;       // max |encoder - start| during the test, deg elec (0 without an encoder)
   float th_deg;         // theta_hat before the decision, deg
-  int flip, blocks;
+  int flip, blocks, metric_sel;
 };
 static HpolResult g_hpol_res{};
 static float g_hpol_blk[kHpolMaxBlocks]; // per-block margin, %
@@ -1367,26 +1373,27 @@ IRAM_ATTR void foc_task_fn(void *) {
         vrot_a = vr * cph; vrot_b = vr * sph;
         hrt_k++;
 
-        // ---- Polarity test ('hpol'): pulsating d injection along the frozen theta_hat ----
+        // ---- Polarity test ('hpol'): biased pulsating d injection along the frozen theta_hat ----
         static constexpr int kPolDiv = 16; // 1.25 kHz: each 2nd-harmonic cycle gets 8 samples
         static constexpr float kC16[16] = {1.0f, 0.92387953f, 0.70710678f, 0.38268343f, 0.0f, -0.38268343f,
                                            -0.70710678f, -0.92387953f, -1.0f, -0.92387953f, -0.70710678f,
                                            -0.38268343f, 0.0f, 0.38268343f, 0.70710678f, 0.92387953f};
-        static int pol_k = 0, pol_meas = 0;
+        static int pol_k = 0, pol_seg = 0, pol_nseg = 0, pol_segt = 0, pol_meas = 0;
         static float pol_th = 0.0f, pol_c = 1.0f, pol_s = 0.0f, pol_enc0 = 0.0f, pol_move = 0.0f, pol_imax = 0.0f;
-        static cf pol_h1[kHpolMaxBlocks], pol_h2[kHpolMaxBlocks];
+        static cf pol_h1[2 * kHpolMaxBlocks], pol_h2[2 * kHpolMaxBlocks];
+        // segment order +,- then -,+ per block pair: a linear drift cancels
+        auto seg_sign = [](int seg) { return ((seg >> 1) & 1) == (seg & 1) ? 1.0f : -1.0f; };
         if (pol_hold > 0) pol_hold--;
         if (g_hpol_req.load(std::memory_order_relaxed) && pol_left == 0 && hrt_ticks > 201) {
           g_hpol_req.store(0, std::memory_order_relaxed);
           if (mode == HOLD) {
-            const int nb = std::clamp(g_hpol_blocks.load(std::memory_order_relaxed), 1, kHpolMaxBlocks);
-            const int per = std::max(1, std::clamp(g_hpol_ms.load(std::memory_order_relaxed), 20, 1000) * 20 / (kPolDiv * nb));
-            pol_meas = per * kPolDiv * nb;
-            pol_left = kHpolSettleTicks + pol_meas;
-            pol_k = 0;
+            pol_nseg = 2 * std::clamp(g_hpol_blocks.load(std::memory_order_relaxed), 1, kHpolMaxBlocks);
+            pol_meas = std::max(1, std::clamp(g_hpol_ms.load(std::memory_order_relaxed), 5, 200) * 20 / kPolDiv) * kPolDiv;
+            pol_left = pol_nseg * (kHpolSettleTicks + pol_meas);
+            pol_k = pol_seg = pol_segt = 0;
             pol_th = th_hat; pol_c = cosf(th_hat); pol_s = sinf(th_hat);
             pol_enc0 = enc_theta_e; pol_move = 0.0f; pol_imax = 0.0f;
-            for (int b = 0; b < kHpolMaxBlocks; b++) pol_h1[b] = pol_h2[b] = 0.0f;
+            for (int i = 0; i < 2 * kHpolMaxBlocks; i++) pol_h1[i] = pol_h2[i] = 0.0f;
             g_hpol_state.store(1, std::memory_order_relaxed);
           } else {
             g_hpol_state.store(-1, std::memory_order_relaxed);
@@ -1401,48 +1408,55 @@ IRAM_ATTR void foc_task_fn(void *) {
             g_hpol_state.store(-1, std::memory_order_relaxed);
           } else {
             const int j = pol_k & (kPolDiv - 1), j2 = (2 * pol_k) & (kPolDiv - 1);
-            const int done = kHpolSettleTicks + pol_meas - pol_left; // ticks into the test
-            if (done >= kHpolSettleTicks) {
-              // demod with this tick's phasor: the latency drops out of h2 conj(h1)^2
-              const int nb = std::clamp(g_hpol_blocks.load(std::memory_order_relaxed), 1, kHpolMaxBlocks);
-              const int b = (done - kHpolSettleTicks) * nb / pol_meas;
-              pol_h1[b] += cf(id_m * kC16[j], -id_m * kC16[(j + 12) & 15]);   // id e^{-j phi}
-              pol_h2[b] += cf(id_m * kC16[j2], -id_m * kC16[(j2 + 12) & 15]); // id e^{-j 2 phi}
+            if (pol_segt >= kHpolSettleTicks) {
+              // demod with this tick's phasor: the latency drops out of |h1| and h2 conj(h1)^2
+              pol_h1[pol_seg] += cf(id_m * kC16[j], -id_m * kC16[(j + 12) & 15]);   // id e^{-j phi}
+              pol_h2[pol_seg] += cf(id_m * kC16[j2], -id_m * kC16[(j2 + 12) & 15]); // id e^{-j 2 phi}
             }
-            th = pol_th; idref = 0.0f; iqref = 0.0f;
+            th = pol_th; iqref = 0.0f;
+            idref = seg_sign(pol_seg) * g_hpol_bias.load(std::memory_order_relaxed);
             const float v = g_hpol_volts.load(std::memory_order_relaxed) * kC16[j];
             vrot_a = v * pol_c; vrot_b = v * pol_s;
             pol_k++;
+            if (++pol_segt >= kHpolSettleTicks + pol_meas) { pol_segt = 0; pol_seg++; }
             if (--pol_left == 0) {
-              // Decide. Flux lambda(i) = L i + a i^2 along d; north (+i adds to the magnet)
-              // saturates, a < 0, and the 2nd harmonic is I2 = -j w a I1^2 / Z(2w):
-              // k = I2 conj(I1)^2 / |I1|^3 = -j w a |I1| / Z(2w) points along
-              // 90 deg - arg Z(2w) (psi) on north, the opposite way on south.
+              // Decide. Y: fundamental admittance ratio |h1(+b)| / |h1(-b)| - 1, > 0 when +b
+              // points north (more flux, lower incremental Ld). K: the 2nd harmonic
+              // k = I2 conj(I1)^2 / |I1|^3 averaged over +b and -b, projected on psi.
               pol_hold = in_ticks(kHpolHoldTicks);
               const cf rot = std::polar(1.0f, -g_hpol_psi.load(std::memory_order_relaxed) * (3.14159265f / 180.0f));
-              const int nb = std::clamp(g_hpol_blocks.load(std::memory_order_relaxed), 1, kHpolMaxBlocks);
               auto kof = [](cf h1, cf h2) { const float a = std::max(std::abs(h1), 1e-9f); return h2 * std::conj(h1 * h1) / (a * a * a); };
-              cf h1 = 0.0f, h2 = 0.0f; float msum = 0.0f, msq = 0.0f;
-              for (int b = 0; b < nb; b++) {
-                h1 += pol_h1[b]; h2 += pol_h2[b];
-                const float m = (kof(pol_h1[b], pol_h2[b]) * rot).real();
-                g_hpol_blk[b] = 100.0f * m; msum += m; msq += m * m;
+              const int nb = pol_nseg / 2, sel = g_hpol_metric.load(std::memory_order_relaxed) ? 1 : 0;
+              float ysum = 0.0f, ksum = 0.0f, msum = 0.0f, msq = 0.0f, h1abs = 0.0f;
+              cf kacc = 0.0f;
+              for (int c = 0; c < nb; c++) {
+                int ip = 2 * c, im = 2 * c + 1;
+                if (seg_sign(ip) < 0.0f) std::swap(ip, im);
+                const float y = 100.0f * (std::abs(pol_h1[ip]) / std::max(std::abs(pol_h1[im]), 1e-9f) - 1.0f);
+                const cf kc = 0.5f * (kof(pol_h1[ip], pol_h2[ip]) + kof(pol_h1[im], pol_h2[im]));
+                const float kp = 100.0f * (kc * rot).real();
+                ysum += y; ksum += kp; kacc += kc;
+                h1abs += std::abs(pol_h1[ip]) + std::abs(pol_h1[im]);
+                const float m = sel ? kp : y;
+                g_hpol_blk[c] = m; msum += m; msq += m * m;
               }
-              const cf k = kof(h1, h2);
               HpolResult r{};
-              r.k_pct = 100.0f * std::abs(k);
-              r.k_deg = atan2f(k.imag(), k.real()) * (180.0f / 3.14159265f);
-              r.margin_pct = 100.0f * (k * rot).real();
+              r.y_pct = ysum / (float)nb;
+              r.kproj_pct = ksum / (float)nb;
+              kacc /= (float)nb;
+              r.k_pct = 100.0f * std::abs(kacc);
+              r.k_deg = atan2f(kacc.imag(), kacc.real()) * (180.0f / 3.14159265f);
+              r.margin_pct = sel ? r.kproj_pct : r.y_pct;
               if (nb > 1) {
                 const float var = std::max((msq - msum * msum / (float)nb) / (float)(nb - 1), 1e-12f);
                 r.snr = (msum / (float)nb) / sqrtf(var / (float)nb);
               }
-              r.i1 = 2.0f * std::abs(h1) / (float)pol_meas;
+              r.i1 = 2.0f * h1abs / (float)(pol_nseg * pol_meas);
               r.imax = pol_imax;
               r.move_deg = pol_move * (180.0f / 3.14159265f);
               r.th_deg = pol_th * (180.0f / 3.14159265f);
               r.flip = r.margin_pct < 0.0f;
-              r.blocks = nb;
+              r.blocks = nb; r.metric_sel = sel;
               g_hpol_res = r;
               if (r.flip) {
                 th_hat += 3.14159265f;
@@ -2529,7 +2543,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
-      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hseed enc|pol|none | hpol [Vp] [ms] [psi] [blocks] | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hseed enc|pol|none | hpol [Vp] [bias] [ms] [blocks] [metric] [psi] | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -3173,23 +3187,25 @@ extern "C" void app_main(void) {
       static constexpr const char *kSeedNames[] = {"none", "enc", "pol"};
       fmt::print("#hrt seed {} (takes effect at the next hrt start)\n", kSeedNames[g_hrt_seed.load()]);
     } else if (strncmp(line, "hpol", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
-      // hpol [Vp] [ms] [psi_deg] [blocks] — run the polarity test now (hrt running,
-      // HOLD, standstill); 'hpol' alone prints the last result.
-      float vp = g_hpol_volts.load(), psi = g_hpol_psi.load();
-      int ms = g_hpol_ms.load(), nb = g_hpol_blocks.load();
-      const int got = sscanf(line, "hpol %f %d %f %d", &vp, &ms, &psi, &nb);
+      // hpol [Vp] [bias] [ms] [blocks] [metric] [psi] — run the polarity test now
+      // (hrt running, HOLD, standstill); 'hpol' alone prints the last result.
+      float vp = g_hpol_volts.load(), bias = g_hpol_bias.load(), psi = g_hpol_psi.load();
+      int ms = g_hpol_ms.load(), nb = g_hpol_blocks.load(), sel = g_hpol_metric.load();
+      const int got = sscanf(line, "hpol %f %f %d %d %d %f", &vp, &bias, &ms, &nb, &sel, &psi);
       if (got >= 1) {
         if (g_hrt_volts.load() <= 0.0f || g_mode.load() != HOLD) {
           fmt::print("! hpol needs 'hrt <Vh> ...' running in HOLD at standstill\n");
           continue;
         }
-        g_hpol_volts.store(std::clamp(vp, 0.01f, 0.17f));
-        g_hpol_ms.store(std::clamp(ms, 20, 1000));
-        g_hpol_psi.store(psi);
+        g_hpol_volts.store(std::clamp(vp, 0.005f, 0.1f));
+        g_hpol_bias.store(std::clamp(bias, 0.0f, std::min(3.0f, g_max_target.load())));
+        g_hpol_ms.store(std::clamp(ms, 5, 200));
         g_hpol_blocks.store(std::clamp(nb, 1, kHpolMaxBlocks));
+        g_hpol_metric.store(sel ? 1 : 0);
+        g_hpol_psi.store(psi);
         g_hpol_state.store(0);
         g_hpol_req.store(1);
-        const int wait_ms = g_hpol_ms.load() + 500;
+        const int wait_ms = 2 * g_hpol_blocks.load() * (g_hpol_ms.load() + 11) + 500;
         for (int t = 0; t < wait_ms && (g_hpol_state.load() == 0 || g_hpol_state.load() == 1); t += 10)
           vTaskDelay(pdMS_TO_TICKS(10));
       }
@@ -3205,10 +3221,11 @@ extern "C" void app_main(void) {
           ee -= kTwoPi * floorf(ee / kTwoPi);
           err = remainderf(g_hrt_theta.load() - ee, kTwoPi) * 57.29578f;
         }
-        fmt::print("#hpol flip={} margin={:+.3f}% snr={:.1f} k={:.3f}%@{:.1f}deg psi={:.1f} I1={:.3f} A imax={:.2f} A "
-                   "move={:.2f} deg th0={:.1f} hat={:.1f} enc={:.1f} err={:+.1f} vp={:.3f} blk=",
-                   r.flip, r.margin_pct, r.snr, r.k_pct, r.k_deg, g_hpol_psi.load(), r.i1, r.imax, r.move_deg,
-                   r.th_deg, g_hrt_theta.load() * 57.29578f, ee * 57.29578f, err, g_hpol_volts.load());
+        fmt::print("#hpol flip={} margin={:+.3f}% snr={:.1f} Y={:+.3f}% K={:+.3f}% k={:.3f}%@{:.1f}deg sel={} I1={:.3f} A "
+                   "imax={:.2f} A move={:.2f} deg th0={:.1f} hat={:.1f} enc={:.1f} err={:+.1f} vp={:.3f} b={:.2f} blk=",
+                   r.flip, r.margin_pct, r.snr, r.y_pct, r.kproj_pct, r.k_pct, r.k_deg, r.metric_sel, r.i1, r.imax,
+                   r.move_deg, r.th_deg, g_hrt_theta.load() * 57.29578f, ee * 57.29578f, err, g_hpol_volts.load(),
+                   g_hpol_bias.load());
         for (int b = 0; b < r.blocks; b++) fmt::print("{}{:+.3f}", b ? "," : "", g_hpol_blk[b]);
         fmt::print("\n");
       }
