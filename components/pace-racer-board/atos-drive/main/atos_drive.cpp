@@ -573,9 +573,17 @@ std::atomic<float> g_hrt_coul{0.0f}; // rad/s^2 Coulomb friction, saturating at 
 // Cogging acceleration ca cos(6 theta) + cb sin(6 theta), rad/s^2 elec ('hrtk ca cb').
 // Drone motor, encoder fit 2026-10-23: -3000 -3100 (detents at -7 + k*60 deg elec).
 std::atomic<float> g_hrt_cog_a{0.0f}, g_hrt_cog_b{0.0f};
-// Load-dependent angle offset ('hrtc c_abs c_q c_d', deg elec per A of the
-// theta_hat-frame fundamental): subtracted from the measured theta.
-std::atomic<float> g_hrt_c_abs{0.0f}, g_hrt_c_q{0.0f}, g_hrt_c_d{0.0f};
+// Load-dependent angle offset ('hrtc c_abs c_q2 c_d': deg elec per A of |iq|,
+// per A^2 of iq, per A of id, theta_hat-frame fundamental), subtracted from the
+// measured theta. Sign-symmetric in iq on the drone motor (-21 deg at 2.5 A).
+std::atomic<float> g_hrt_c_abs{0.0f}, g_hrt_c_q2{0.0f}, g_hrt_c_d{0.0f};
+// Drive-current saliency ('hrtn kr ki br bi'). With the tracker's w = (N - Ns) P e^{j(180 - off)}
+// normalised by |P|, the drone motor fits w = e^{j2theta} A (1 + b |If|^2) + K If^2 (If = stationary
+// fundamental): the current saturates its own axis (K) and weakens the rotor term (b). At 2.5 A
+// |K If^2| exceeds the rotor term, so uncorrected theta follows the current vector (positive
+// feedback when theta_hat lags). Fit 2026-10-23 at 12 V, Vh 0.17, off 149.2: K -0.0046+0.0412j,
+// b -0.0484+0.0493j (A^-2). Refit if off changes. 0 = off.
+std::atomic<float> g_hrt_k_re{0.0f}, g_hrt_k_im{0.0f}, g_hrt_b_re{0.0f}, g_hrt_b_im{0.0f};
 std::atomic<float> g_hall_id{0.0f}; // HALL-mode d-axis current ('hid <A>', for offset maps)
 static constexpr int kHrotSettleTicks = 400;
 static constexpr int kHscanSettleTicks = 600;  // 30 ms
@@ -1320,11 +1328,23 @@ IRAM_ATTR void foc_task_fn(void *) {
         }
         if (have) {
           const cf ns(g_hrt_ns_re.load(std::memory_order_relaxed), g_hrt_ns_im.load(std::memory_order_relaxed));
-          const cf w = (hrt_N - ns) * hrt_P * std::polar(1.0f, 3.14159265f - g_hrt_off.load(std::memory_order_relaxed));
+          cf w = (hrt_N - ns) * hrt_P * std::polar(1.0f, 3.14159265f - g_hrt_off.load(std::memory_order_relaxed));
+          // Drive-current saliency (see g_hrt_k_re): |P| and the b rotation once per injection cycle.
+          static float p_mag = 0.0f, b_rot = 0.0f;
+          const float kre = g_hrt_k_re.load(std::memory_order_relaxed), kim = g_hrt_k_im.load(std::memory_order_relaxed);
+          const cf ifc(g_hrt_ifa.load(std::memory_order_relaxed), g_hrt_ifb.load(std::memory_order_relaxed));
+          if ((hrt_k & 7) == 0) {
+            p_mag = std::abs(hrt_P);
+            const float m2 = std::norm(ifc);
+            b_rot = atan2f(g_hrt_b_im.load(std::memory_order_relaxed) * m2,
+                           1.0f + g_hrt_b_re.load(std::memory_order_relaxed) * m2);
+          }
+          if (kre != 0.0f || kim != 0.0f)
+            w -= p_mag * cf(kre, kim) * (ifc * ifc);
           const float comp = (g_hrt_c_abs.load(std::memory_order_relaxed) * fabsf(iq_h) +
-                              g_hrt_c_q.load(std::memory_order_relaxed) * iq_h +
+                              g_hrt_c_q2.load(std::memory_order_relaxed) * iq_h * iq_h +
                               g_hrt_c_d.load(std::memory_order_relaxed) * id_h) * (3.14159265f / 180.0f);
-          float two_th = atan2f(w.imag(), w.real()) - 2.0f * comp;
+          float two_th = atan2f(w.imag(), w.real()) - b_rot - 2.0f * comp;
           if (two_th < -3.14159265f) two_th += kTwoPi;
           else if (two_th >= 3.14159265f) two_th -= kTwoPi;
           float meas = 0.5f * two_th; // theta mod 180, in [-90, 90)
@@ -2456,7 +2476,7 @@ extern "C" void app_main(void) {
       "#        hofs <deg> | hs | hset <s0..s5 deg> | enc   SPIN: run [<A> <rpm> <ramp_s>] | stop\n"
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
-      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] | hrtk ca cb | hrtc c_abs c_q c_d | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
+      "#        hscan <Vh> [Id] | hrot <Vh> [ms] [4|8] | smed <0|1|2> | hrt [Vh [ns_re ns_im off]] | hrtg kp ki lpfP [drive] [lpfN] [emax_deg] | hrtm ktj bj l3 [coul] | hrtk ca cb | hrtn kr ki br bi | hrtc c_abs c_q2 c_d | hid <A> | hfi [Vh [Id [track]]] | hfig <kp> <ki> [lag] [sign] [half] | dtc <V> [band]\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
       "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
@@ -2886,18 +2906,20 @@ extern "C" void app_main(void) {
         g_mode.store(HALL);
         fmt::print("#hfi speed: {:.0f} rpm over {:.1f}s, torque ceiling {:.1f}A\n", rpm, ramp, amps);
       } else {
-        float amps = 0.0f;
-        sscanf(line, "xiq %f", &amps);
+        // xiq <A> [vmax_rpm]: optional speed governor (on omega_hat) so a free rotor
+        // that snaps off its detent does not run away past where HFI can follow.
+        float amps = 0.0f, vmax = 0.0f;
+        sscanf(line, "xiq %f %f", &amps, &vmax);
         amps = std::clamp(amps, -g_max_target.load(), g_max_target.load());
         g_hall_iq.store(amps);
         g_hall_amps.store(g_max_target.load());
-        g_hall_vmax.store(0.0f);
+        g_hall_vmax.store(std::clamp(vmax, 0.0f, motor::kMaxRpm));
         g_hall_sub.store(HALL_TORQUE);
         g_theta_src.store(2);
         g_hrt_errmax.store(0.0f);
         uncoast();
         g_mode.store(HALL);
-        fmt::print("#hfi iq* {:.2f} A\n", amps);
+        fmt::print("#hfi iq* {:.2f} A, governor {:.0f} rpm (0 = off)\n", amps, g_hall_vmax.load());
       }
     } else if (strncmp(line, "erun", 4) == 0 || strncmp(line, "eiq", 3) == 0) {
       // Encoder-drive modes: the HALL machinery with theta = 6*enc + ofs.
@@ -3092,16 +3114,21 @@ extern "C" void app_main(void) {
       g_hrt_coul.store(std::max(coul, 0.0f));
       fmt::print("#hrt model Kt/J={:.0f} rad/s^2/A B/J={:.2f} 1/s l3={:.3g} coul={:.0f} cog={:.0f},{:.0f}\n", g_hrt_ktj.load(),
                  g_hrt_bj.load(), g_hrt_l3.load(), g_hrt_coul.load(), g_hrt_cog_a.load(), g_hrt_cog_b.load());
+    } else if (strncmp(line, "hrtn", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
+      float kr = g_hrt_k_re.load(), ki = g_hrt_k_im.load(), br = g_hrt_b_re.load(), bi = g_hrt_b_im.load();
+      sscanf(line, "hrtn %f %f %f %f", &kr, &ki, &br, &bi);
+      g_hrt_k_re.store(kr); g_hrt_k_im.store(ki); g_hrt_b_re.store(br); g_hrt_b_im.store(bi);
+      fmt::print("#hrt current saliency K={:.4f}{:+.4f}j b={:.4f}{:+.4f}j per A^2\n", kr, ki, br, bi);
     } else if (strncmp(line, "hrtk", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
       float ca = g_hrt_cog_a.load(), cb = g_hrt_cog_b.load();
       sscanf(line, "hrtk %f %f", &ca, &cb);
       g_hrt_cog_a.store(ca); g_hrt_cog_b.store(cb);
       fmt::print("#hrt cogging {:.0f} cos6th {:+.0f} sin6th rad/s^2\n", ca, cb);
     } else if (strncmp(line, "hrtc", 4) == 0 && (line[4] == ' ' || line[4] == '\0')) {
-      float ca = g_hrt_c_abs.load(), cq = g_hrt_c_q.load(), cd = g_hrt_c_d.load();
+      float ca = g_hrt_c_abs.load(), cq = g_hrt_c_q2.load(), cd = g_hrt_c_d.load();
       sscanf(line, "hrtc %f %f %f", &ca, &cq, &cd);
-      g_hrt_c_abs.store(ca); g_hrt_c_q.store(cq); g_hrt_c_d.store(cd);
-      fmt::print("#hrt load offset {:.2f}*|iq| {:+.2f}*iq {:+.2f}*id deg\n", ca, cq, cd);
+      g_hrt_c_abs.store(ca); g_hrt_c_q2.store(cq); g_hrt_c_d.store(cd);
+      fmt::print("#hrt load offset {:.2f}*|iq| {:+.2f}*iq^2 {:+.2f}*id deg\n", ca, cq, cd);
     } else if (strncmp(line, "hid ", 4) == 0) {
       float a = 0.0f;
       sscanf(line, "hid %f", &a);
