@@ -88,12 +88,21 @@ inline const char *axis_name(rammp::AxisId id) {
 
 /// Mount NVS and read every key. Missing keys keep their defaults; that is the
 /// factory state, not an error.
+/// What the last load() saw from nvs_flash_init(), and whether it wiped NVS. Boot
+/// logs are lost in the USB re-enumeration gap, so 'bootlog' replays these: a lost
+/// encoder offset (enc cal=0) otherwise looks the same whether NVS was unreadable
+/// for one boot or erased.
+inline esp_err_t g_init_err = ESP_OK;
+inline bool g_wiped = false;
+
 inline bool load(AxisConfig &cfg, espp::Logger &logger) {
   esp_err_t err = nvs_flash_init();
+  g_init_err = err;
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     // Partition layout changed under us: wipe and start over. Provisioning is
     // lost, which the console will show as 'unassigned'.
     nvs_flash_erase();
+    g_wiped = true;
     err = nvs_flash_init();
   }
   if (err != ESP_OK) {

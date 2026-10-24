@@ -8,7 +8,9 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=240
 
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# app_main (main task) peaks at ~8.8 KB during boot; at 8 KB it overflowed into the
+# heap and corrupted whatever sat below its stack (atos_drive.cpp static_assert).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_ESP_TIMER_TASK_STACK_SIZE=6144
 
 # Ethernet (WIZnet W5500 on the SPI expansion header), brought up at runtime by
