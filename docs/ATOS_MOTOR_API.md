@@ -1,6 +1,6 @@
 # PACE RACER motor-controller API over ATOS: design record
 
-Status: **design settled 2026-09-16; Phase 1 merged (rammp-rtps PR #5); Phase 2 firmware bench-verified 2026-09-25; tuning topic added 2026-10-09 (D37, API v2, merged in rammp-rtps PR #7 2026-10-16); true-zero gains 2026-10-19 (D38, API v3)** (branch `feat/atos-drive`) (grilling session 2026-09-15/16, 39 questions,
+Status: **design settled 2026-09-16; Phase 1 merged (rammp-rtps PR #5); Phase 2 firmware bench-verified 2026-09-25; tuning topic added 2026-10-09 (D37, API v2, merged in rammp-rtps PR #7 2026-10-16); true-zero gains 2026-10-19 (D38, API v3); hub20 peak budget + 50 Hz state 2026-10-29 (D39, fw 0.4.0)** (branch `feat/atos-drive`) (grilling session 2026-09-15/16, 39 questions,
 frontier empty). Sections: Context, Facts, Decisions (D1-D32), Wire types,
 Behavior contract, Implementation plan, Host-side MIB stand-in, Bench
 verification, Risks. Not yet implemented.
@@ -74,6 +74,7 @@ verification, Risks. Not yet implemented.
 | D36 | Feedback guards raise `HALL` (illegal input 50 ms) and `STALL` (speed integrator past half the cap and no net hall steps over 0.5 s, speed/position modes only). Both exit through the unload-then-coast path. Verified physically 2026-09-25. | A lost hall line or a blocked wheel must be a named fault, not a hot motor. |
 | D37 | **Revises D9 (2026-10-09).** Outer-loop tuning over the network: a third per-axis topic `rammp/mib/motor_tuning/<axis>` carries `MotorTuning` (`tuning_req_id`, `speed_kp`, `speed_ki`, `hall_pll_hz`, `persist`); the board acts on a new req_id, clamps to compile-time bounds, applies live without an integrator reset, echoes `tuning_ack` and the values in force in `MotorState`, and saves to NVS only when `persist` is set. API version 2. Current loop, ceilings and calibration stay off the wire. | The MIB drove the flatbot from the joystick (Oct 2026) and it vibrates; the gains were console-only, which means a laptop on the robot for every iteration. The per-command limits cannot fix a loop tune. Separate topic so the 50 Hz command stays 28 bytes; req_id so a best-effort resend is harmless; `persist` opt-in so a bad experiment dies at reboot. |
 | D38 | **Extends D37 (2026-10-19).** A negative `speed_kp` / `speed_ki` in `MotorTuning` sets that gain to exactly 0; 0 (and NaN) still means unchanged; positive values clamp as before, the Kp floor lowered to 0. With ki = 0 both speed loops hold their integrator at 0 (bumpless seeds included), so switching it off also drops the current it held. Same wire layout; API version 3, fw 0.3.0. | Switching a term off is a basic controller operation, and the v2 floor-by-sentinel left only a tiny positive Ki, which keeps the integrator's stored current forever as an offset. Negative rather than redefining 0, so existing senders that send 0 for "leave as is" don't silently zero a gain; a v2 board already ignored negatives. |
+| D39 | **Revises D13 and the hub20 ceilings (2026-10-29).** `MotorState` publishes at 50 Hz (`motor::kStateHz`). hub20: `kMaxAmps` 30 A (46.8 N.m, above the 22 A datasheet peak) as a burst ceiling under an I^2*t budget worth 2 s at 30 A above a 15 A continuous level; the ceiling folds linearly to 15 A over the last quarter of the budget and `torque_limit_eff` reports it live, together with the console `lim` target. Boot target/trip 30/35 A; DRV VDS OCP at 0.20 V (board protection only). Flatbot and ninebot unchanged (no budget, VDS 0.06 V). Same wire layout and API version; fw 0.4.0. | Chair testing: the MIB dashboard needs denser logs to tune the speed loop, and turning in place spiked past 15 A into a VDS OCP latch. Brief spikes deserve the board's full current; sustained current is limited by the bare boards (15 A warm, no heatsinks). A software limit folds back gently where a VDS trip latches the bridge off. 50 Hz x 2 chair boards stays inside the ~70 Hz RTPS ceiling. |
 
 
 ## Wire types
@@ -101,7 +102,7 @@ struct MotorCommand {            // 28 B on the wire, 10..50 Hz
   float torque_limit, vel_limit, accel_limit;       // 0 = ceiling / ceiling / no ramp
 };
 
-struct MotorState {              // 80 B on the wire (2 B padding), 20 Hz
+struct MotorState {              // 80 B on the wire (2 B padding), 50 Hz (D39)
   uint8_t api_version; AxisId axis_id; uint8_t seq, last_cmd_seq;
   BoardState state; ControlMode mode; FaultCode fault_code; uint8_t clear_fault_ack;
   uint8_t vbus_measured, flags;
@@ -152,9 +153,9 @@ Effective values are echoed in `MotorState.*_limit_eff`.
 | stream | rate | QoS |
 | --- | --- | --- |
 | `MotorCommand` (MIB -> board) | 10 Hz min (watchdog), 50 Hz max | best-effort, keep-last-1 |
-| `MotorState` (board -> MIB/Jetson) | 20 Hz fixed | best-effort, keep-last-1 |
+| `MotorState` (board -> MIB/Jetson) | 50 Hz fixed (20 Hz before D39) | best-effort, keep-last-1 |
 
-Budget: 4 boards x (20 pub + <=50 sub) stays under the ~100 pps per-board RTPS ceiling
+Budget: 4 boards x (50 pub + <=50 sub; was 20 pub before D39) stays under the ~100 pps per-board RTPS ceiling
 measured in `rtps-telemetry-results`; verify with the stand-in (see Bench verification).
 
 ### Units and frames
@@ -213,7 +214,7 @@ Fork of `halls-sensorless` (encoder-commutated `erun`/`epos` path is the drive).
 1. `rammp-rtps` as a git submodule; include `rtps_interface.hpp`.
 2. NVS: `axis_id` (default UNASSIGNED) + console `axis <n>` / `axis` to provision/show.
 3. `atos_link.hpp` replaces `rtps_telem.hpp`: one `Subscriber<MotorCommand>` on the
-   board's own command topic, one `Publisher<MotorState>` at 20 Hz (absolute-deadline
+   board's own command topic, one `Publisher<MotorState>` at 50 Hz (D39; was 20) (absolute-deadline
    task pattern from `rtps_telem.hpp`), lifecycle tied to `on_got_ip` / `on_ip_lost`.
 4. `drive_supervisor.hpp`: the state machine of the Behavior contract, the 200 ms
    watchdog, `clear_fault_req_id` edge detection, limit clamping, mode dispatch into the

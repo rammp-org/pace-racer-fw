@@ -11,7 +11,7 @@ encoder commutation, guards and console are the parent's. Added:
 | --- | --- |
 | `main/motor_params.hpp` | pole pairs, Kt, speed/current/accel ceilings, hold current; three profiles, selected at build time |
 | `main/axis_config.hpp` | NVS: `axis_id`, feedback source, encoder offset, hall table |
-| `main/atos_link.hpp` | DHCP ethernet, RTPS participant, the two endpoints, 20 Hz publish |
+| `main/atos_link.hpp` | DHCP ethernet, RTPS participant, the two endpoints, 50 Hz publish |
 | `main/drive_supervisor.hpp` | the state machine, watchdog, limits, and the MotorCommand -> FOC mapping |
 | `main/hall_drive.hpp` | hall commutation; the speed for the loop comes from a 5 Hz tracking loop on the step count |
 | `main/atos_drive.cpp` | the parent app plus hooks, the supervisor task, feedback guards, and the ATOS console commands |
@@ -57,7 +57,7 @@ ecal 4          # encoder offset, only for fb enc; saved
 
 Reboot. The board takes a DHCP lease from the MIB, joins
 `rammp/mib/motor_command/<axis>` and `rammp/<axis>/motor_state`, and publishes
-`MotorState` at 20 Hz. `axis` shows what is saved, `fb` shows the source and
+`MotorState` at 50 Hz. `axis` shows what is saved, `fb` shows the source and
 its gains, `atos` shows the link and the state machine. Arming is refused
 (`FAULT(ENCODER)`) until the selected source is calibrated. An unprovisioned
 board (`axis_id` 255) brings ethernet up but joins no topic.
@@ -216,6 +216,6 @@ loop is tracking, 0 outside a speed loop. Verified on drive_left: `hv 20` at
 - Two boards on one network; induced VDS/thermal/sampler faults; any load.
 - The hub motor: quadrature encoder source (PCNT) with hall-edge sync, R/L
   measurement, current-loop retune. `ATOS_MOTOR=hub20` only swaps constants.
-- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic, 0.3.0 with true-zero gains, 0.3.2 with the hub20 15 A boot cap and halved speed Kp); no git stamp yet.
+- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic, 0.3.0 with true-zero gains, 0.3.2 with the hub20 15 A boot cap and halved speed Kp, 0.4.0 with the hub20 30 A peak budget, VDS 0.20 V and 50 Hz MotorState); no git stamp yet.
 - espp on the board keeps reader proxies of dead host participants (one extra
   copy of every sample per MIB restart). Needs a fix in espp itself.

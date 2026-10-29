@@ -18,8 +18,15 @@
 //
 // Threads: on_command() and on_tuning() run on the RTPS receive thread and
 // only store the message under a mutex. tick() runs on the supervisor task at
-// 100 Hz and makes every decision. state() is called by the link task at 20 Hz
+// 100 Hz and makes every decision. state() is called by the link task at kStateHz (50 Hz)
 // and reads the last MotorState tick() assembled, under the same mutex.
+//
+// Peak budget (D39): every tick integrates (|i|^2 - kContAmps^2) * dt into a
+// heat budget worth kPeakSeconds at kMaxAmps. The torque ceiling stays at
+// kMaxAmps for the first 3/4 of it and folds linearly to kContAmps over the
+// last 1/4, so the fold is smooth and the cap settles where the heat stops
+// growing. torque_limit_eff reports it. Profiles with kContAmps == kMaxAmps
+// have no budget.
 //
 // Tuning (D37): a MotorTuning with a NEW tuning_req_id is clamped to the
 // motor_params bounds and handed to Hooks::tuning on the next tick, live,
@@ -154,6 +161,7 @@ public:
   void tick() {
     const Measured m = hooks_.measure ? hooks_.measure() : Measured{};
     std::lock_guard<std::mutex> lk(mutex_);
+    update_peak_budget_locked(m);
     using rammp::BoardState;
     using rammp::ControlMode;
     using rammp::FaultCode;
@@ -258,7 +266,8 @@ public:
       break;
     case BoardState::SAFE_STOPPING:
       if (hooks_.velocity)
-        hooks_.velocity(0.0f, safe_stop_ramp_, safe_stop_cap_, vel_rpm_limit_locked());
+        hooks_.velocity(0.0f, safe_stop_ramp_, std::min(safe_stop_cap_, peak_cap_amps_),
+                        vel_rpm_limit_locked());
       if (std::fabs(m.velocity_rad_s * motor::kRadSToRpm) < motor::kStoppedRpm) {
         hold_deg_ = m.position_rad * motor::kRadToDeg;
         set_state_locked(BoardState::HOLDING);
@@ -358,10 +367,32 @@ private:
       hooks_.reset_controllers();
   }
 
+  // The heat budget behind the peak ceiling (D39). Runs every tick in every
+  // state: a coasting motor cools, a stalled one heats whatever the mode.
+  void update_peak_budget_locked(const Measured &m) {
+    if constexpr (motor::kContAmps >= motor::kMaxAmps || motor::kPeakSeconds <= 0) {
+      peak_cap_amps_ = motor::kMaxAmps;
+    } else {
+      constexpr float kCont2 = motor::kContAmps * motor::kContAmps;
+      constexpr float kBudget = (motor::kMaxAmps * motor::kMaxAmps - kCont2) * motor::kPeakSeconds;
+      constexpr float kFold = 0.25f * kBudget;
+      const int64_t now = esp_timer_get_time();
+      // dt from the clock, capped so a stalled task cannot dump a lump of heat.
+      const float dt =
+          last_budget_us_ ? std::min(0.1f, (float)(now - last_budget_us_) * 1e-6f) : 0.0f;
+      last_budget_us_ = now;
+      const float i2 = m.iq * m.iq + m.id * m.id;
+      heat_ = std::clamp(heat_ + (i2 - kCont2) * dt, 0.0f, kBudget);
+      const float frac = std::clamp((kBudget - heat_) / kFold, 0.0f, 1.0f);
+      peak_cap_amps_ = motor::kContAmps + (motor::kMaxAmps - motor::kContAmps) * frac;
+    }
+  }
+
   float cap_amps_locked() {
     const float lim = have_cmd_ ? cmd_.torque_limit : 0.0f;
-    const float amps =
+    float amps =
         hooks_.max_amps ? std::min(motor::kMaxAmps, hooks_.max_amps()) : motor::kMaxAmps;
+    amps = std::min(amps, peak_cap_amps_);
     const float ceiling = amps * motor::kKt;
     const float eff = (lim > 0 ? std::min(lim, ceiling) : ceiling);
     state_.torque_limit_eff = eff;
@@ -455,6 +486,9 @@ private:
   float hold_deg_{0};
   float safe_stop_ramp_{motor::kSafeStopRampRpmS};
   float safe_stop_cap_{motor::kHoldAmps};
+  float heat_{0};                          ///< A^2*s above kContAmps^2 (D39)
+  float peak_cap_amps_{motor::kMaxAmps};   ///< ceiling the budget allows now
+  int64_t last_budget_us_{0};
 };
 
 } // namespace supervisor

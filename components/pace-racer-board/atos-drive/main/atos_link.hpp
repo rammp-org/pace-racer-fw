@@ -2,11 +2,12 @@
 
 // The board's end of the ATOS wire: DHCP ethernet, one RTPS participant, one
 // MotorCommand reader on this axis's command topic, one MotorTuning reader on
-// its tuning topic, one MotorState writer on its state topic at 20 Hz.
+// its tuning topic, one MotorState writer on its state topic at Config::publish_hz
+// (motor::kStateHz, 50 Hz).
 //
 // Lifecycle follows the IP address. The BSP's ethernet callbacks run on the
 // event-loop task and must not block, so they only record the new address; the
-// link task (20 Hz, priority 5, unpinned, per the coexistence measurements)
+// link task (publish rate, priority 5, unpinned, per the coexistence measurements)
 // notices the change and starts or stops the participant itself. espp cannot
 // auto-detect the interface on ESP targets, so the participant is created with
 // the leased address and recreated on a new lease.
@@ -14,7 +15,7 @@
 // The reader callback runs on the engine's receive thread. It hands the command
 // to the supervisor and returns; every control decision is the supervisor's, on
 // its own tick. The publish task uses the absolute-deadline pattern from the
-// telemetry experiment so 20 Hz means 20 Hz, not 20 Hz minus publish time.
+// telemetry experiment so 50 Hz means 50 Hz, not 50 Hz minus publish time.
 
 #include <atomic>
 #include <chrono>

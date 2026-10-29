@@ -1092,6 +1092,11 @@ std::atomic<bool> g_sense_ocp{false};
 // Shared by boot, boot's retry loop, and 'clr'. It has to be re-runnable: an
 // ENABLE reset pulse longer than the device's reset window puts it through
 // sleep, and every register comes back at its power-on default.
+// VDS OCP level written at boot and on every 'clr' (motor_params kBootVdsLevel).
+// 'vds' changes it live until the next of those.
+static constexpr auto kBootVds =
+    static_cast<espp::PaceRacerBoard::GateDriver::VdsLevel>(motor::kBootVdsLevel);
+
 bool configure_drv(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd,
                    espp::PaceRacerBoard::GateDriver::OcpControl &ocp,
                    espp::PaceRacerBoard::GateDriver::CsaControl &csa,
@@ -1111,7 +1116,7 @@ bool configure_drv(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd,
     drv_check(gd, "w driver_ctl");
   ok = ok && gd->set_ocp_mode(GD::OcpMode::LATCHED_SHUTDOWN, ec) &&
        gd->set_ocp_deglitch(GD::OcpDeglitch::US_4, ec) &&
-       gd->set_vds_level(GD::VdsLevel::V_0_06, ec); // ~17-22 A hardware backstop
+       gd->set_vds_level(kBootVds, ec); // per profile: hub20 0.20 V, board protection only
   if (trace)
     drv_check(gd, "w ocp/vds");
   const bool want_sen = g_sense_ocp.load();
@@ -1126,7 +1131,7 @@ bool configure_drv(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd,
   dcv = gd->read_driver_control(ec);
   return ok && !ec && !dcv.coast() && !dcv.brake() &&
          ocp.ocp_mode() == GD::OcpMode::LATCHED_SHUTDOWN &&
-         ocp.deglitch() == GD::OcpDeglitch::US_4 && ocp.vds_level() == GD::VdsLevel::V_0_06 &&
+         ocp.deglitch() == GD::OcpDeglitch::US_4 && ocp.vds_level() == kBootVds &&
          csa.sense_overcurrent_disabled() != want_sen &&
          csa.sense_level() == GD::SenseLevel::V_0_25 && csa.gain() == GD::CsaGain::GAIN_20;
 }
@@ -1481,6 +1486,7 @@ extern "C" void app_main(void) {
       .on_tuning = [](const rammp::MotorTuning &t) { g_sup->on_tuning(t); },
       .state_fn = []() { return g_sup->state(); },
       .hostname = std::string("pace-racer-") + axiscfg::axis_name(g_axis.axis_id),
+      .publish_hz = motor::kStateHz,
   });
   const bool eth_up = g_link->start(bsp, logger);
   if (!eth_up)

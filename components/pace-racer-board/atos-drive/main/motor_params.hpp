@@ -33,6 +33,9 @@ inline constexpr float kMaxAmps = 20.0f;  // torque_limit = 0 and hard ceiling (
 inline constexpr float kHoldAmps = 4.0f;  // HOLDING cap, ~2.4 N.m
 inline constexpr float kBootTargetAmps = 8.0f; // 'lim' at boot: the drive's real |iq| cap
 inline constexpr float kBootTripAmps = 15.0f;  // soft overcurrent trip at boot
+inline constexpr float kContAmps = kMaxAmps;   // no peak budget: kMaxAmps is continuous
+inline constexpr float kPeakSeconds = 0.0f;
+inline constexpr int kBootVdsLevel = 0;        // DRV8353 VDS 0.06 V, ~17-22 A cold
 inline constexpr float kSpeedKpEnc = 0.05f;  // speed-loop Kp, A/rpm, encoder feedback
 inline constexpr float kSpeedKpHall = 0.25f; // speed-loop Kp, A/rpm, hall feedback
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: accel_limit 0 = step
@@ -57,15 +60,28 @@ inline constexpr int kPolePairs = 20;
 // datasheet's rated 7.5 A (RMS) within 3 %.
 inline constexpr float kKt = 1.56f;
 inline constexpr float kMaxRpm = 180.0f;  // vel_limit = 0. No-load figure at 48 V.
-inline constexpr float kMaxAmps = 22.0f;  // torque_limit = 0. Datasheet peak.
+// torque_limit = 0: the burst ceiling, 46.8 N.m. Above the datasheet's 22 A
+// peak on purpose (2026-10-29): turning in place spikes past 15 A and the chair
+// wants all the board can give. The board ran 30 A stalls on the dyno.
+inline constexpr float kMaxAmps = 30.0f;
+// Peak budget (supervisor): an I^2*t budget above kContAmps^2 worth
+// kPeakSeconds at kMaxAmps. Full ceiling for the first 3/4 of it, then a
+// linear fold to kContAmps: from rest, 30 A for 1.5 s, then under 16 A by
+// ~3 s; 22 A holds ~4.5 s, 20 A ~7 s. Refills below kContAmps (full ~6 s
+// after stopping). 15 A sustained is
+// the measured warm limit of the bare board (no heatsinks on the chair).
+inline constexpr float kContAmps = 15.0f;
+inline constexpr float kPeakSeconds = 2.0f;
 inline constexpr float kHoldAmps = 10.0f; // HOLDING cap: ~16 N.m; 15 A sustained is
                                           // the measured warm thermal limit.
-// 'lim' at boot. The ATOS hooks clamp every current to this, below kMaxAmps,
-// so it is the chair's real torque ceiling: 15 A (23 N.m), the warm thermal
-// limit. Trip 3 A above it for speed-loop overshoot; the DRV VDS OCP at boot
-// (~17-22 A cold, derates hot) is the hardware backstop.
-inline constexpr float kBootTargetAmps = 15.0f;
-inline constexpr float kBootTripAmps = 18.0f;
+// 'lim' at boot: the ATOS hooks clamp every current to the target, so it
+// matches the burst ceiling. The software trip is the real overcurrent guard,
+// 5 A over the bursts (the dyno's 35 A guard; plausibility gate at 38 A, inside
+// the ADC rail). VDS at 0.20 V (~58-74 A cold, ~30-50 A with hot FETs) only
+// protects the board itself, so it no longer trips on load spikes.
+inline constexpr float kBootTargetAmps = 30.0f;
+inline constexpr float kBootTripAmps = 35.0f;
+inline constexpr int kBootVdsLevel = 5;
 // Speed-loop Kp (A/rpm), half the dyno/rover values: those made the chair
 // jitter (2026-10-29). Ki is unchanged, it supplies the breakaway current.
 inline constexpr float kSpeedKpEnc = 0.025f;
@@ -99,6 +115,9 @@ inline constexpr float kMaxAmps = 30.0f;
 inline constexpr float kHoldAmps = 8.0f; // ~4.8 N.m; a bench number, no slope to hold
 inline constexpr float kBootTargetAmps = 8.0f; // 'lim' at boot; raise live for campaigns
 inline constexpr float kBootTripAmps = 15.0f;
+inline constexpr float kContAmps = kMaxAmps;
+inline constexpr float kPeakSeconds = 0.0f;
+inline constexpr int kBootVdsLevel = 0;
 inline constexpr float kSpeedKpEnc = 0.05f;
 inline constexpr float kSpeedKpHall = 0.25f;
 inline constexpr float kObsR = 0.323f;
@@ -124,6 +143,10 @@ inline constexpr float kStoppedRpm = 2.0f;
 // Position hold speed clamp while HOLDING (rpm). Small: it only corrects creep.
 inline constexpr float kHoldMaxRpm = 30.0f;
 
+// MotorState publish rate (D13, raised 20 -> 50 Hz 2026-10-29 for tuning
+// logs on the MIB dashboard; RTPS saturated ~70 Hz delivered in Aug 2026).
+inline constexpr uint32_t kStateHz = 50;
+
 // Command watchdog, ms. The contract: the MIB sends >= 10 Hz, idle or not.
 inline constexpr uint32_t kWatchdogMs = 200;
 
@@ -138,7 +161,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (3u << 16) | 2u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 0u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;
