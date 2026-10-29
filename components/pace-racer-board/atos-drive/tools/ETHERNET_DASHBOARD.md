@@ -128,5 +128,4 @@ the button and prints errors the page hides.
 
 ## Status
 
-Ethernet flashing was tested against a mock on 2026-10-15. It has not yet
-been confirmed end to end on a wheel board.
+Ethernet flashing is how the current chair was programmed in OCT 2026
