@@ -15,6 +15,9 @@ calling them directly.
   is new (2026-10-19) and not yet tried on a real machine, so report what
   breaks.
 - **Python 3.** Standard library only, nothing to install.
+- **ESP-IDF 6.0 and the submodules**, to build: after cloning, run
+  `git submodule update --init --recursive` once (the build needs
+  `external/rammp-rtps`).
 - **The board already runs ethernet-capable firmware** (2026-10-15 or later).
   A board's first flash has to go over USB (`tools/provision.py`); the chair's
   two drive boards already qualify.
