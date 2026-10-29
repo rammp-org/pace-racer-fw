@@ -27,7 +27,14 @@ calling them directly.
 
 ## 1. Build
 
+If you built this app before 2026-10-29, delete the generated `sdkconfig`
+first. It keeps old settings even after `sdkconfig.defaults` changes, and an
+old 8 KB main-task stack makes the image crash or hang at boot, before
+ethernet comes up. The build now stops with "main task stack below 16 KB"
+if that happens.
+
 ```
+rm -f sdkconfig
 idf.py -B build-hub20 -DATOS_MOTOR=hub20 build
 ```
 
