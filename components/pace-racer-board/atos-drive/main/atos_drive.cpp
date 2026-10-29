@@ -623,6 +623,8 @@ IRAM_ATTR void foc_task_fn(void *) {
     static uint32_t sp_align_left = 0, stop_ticks = 0;
     static bool stop_requested = false;
     static float h_set = 0.0f, h_integ = 0.0f, h_time = 0.0f; // HALL-mode speed loop
+    static bool h_rest = false, h_rest_slipped = false; // speed-loop rest hold (see HALL_SPEED)
+    static int h_rest_steps = 0;
     const int mode = g_mode.load(std::memory_order_relaxed);
 
     // The duration budgets below (kEngageTicks, kStopUnloadTicks, ...) are
@@ -681,6 +683,7 @@ IRAM_ATTR void foc_task_fn(void *) {
       h_set = g_theta_src.load(std::memory_order_relaxed) ? enc_rpm_f : g_hall_drive.rpm_filtered();
       h_integ = 0.0f;
       h_time = 0.0f;
+      h_rest = false;
       pi_d.reset();
       pi_q.reset();
     }
@@ -825,6 +828,8 @@ IRAM_ATTR void foc_task_fn(void *) {
       th = esrc ? enc_theta_e : g_hall_drive.theta();
       idref = 0.0f;
       const int sub = g_hall_sub.load(std::memory_order_relaxed);
+      if (sub != HALL_SPEED)
+        h_rest = false;
       if (sub == HALL_TORQUE) {
         iqref = std::clamp(g_hall_iq.load(std::memory_order_relaxed), -amps, amps);
         // Track so a later switch to speed control enters bumplessly.
@@ -866,6 +871,37 @@ IRAM_ATTR void foc_task_fn(void *) {
           const float step = g_hall_ramp.load(std::memory_order_relaxed) * dt;
           h_set += std::clamp(target - h_set, -step, step);
           mstate = 'L';
+          // Rest hold. A zero setpoint on a stopped wheel kept whatever current
+          // the integrator held at the last hall edge (1-1.5 A at rest on the
+          // chair, 2026-10-29): the halls freeze, the error reads 0 and nothing
+          // unwinds it. So anchor the stop position and run the HOLD deadband:
+          // within one step the integrator bleeds to 0, past it the setpoint
+          // pulls back to the anchor. A slip means the slope needs that
+          // current, so the bleed stays off until the wheel is driven again.
+          if (!esrc && target == 0.0f && (h_rest || h_set == 0.0f)) {
+            const int steps_now = g_hall_poller.steps();
+            if (!h_rest && std::fabs(rpm_meas) < motor::kStoppedRpm) {
+              h_rest = true;
+              h_rest_slipped = false;
+              h_rest_steps = steps_now;
+            }
+            if (h_rest) {
+              const int perr = h_rest_steps - steps_now;
+              if (std::abs(perr) <= 1) {
+                h_set = 0.0f;
+                if (!h_rest_slipped)
+                  h_integ -= h_integ * std::min(1.0f, dt / 0.5f);
+              } else {
+                h_rest_slipped = true;
+                h_set = std::clamp(g_pos_kp.load(std::memory_order_relaxed) * (float)perr *
+                                       kHallStepRad * (180.0f / 3.14159265f),
+                                   -kStallMinSetRpm, kStallMinSetRpm);
+              }
+              mstate = 'Z';
+            }
+          } else {
+            h_rest = false;
+          }
         }
         g_hall_set_pub.store(h_set, std::memory_order_relaxed);
         const float serr = std::clamp(h_set - rpm_meas, -kHallErrClampRpm, kHallErrClampRpm);
