@@ -31,6 +31,10 @@ inline constexpr float kKt = 0.60f;
 inline constexpr float kMaxRpm = 60.0f;   // vel_limit = 0 and hard ceiling
 inline constexpr float kMaxAmps = 20.0f;  // torque_limit = 0 and hard ceiling (12 N.m)
 inline constexpr float kHoldAmps = 4.0f;  // HOLDING cap, ~2.4 N.m
+inline constexpr float kBootTargetAmps = 8.0f; // 'lim' at boot: the drive's real |iq| cap
+inline constexpr float kBootTripAmps = 15.0f;  // soft overcurrent trip at boot
+inline constexpr float kSpeedKpEnc = 0.05f;  // speed-loop Kp, A/rpm, encoder feedback
+inline constexpr float kSpeedKpHall = 0.25f; // speed-loop Kp, A/rpm, hall feedback
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: accel_limit 0 = step
 inline constexpr float kObsR = 0.323f;
 inline constexpr float kObsL = 336.0e-6f;
@@ -56,6 +60,16 @@ inline constexpr float kMaxRpm = 180.0f;  // vel_limit = 0. No-load figure at 48
 inline constexpr float kMaxAmps = 22.0f;  // torque_limit = 0. Datasheet peak.
 inline constexpr float kHoldAmps = 10.0f; // HOLDING cap: ~16 N.m; 15 A sustained is
                                           // the measured warm thermal limit.
+// 'lim' at boot. The ATOS hooks clamp every current to this, below kMaxAmps,
+// so it is the chair's real torque ceiling: 15 A (23 N.m), the warm thermal
+// limit. Trip 3 A above it for speed-loop overshoot; the DRV VDS OCP at boot
+// (~17-22 A cold, derates hot) is the hardware backstop.
+inline constexpr float kBootTargetAmps = 15.0f;
+inline constexpr float kBootTripAmps = 18.0f;
+// Speed-loop Kp (A/rpm), half the dyno/rover values: those made the chair
+// jitter (2026-10-29). Ki is unchanged, it supplies the breakaway current.
+inline constexpr float kSpeedKpEnc = 0.025f;
+inline constexpr float kSpeedKpHall = 0.125f;
 inline constexpr float kObsR = 0.51f;     // ohm/phase, 'rl' at 0.6/1.0/1.5 V steps
 inline constexpr float kObsL = 804.0e-6f; // H/phase (the sheet's 1.885 mH is ~2x phase)
 // Wb. Observer locks 0.045..0.052 (rpm_est = rpm_hall within 0.2 % from 60
@@ -83,6 +97,10 @@ inline constexpr float kKt = 0.60f;
 inline constexpr float kMaxRpm = 520.0f;
 inline constexpr float kMaxAmps = 30.0f;
 inline constexpr float kHoldAmps = 8.0f; // ~4.8 N.m; a bench number, no slope to hold
+inline constexpr float kBootTargetAmps = 8.0f; // 'lim' at boot; raise live for campaigns
+inline constexpr float kBootTripAmps = 15.0f;
+inline constexpr float kSpeedKpEnc = 0.05f;
+inline constexpr float kSpeedKpHall = 0.25f;
 inline constexpr float kObsR = 0.323f;
 inline constexpr float kObsL = 336.0e-6f;
 inline constexpr float kObsLambda = 0.026f; // measured
@@ -112,14 +130,15 @@ inline constexpr uint32_t kWatchdogMs = 200;
 // MotorTuning bounds (D37). The wire carries SI (A per rad/s, A per rad, Hz);
 // the loop runs in A/rpm. Anything a MotorTuning asks for is clamped into
 // these, so a typo on the MIB cannot make the speed loop unstable or the
-// tracking loop useless. The upper bounds are 8x the hall defaults
-// (0.25 A/rpm, 0.5 A/rpm-s); the PLL range is HallDrive's own.
-inline constexpr float kTuneKpMinRpm = 0.005f, kTuneKpMaxRpm = 2.0f; // A/rpm
+// tracking loop useless. The upper bounds are 8x the rover's hall defaults
+// (0.25 A/rpm, 0.5 A/rpm-s); the PLL range is HallDrive's own. Both gains go
+// to 0: switching a term off is a tune, not a typo (a negative on the wire).
+inline constexpr float kTuneKpMinRpm = 0.0f, kTuneKpMaxRpm = 2.0f; // A/rpm
 inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (2u << 16) | 0u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (3u << 16) | 2u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;

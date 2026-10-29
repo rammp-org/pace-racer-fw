@@ -100,8 +100,9 @@ static constexpr float kBusVoltage = motor::kBusVoltage;
 // 15 A: above the lying-conversion creep band so phantom trips stop; real
 // protection during bring-up is the scope + PSU current limit + DRV8353 VDS
 // OCP (17-22 A, verified firing — fault 0x0620).
-static constexpr float kTripAmps = 15.0f;
-static constexpr float kMaxTargetAmps = 8.0f; // console clamp at boot; raise live with 'lim'
+// Both now per motor profile (motor_params.hpp): hub20 boots at 15/18 A.
+static constexpr float kTripAmps = motor::kBootTripAmps;
+static constexpr float kMaxTargetAmps = motor::kBootTargetAmps; // raise live with 'lim'
 
 // High-power staircase ('lim', 'vl', 'vds', 'tl'): the escalation limits are
 // runtime commands so a run doesn't need a reflash, bounded by these hard
@@ -148,7 +149,7 @@ static constexpr uint32_t kCooldownTicks = 10000;  // 500 ms after revert/abort:
 // Outer speed loop, active only in CLOSED: rpm setpoint (ramped at the run's
 // ramp rate) -> iq command, clamped to ±run amps (amps = torque ceiling).
 // Few-Hz loop around a 400 rad/s current loop — decades of separation.
-static constexpr float kSpeedKp = 0.05f; // A per rpm (encoder feedback, dyno tune)
+static constexpr float kSpeedKp = motor::kSpeedKpEnc; // A per rpm (dyno tune; per profile)
 static constexpr float kSpeedKi = 0.2f;  // A per rpm-second
 // Hall feedback (2026-09-28). The planner streams setpoints and reads the
 // velocity back. P alone cannot start a loaded wheel: the current it can ask
@@ -156,7 +157,7 @@ static constexpr float kSpeedKi = 0.2f;  // A per rpm-second
 // rover loose. The integrator supplies the breakaway current; 2.0 wound
 // 20 A/s per 10 rpm and was too lively, 0.5 builds 5 A in a second. Needs
 // the 10 Hz tracking loop in hall_drive.hpp.
-static constexpr float kHallSpeedKp = 0.25f;
+static constexpr float kHallSpeedKp = motor::kSpeedKpHall; // per profile
 static constexpr float kHallSpeedKi = 0.5f;
 // Fail-safe: while the observer has authority, |rotor flux| leaving this band
 // around lambda_pm for ~40 ms means the estimate is lost — coast, don't fight.
@@ -705,8 +706,9 @@ IRAM_ATTR void foc_task_fn(void *) {
           const float step = g_spin_ramp_rate.load(std::memory_order_relaxed) / kRpmToOmegaE * dt;
           spd_set += std::clamp(rpm_t - spd_set, -step, step);
           const float serr = spd_set - rpm_est;
-          spd_integ = std::clamp(spd_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt,
-                                 -amps, amps);
+          const float ki = g_spd_ki.load(std::memory_order_relaxed);
+          // ki = 0 is "integrator off": hold it at 0, seed included.
+          spd_integ = ki > 0 ? std::clamp(spd_integ + ki * serr * dt, -amps, amps) : 0.0f;
           iq_cmd =
               std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + spd_integ, -amps, amps);
           iqref = iq_cmd;
@@ -854,8 +856,9 @@ IRAM_ATTR void foc_task_fn(void *) {
         }
         g_hall_set_pub.store(h_set, std::memory_order_relaxed);
         const float serr = std::clamp(h_set - rpm_meas, -kHallErrClampRpm, kHallErrClampRpm);
-        h_integ =
-            std::clamp(h_integ + g_spd_ki.load(std::memory_order_relaxed) * serr * dt, -amps, amps);
+        const float ki = g_spd_ki.load(std::memory_order_relaxed);
+        // ki = 0 is "integrator off": hold it at 0, the torque-mode seed included.
+        h_integ = ki > 0 ? std::clamp(h_integ + ki * serr * dt, -amps, amps) : 0.0f;
         iqref = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + h_integ, -amps, amps);
       }
       // Speed governor (see g_hall_vmax): torque in the direction of motion
@@ -1360,6 +1363,7 @@ extern "C" void app_main(void) {
       g_reset_pi.store(true);
     }
   };
+  hooks.max_amps = []() { return g_max_target.load(); };
   hooks.torque = [](float iq, float cap, float max_rpm) {
     g_hall_amps.store(std::clamp(cap, 0.0f, g_max_target.load()));
     g_hall_vmax.store(std::clamp(max_rpm, 0.0f, motor::kMaxRpm));
@@ -1427,7 +1431,7 @@ extern "C" void app_main(void) {
     return m;
   };
   // Outer-loop tune from the wire, already clamped by the supervisor. Live: the
-  // integrator keeps its state, only the slope changes. Marked custom so 'hv'
+  // integrator keeps its state, only the slope changes (ki = 0 zeroes it, in the loop). Marked custom so 'hv'
   // does not revert it; the flash write, if asked for, happens on the stream task.
   hooks.tuning = [](float kp_rpm, float ki_rpm, float pll_hz, bool persist) {
     g_spd_gains_custom.store(true);

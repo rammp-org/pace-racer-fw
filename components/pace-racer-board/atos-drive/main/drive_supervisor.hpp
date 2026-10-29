@@ -24,7 +24,9 @@
 // Tuning (D37): a MotorTuning with a NEW tuning_req_id is clamped to the
 // motor_params bounds and handed to Hooks::tuning on the next tick, live,
 // whatever the state; the integrator is not reset, so a gain change under way
-// is a change of slope, not a bump. The wire is SI (A per rad/s, A per rad,
+// is a change of slope, not a bump. The one exception: a negative speed_kp or
+// speed_ki sets that gain to exactly 0 (API v3), and with ki = 0 the loop holds
+// its integrator at 0, so turning the integrator off also drops what it held. The wire is SI (A per rad/s, A per rad,
 // Hz); the hooks and the loop are A/rpm. The values in force come back in
 // MotorState every tick, converted the other way.
 
@@ -93,6 +95,9 @@ struct Hooks {
   /// New outer-loop tune, already clamped, in the loop's units. `persist` =
   /// also save to NVS (the app defers the flash write to a task that may block).
   std::function<void(float kp_rpm, float ki_rpm, float pll_hz, bool persist)> tuning;
+  /// The app's live |iq| clamp ('lim' target), if lower than kMaxAmps; unset =
+  /// kMaxAmps. Read so torque_limit_eff reports the torque the drive can give.
+  std::function<float()> max_amps;
 };
 
 class Supervisor {
@@ -179,17 +184,19 @@ public:
       }
     }
 
-    // 2b. Tuning: a NEW counter value -> clamp, apply, ack. 0 keeps a field.
+    // 2b. Tuning: a NEW counter value -> clamp, apply, ack. Per gain: > 0 is
+    // clamped into range, < 0 sets exactly 0 (API v3), 0 or NaN keeps it.
     if (have_tune_ && tune_.tuning_req_id != tune_ack_) {
       tune_ack_ = tune_.tuning_req_id;
-      const float kp = tune_.speed_kp > 0
-                           ? std::clamp(tune_.speed_kp * motor::kRpmToRadS, motor::kTuneKpMinRpm,
-                                        motor::kTuneKpMaxRpm)
-                           : m.speed_kp_rpm;
-      const float ki = tune_.speed_ki > 0
-                           ? std::clamp(tune_.speed_ki * motor::kRpmToRadS, motor::kTuneKiMinRpm,
-                                        motor::kTuneKiMaxRpm)
-                           : m.speed_ki_rpm;
+      const auto gain = [](float wire, float lo, float hi, float now) {
+        if (wire < 0)
+          return 0.0f;
+        return wire > 0 ? std::clamp(wire * motor::kRpmToRadS, lo, hi) : now;
+      };
+      const float kp =
+          gain(tune_.speed_kp, motor::kTuneKpMinRpm, motor::kTuneKpMaxRpm, m.speed_kp_rpm);
+      const float ki =
+          gain(tune_.speed_ki, motor::kTuneKiMinRpm, motor::kTuneKiMaxRpm, m.speed_ki_rpm);
       const float hz = tune_.hall_pll_hz > 0 ? std::clamp(tune_.hall_pll_hz, motor::kTunePllMinHz,
                                                           motor::kTunePllMaxHz)
                                              : m.pll_hz;
@@ -353,7 +360,9 @@ private:
 
   float cap_amps_locked() {
     const float lim = have_cmd_ ? cmd_.torque_limit : 0.0f;
-    const float ceiling = motor::kMaxAmps * motor::kKt;
+    const float amps =
+        hooks_.max_amps ? std::min(motor::kMaxAmps, hooks_.max_amps()) : motor::kMaxAmps;
+    const float ceiling = amps * motor::kKt;
     const float eff = (lim > 0 ? std::min(lim, ceiling) : ceiling);
     state_.torque_limit_eff = eff;
     return eff / motor::kKt;
