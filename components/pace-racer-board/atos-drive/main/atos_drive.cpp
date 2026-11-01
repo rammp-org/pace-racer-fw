@@ -462,6 +462,10 @@ std::atomic<float> g_spd_ki{kSpeedKi};
 std::atomic<bool> g_tune_save_pending{false};
 // Escalation limits ('lim', 'vl', 'tl') — see the hard-ceiling constants.
 std::atomic<float> g_max_target{kMaxTargetAmps};
+// iq reference slew in HALL mode, A/ms, 0 = off ('isl'; per profile, D40).
+// Only a rising |iq| is slowed: every decrease toward zero, and every stop
+// path (STOPPING, idle, coast), passes at once.
+std::atomic<float> g_iq_slew{motor::kIqSlewAPerMs};
 std::atomic<float> g_vlim{kVoltageLimit};
 std::atomic<float> g_temp_limit{kTempLimitC};
 // FOC task -> stream/console handshakes (SPI can't run on the control task).
@@ -623,6 +627,7 @@ IRAM_ATTR void foc_task_fn(void *) {
     static uint32_t sp_align_left = 0, stop_ticks = 0;
     static bool stop_requested = false;
     static float h_set = 0.0f, h_integ = 0.0f, h_time = 0.0f; // HALL-mode speed loop
+    static float h_iq = 0.0f; // last HALL iq reference, the slew limit's state
     static bool h_rest = false, h_rest_slipped = false; // speed-loop rest hold (see HALL_SPEED)
     static int h_rest_steps = 0;
     const int mode = g_mode.load(std::memory_order_relaxed);
@@ -684,6 +689,7 @@ IRAM_ATTR void foc_task_fn(void *) {
       h_integ = 0.0f;
       h_time = 0.0f;
       h_rest = false;
+      h_iq = 0.0f; // the current PI restarts from 0 V below, so the slew starts at 0 A
       pi_d.reset();
       pi_q.reset();
     }
@@ -830,6 +836,7 @@ IRAM_ATTR void foc_task_fn(void *) {
       const int sub = g_hall_sub.load(std::memory_order_relaxed);
       if (sub != HALL_SPEED)
         h_rest = false;
+      float integ_prev = h_integ; // before this tick's integration, for the slew's anti-windup
       if (sub == HALL_TORQUE) {
         iqref = std::clamp(g_hall_iq.load(std::memory_order_relaxed), -amps, amps);
         // Track so a later switch to speed control enters bumplessly.
@@ -907,6 +914,7 @@ IRAM_ATTR void foc_task_fn(void *) {
         const float serr = std::clamp(h_set - rpm_meas, -kHallErrClampRpm, kHallErrClampRpm);
         const float ki = g_spd_ki.load(std::memory_order_relaxed);
         // ki = 0 is "integrator off": hold it at 0, the torque-mode seed included.
+        integ_prev = h_integ;
         h_integ = ki > 0 ? std::clamp(h_integ + ki * serr * dt, -amps, amps) : 0.0f;
         iqref = std::clamp(g_spd_kp.load(std::memory_order_relaxed) * serr + h_integ, -amps, amps);
       }
@@ -927,6 +935,22 @@ IRAM_ATTR void foc_task_fn(void *) {
           const float rev_cap = -amps * std::clamp((edge + band + rpm_meas) / band, -1.0f, 1.0f);
           iqref = std::clamp(iqref, rev_cap, fwd_cap);
         }
+      }
+      // iq slew (D40), last, so it covers every sub-mode and the governor's
+      // brake: a rising |iq| grows at most g_iq_slew A/ms; anything toward
+      // zero passes at once. Torque mode too: a slew is board protection, and
+      // a full-scale rise (15 ms at 2 A/ms) fits inside one MIB command period.
+      // Anti-windup for the speed/position loop: while the slew holds iq short
+      // of what the loop asked for, the integrator keeps last tick's value
+      // whenever this tick's step would push it further the same way.
+      {
+        const float slew = g_iq_slew.load(std::memory_order_relaxed);
+        const float want = iqref;
+        iqref = foc::slew_rising(want, h_iq, slew * 1000.0f * dt);
+        if (sub != HALL_TORQUE && iqref != want &&
+            (want > iqref ? h_integ > integ_prev : h_integ < integ_prev))
+          h_integ = integ_prev;
+        h_iq = iqref;
       }
       // Frame continuity for STOPPING (trip/'stop'/thermal all exit through it).
       sp_theta = th;
@@ -1883,13 +1907,14 @@ extern "C" void app_main(void) {
       "#  ENC:  ecal [<A>] | eofs <deg> | erun <A> <rpm> [ramp] | eiq <A>\n"
       "#        epos <deg> [maxrpm] [A] | pg <kp> [kd] | rl [V] [ms] | cap ... | capdump\n"
       "#  g <kp> <ki> | sg <kp> <ki> | mp/og ... | f | e 1\n"
-      "#  limits: lim <target_A> <trip_A> | vl <volts> | tl <degC> | vds <0-4>\n"
+      "#  limits: lim <target_A> <trip_A> | vl <volts> | isl <A/ms> | tl <degC> | vds <0-4>\n"
       "#gains kp={:.5g} ki={:.5g} | obs R={:.4g} L={:.4g}uH lam={:.5g} fg={:.4g} "
       "pll={:.4g}/{:.4g}\n"
-      "#lim target={:.1f}A trip={:.1f}A | vlim {:.1f} V | tlimit {:.0f} C\n",
+      "#lim target={:.1f}A trip={:.1f}A | vlim {:.1f} V | iq slew {:.1f} A/ms | tlimit {:.0f} C\n",
       kBusVoltage, g_kp.load(), g_ki.load(), g_obs_r.load(), g_obs_l.load() * 1e6f,
       g_obs_lambda.load(), g_obs_flux_gain.load(), g_obs_pll_kp.load(), g_obs_pll_ki.load(),
-      g_max_target.load(), g_sampler.trip_amps(), g_vlim.load(), g_temp_limit.load());
+      g_max_target.load(), g_sampler.trip_amps(), g_vlim.load(), g_iq_slew.load(),
+      g_temp_limit.load());
 
   // USB-Serial-JTAG stdin is non-blocking: getchar() returns EOF when idle.
   char line[128];
@@ -2616,6 +2641,19 @@ extern "C" void app_main(void) {
       a = std::clamp(a, 1.0f, kHardMaxVolts);
       g_vlim.store(a);
       fmt::print("#vlim {:.1f} V (hard ceiling {:.0f})\n", a, kHardMaxVolts);
+    } else if (sscanf(line, "isl %f", &a) == 1) {
+      // isl <A/ms> — HALL-mode iq slew (D40), rising |iq| only. Up to the hard
+      // ceiling; 0 = off only where the profile has none, so a console line
+      // cannot take the chair's limit away (a reflash can).
+      a = (a <= 0.0f && motor::kIqSlewAPerMs <= 0.0f) ? 0.0f
+                                                       : std::clamp(a, 0.1f, motor::kMaxIqSlewAPerMs);
+      g_iq_slew.store(a);
+      fmt::print("#iq slew {} (profile {:.1f}, hard ceiling {:.0f} A/ms)\n",
+                 a > 0.0f ? fmt::format("{:.2f} A/ms", a) : std::string("off"),
+                 motor::kIqSlewAPerMs, motor::kMaxIqSlewAPerMs);
+    } else if (strcmp(line, "isl") == 0) {
+      const float v = g_iq_slew.load();
+      fmt::print("#iq slew {}\n", v > 0.0f ? fmt::format("{:.2f} A/ms", v) : std::string("off"));
     } else if (sscanf(line, "tl %f", &a) == 1) {
       // tl <degC> — board thermal guard threshold (any LM75, while driving).
       a = std::clamp(a, 30.0f, 120.0f);

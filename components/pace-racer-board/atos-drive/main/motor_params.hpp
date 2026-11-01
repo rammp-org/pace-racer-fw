@@ -39,6 +39,7 @@ inline constexpr int kBootVdsLevel = 0;        // DRV8353 VDS 0.06 V, ~17-22 A c
 inline constexpr float kSpeedKpEnc = 0.05f;  // speed-loop Kp, A/rpm, encoder feedback
 inline constexpr float kSpeedKpHall = 0.25f; // speed-loop Kp, A/rpm, hall feedback
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: accel_limit 0 = step
+inline constexpr float kIqSlewAPerMs = 0.0f; // no iq slew limit (D40)
 inline constexpr float kObsR = 0.323f;
 inline constexpr float kObsL = 336.0e-6f;
 inline constexpr float kObsLambda = 0.026f;
@@ -103,7 +104,21 @@ inline constexpr float kDefaultKi = 86.0f;  // V/(A*s)
 // 'vl' boot default. Back-EMF is omega_e * lambda = 4.8 V at 30 rpm and 9.6 V
 // at 60, so the NineBot's 8 V clamp would stall the I/f spin outright.
 inline constexpr float kDefaultVoltLimit = 16.0f;
-inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: 0 = step (D24)
+// Acceleration ceiling (D35, D40): accel_limit 0 or larger means this. The MIB
+// streams VELOCITY at 20 Hz with accel_limit 0, so without it the reference
+// stepped every 50 ms. It must sit above what the planner asks for or the chair
+// lags the stick: the NORMAL worst case per wheel, 1.0 m/s^2 linear plus
+// 2.0 rad/s^2 yaw on the 0.558 m track, is 12.3 rad/s^2 on the 0.254 m wheel
+// (117 rpm/s). 150 rpm/s (15.7 rad/s^2, 2.0 m/s^2 at the rim) is 1.28x that:
+// each 50 ms planner step is reached inside its period, and 0 to 180 rpm takes
+// 1.2 s. SAFE_STOP keeps kSafeStopRampRpmS (200 rpm/s): a stop may be firmer.
+inline constexpr float kMaxAccelRpmS = 150.0f;
+// iq reference slew, A/ms, rising |iq| only (D40). The current loop is first
+// order at 169 rad/s (tau 5.9 ms): a full 30 A step starts at 5 A/ms and lands
+// in ~18 ms. 2 A/ms turns the step into a ramp the loop follows (0 to 30 A in
+// 15 ms, ~2.5 tau; L di/dt = 1.6 V of the 16 V 'vl'), 0.1 A per 20 kHz tick,
+// and stays far faster than the few-Hz speed loop and the 50 ms MIB period.
+inline constexpr float kIqSlewAPerMs = 2.0f;
 #else
 // NineBot S on the dyno: 15 pp, Kt 0.60 N.m/A measured (report fig 5), 520 rpm
 // speed clamp from the 1 kW campaign, 30 A hard target ceiling.
@@ -128,7 +143,12 @@ inline constexpr float kDefaultKp = 0.0568f; // V/A, tuned on the dyno
 inline constexpr float kDefaultKi = 54.5f;   // V/(A*s)
 inline constexpr float kDefaultVoltLimit = 8.0f;
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: 0 = step (D24)
+inline constexpr float kIqSlewAPerMs = 0.0f; // no iq slew limit (D40)
 #endif
+
+// 'isl' hard ceiling, A/ms. Above ~5 A/ms (169 rad/s x 30 A) the slew no longer
+// shapes anything the current loop would not do on its own.
+inline constexpr float kMaxIqSlewAPerMs = 10.0f;
 
 // 'vl' hard ceiling: the most phase voltage SVPWM can synthesize from the bus,
 // with margin. Derived so it follows kBusVoltage instead of being a stale
@@ -161,7 +181,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 0u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 1u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;

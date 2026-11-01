@@ -77,4 +77,16 @@ inline Duties svpwm(AlphaBeta v, float vbus, float min_duty, float max_duty) {
   return {to_duty(ua), to_duty(ub), to_duty(uc)};
 }
 
+/// Slew limit on a current reference that only slows a RISING magnitude:
+/// moving toward zero is immediate, and a sign change drops to zero at once
+/// and rises from there. `prev` is last tick's output, `step` the most |iq|
+/// may grow this tick (A); step <= 0 = no limit.
+inline float slew_rising(float want, float prev, float step) {
+  if (step <= 0.0f)
+    return want;
+  if (want >= 0.0f)
+    return std::min(want, std::max(prev, 0.0f) + step);
+  return std::max(want, std::min(prev, 0.0f) - step);
+}
+
 } // namespace foc

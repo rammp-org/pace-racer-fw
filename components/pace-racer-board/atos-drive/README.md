@@ -16,6 +16,7 @@ encoder commutation, guards and console are the parent's. Added:
 | `main/hall_drive.hpp` | hall commutation; the speed for the loop comes from a 5 Hz tracking loop on the step count |
 | `main/atos_drive.cpp` | the parent app plus hooks, the supervisor task, feedback guards, and the ATOS console commands |
 | `tests/host_mib/` | host-side MIB stand-in: a native RTPS participant that streams commands and prints state |
+| `tests/host_supervisor/` | host test of the supervisor's accel ceiling and the iq slew, once per profile (`cmake -S . -B build && cmake --build build && ctest --test-dir build`) |
 | `tools/provision.py` | plug in a board over USB: flash, set axis and feedback, hall-calibrate, report |
 
 ## Build
@@ -107,7 +108,7 @@ The MIB, or `tests/host_mib/mib_stub`, streams `MotorCommand` at 10..50 Hz.
 
 Limits: a `torque_limit` / `vel_limit` of 0 is the ceiling in `motor_params.hpp`.
 `accel_limit` 0 is a step, unless the profile has an acceleration ceiling
-(flatbot: 12.6 rad/s^2), in which case 0 and anything larger mean the ceiling.
+(hub20: 150 rpm/s, 15.7 rad/s^2), in which case 0 and anything larger mean the ceiling.
 `vel_limit` holds in every mode: in TORQUE a governor rolls torque off across
 the top 20 % of the limit. The board reports the values in force in
 `MotorState.*_limit_eff`.
@@ -119,6 +120,14 @@ and coast before the supervisor names them. Verified 2026-09-25 on the bench:
 a pulled hall line faulted within one sample; a hand-held wheel faulted about
 2 s after the grab at 5.6 A peak; a hall line left out gave a legal-but-wrong
 pattern that the STALL guard caught in 3 s.
+
+Hub20 also slews the iq reference (D40, `kIqSlewAPerMs`, 2 A/ms): a rising
+|iq| grows at most that fast in every hall sub-mode, torque included; a
+decrease toward zero is never delayed, and the stop paths (trip unload,
+ESTOP, thermal) bypass it. While the slew holds iq back, the speed
+integrator does not wind up. `isl <A/ms>` changes it live, up to 10 A/ms;
+`isl 0` turns it off only on profiles without one. Flatbot and ninebot have
+no slew and no accel ceiling.
 
 `vel_limit` is a hard cap in every mode, not just a setpoint clamp: above it
 the drive rolls torque off and then brakes, so a wound-up integrator released
@@ -216,6 +225,6 @@ loop is tracking, 0 outside a speed loop. Verified on drive_left: `hv 20` at
 - Two boards on one network; induced VDS/thermal/sampler faults; any load.
 - The hub motor: quadrature encoder source (PCNT) with hall-edge sync, R/L
   measurement, current-loop retune. `ATOS_MOTOR=hub20` only swaps constants.
-- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic, 0.3.0 with true-zero gains, 0.3.2 with the hub20 15 A boot cap and halved speed Kp, 0.4.0 with the hub20 30 A peak budget, VDS 0.20 V and 50 Hz MotorState); no git stamp yet.
+- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic, 0.3.0 with true-zero gains, 0.3.2 with the hub20 15 A boot cap and halved speed Kp, 0.4.0 with the hub20 30 A peak budget, VDS 0.20 V and 50 Hz MotorState, 0.4.1 with the hub20 150 rpm/s accel ceiling and 2 A/ms iq slew); no git stamp yet.
 - espp on the board keeps reader proxies of dead host participants (one extra
   copy of every sample per MIB restart). Needs a fix in espp itself.
