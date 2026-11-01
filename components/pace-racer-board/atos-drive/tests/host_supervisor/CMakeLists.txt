@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 project(atos_drive_host_supervisor CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-# The supervisor and the FOC math helpers, natively, once per motor profile.
+# The supervisor, the FOC math helpers and the soft-trip rule, natively, once
+# per motor profile.
 # Header-only on both sides: no espp, no IDF, esp_timer is a stub clock.
 #   cmake -S . -B build && cmake --build build && ctest --test-dir build
 set(MAIN "${CMAKE_CURRENT_SOURCE_DIR}/../../main")
@@ -20,4 +21,13 @@ foreach(profile ninebot flatbot hub20)
     target_compile_definitions(test_supervisor_${profile} PRIVATE ATOS_MOTOR_FLATBOT)
   endif()
   add_test(NAME supervisor_${profile} COMMAND test_supervisor_${profile})
+
+  add_executable(test_trip_gate_${profile} test_trip_gate.cpp)
+  target_include_directories(test_trip_gate_${profile} PRIVATE ${MAIN})
+  if(profile STREQUAL "hub20")
+    target_compile_definitions(test_trip_gate_${profile} PRIVATE ATOS_MOTOR_HUB20)
+  elseif(profile STREQUAL "flatbot")
+    target_compile_definitions(test_trip_gate_${profile} PRIVATE ATOS_MOTOR_FLATBOT)
+  endif()
+  add_test(NAME trip_gate_${profile} COMMAND test_trip_gate_${profile})
 endforeach()

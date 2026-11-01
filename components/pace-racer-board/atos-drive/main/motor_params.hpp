@@ -40,6 +40,10 @@ inline constexpr float kSpeedKpEnc = 0.05f;  // speed-loop Kp, A/rpm, encoder fe
 inline constexpr float kSpeedKpHall = 0.25f; // speed-loop Kp, A/rpm, hall feedback
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: accel_limit 0 = step
 inline constexpr float kIqSlewAPerMs = 0.0f; // no iq slew limit (D40)
+// Soft trip rule (D41): 3 consecutive samples over kBootTripAmps, no fast path.
+inline constexpr int kTripSamples = 3;
+inline constexpr bool kTripLeaky = false;
+inline constexpr int kTripFastConversions = 0;
 inline constexpr float kObsR = 0.323f;
 inline constexpr float kObsL = 336.0e-6f;
 inline constexpr float kObsLambda = 0.026f;
@@ -119,6 +123,18 @@ inline constexpr float kMaxAccelRpmS = 150.0f;
 // 15 ms, ~2.5 tau; L di/dt = 1.6 V of the 16 V 'vl'), 0.1 A per 20 kHz tick,
 // and stays far faster than the few-Hz speed loop and the 50 ms MIB period.
 inline constexpr float kIqSlewAPerMs = 2.0f;
+// Soft trip rule (D41). The chair tripped (2026-11-01) at ~25 A real on a
+// reconstructed phase C of -35 A: at high modulation the highest-duty phase's
+// low-side window is a few us, an ISR that enters late converts outside it and
+// reads ~0 A, and the slew-gate filter latched onto those reads. Three
+// consecutive samples (150 us) is too short to ride that out. So: a net 1 ms
+// over the trip (leaky count, 20 samples at 20 kHz, +1 over / -1 clean), or
+// at once on 4 consecutive conversions of one measured phase past the
+// plausibility gate (trip + 3 A, 400 us: each phase converts every other
+// tick). The DRV8353 VDS OCP at 0.20 V stays the hardware backstop.
+inline constexpr int kTripSamples = 20;
+inline constexpr bool kTripLeaky = true;
+inline constexpr int kTripFastConversions = 4;
 #else
 // NineBot S on the dyno: 15 pp, Kt 0.60 N.m/A measured (report fig 5), 520 rpm
 // speed clamp from the 1 kW campaign, 30 A hard target ceiling.
@@ -144,6 +160,9 @@ inline constexpr float kDefaultKi = 54.5f;   // V/(A*s)
 inline constexpr float kDefaultVoltLimit = 8.0f;
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: 0 = step (D24)
 inline constexpr float kIqSlewAPerMs = 0.0f; // no iq slew limit (D40)
+inline constexpr int kTripSamples = 3; // soft trip: 3 consecutive samples, no fast path (D41)
+inline constexpr bool kTripLeaky = false;
+inline constexpr int kTripFastConversions = 0;
 #endif
 
 // 'isl' hard ceiling, A/ms. Above ~5 A/ms (169 rad/s x 30 A) the slew no longer
@@ -181,7 +200,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 1u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 2u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;

@@ -1330,6 +1330,9 @@ extern "C" void app_main(void) {
                        .phase_channels = kPhaseChannels,
                        .mv_to_a = kMvToA,
                        .trip_amps = kTripAmps,
+                       .trip_rule = {.samples = motor::kTripSamples,
+                                     .leaky = motor::kTripLeaky,
+                                     .fast_conversions = motor::kTripFastConversions},
                        .scope_pin = kScopePin},
                       logger)) {
     return;
@@ -1638,13 +1641,20 @@ extern "C" void app_main(void) {
       // (closed-loop unload -> Hi-Z coast). No brake, no disarm, no frame jump.
       // Everything needed to call glitch-vs-real: which limit fired, filtered
       // vs raw at the trip tick, and the filter counters since arm.
+      // Which rule fired (D41): the sustained count on the filtered currents,
+      // or the fast path on a measured phase's raw conversions.
+      const std::string rule =
+          ti.fast ? fmt::format(" (fast: raw past {:.0f}A for {} conversions)",
+                                g_sampler.plausible_amps(), motor::kTripFastConversions)
+                  : fmt::format(" ({} {} samples)", motor::kTripSamples,
+                                motor::kTripLeaky ? "net" : "consecutive");
       fmt::print(
-          "! soft trip >{:.0f}A on {}{} — unloading to 0 A, then Hi-Z coast "
+          "! soft trip >{:.0f}A on {}{}{} — unloading to 0 A, then Hi-Z coast "
           "(any drive command re-engages)\n"
           "!  filtered A={:+.1f} B={:+.1f} C={:+.1f}  raw {}={:+.1f}\n"
           "!  since arm: imp={}/{}/{} rej={}/{}/{} esc={}/{}/{} max|A|={:.0f}/{:.0f}/{:.0f}\n",
           g_sampler.trip_amps(), "ABC"[ti.trip_phase], ti.trip_phase == ti.recon ? " (recon)" : "",
-          ti.amps[0], ti.amps[1], ti.amps[2], "ABC"[ti.raw_phase], ti.raw_amps, st.imp[0],
+          rule, ti.amps[0], ti.amps[1], ti.amps[2], "ABC"[ti.raw_phase], ti.raw_amps, st.imp[0],
           st.imp[1], st.imp[2], st.rej[0], st.rej[1], st.rej[2], st.esc[0], st.esc[1], st.esc[2],
           st.max_amps[0], st.max_amps[1], st.max_amps[2]);
       g_sampler.dump_summary();

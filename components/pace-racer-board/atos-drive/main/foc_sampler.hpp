@@ -47,6 +47,7 @@
 #include "adc_fast.h"
 #include "logger.hpp"
 #include "pace-racer-board.hpp"
+#include "trip_gate.hpp"
 
 using namespace std::chrono_literals;
 
@@ -92,6 +93,7 @@ public:
     std::array<adc_channel_t, 3> phase_channels;
     float mv_to_a;                     ///< amps per millivolt at the configured CSA gain
     float trip_amps;                   ///< software overcurrent trip (per phase)
+    foc::TripRule trip_rule{};         ///< when the trip fires (D41); default 3 consecutive
     gpio_num_t scope_pin{GPIO_NUM_NC}; ///< toggled around the in-ISR conversions
   };
 
@@ -203,6 +205,8 @@ public:
   void enable() {
     have_last_entry_ = false; // the gap across a disable is meaningless
     late_run_ = 0;
+    over_count_ = 0;
+    imp_run_[0] = imp_run_[1] = imp_run_[2] = 0;
     clear_filter_counters(); // trip reports read "since arm"
     enabled_.store(true, std::memory_order_release);
   }
@@ -285,6 +289,8 @@ public:
                                 std::memory_order_relaxed);
   }
   float trip_amps() const { return trip_amps_.load(std::memory_order_relaxed); }
+  /// The plausibility gate: readings past it are held, and the fast trip counts them.
+  float plausible_amps() const { return trip_amps() + kPlausibleMarginAmps; }
 
   // Diagnostic capture: dump the ring of the last kCapN samples (pre-median raw
   // -> amps, and ISR elapsed us), oldest first, then re-arm. Freezes it first so
@@ -395,6 +401,7 @@ public:
     int recon;      // which phase was reconstructed from ia+ib+ic=0
     float raw_amps; // the trip tick's PRE-filter conversion...
     int raw_phase;  // ...and which phase it sampled
+    bool fast;      // fast path: a measured phase's raw past the plausibility gate
   };
   TripInfo trip_info() const {
     TripInfo ti{};
@@ -406,6 +413,7 @@ public:
     ti.trip_phase = trip_ph_.load();
     ti.raw_amps = (float)trip_raw_.load() * amps_per_count_;
     ti.raw_phase = trip_raw_ph_.load();
+    ti.fast = trip_fast_.load();
     return ti;
   }
 
@@ -548,7 +556,6 @@ private:
   // duties, which must not stand indefinitely. 40 ticks is well past any
   // bus-traffic burst and still bounds the condition to a few ms at 20 kHz.
   static constexpr int kLateStormStrikes = 40;
-  static constexpr int kTripConsecutive = 3;
   static constexpr float kMaxZeroNoiseAmps = 0.5f;
   // A closed current loop moves real current ~0.1 A/period; a jump past this is a
   // glitched conversion. Well above any real per-period change, well below the
@@ -668,7 +675,9 @@ private:
     int jump = raw - h[2];
     if (jump < 0)
       jump = -jump;
-    if (dev > max_plausible_counts_.load(std::memory_order_relaxed)) {
+    const bool implausible = dev > max_plausible_counts_.load(std::memory_order_relaxed);
+    imp_run_[phase] = foc::implausible_run_step(imp_run_[phase], implausible); // fast trip path
+    if (implausible) {
       imp_count_[phase].fetch_add(1, std::memory_order_relaxed);
       raw = h[2]; // non-physical amplitude -> hold, no escape credit
     } else if (jump > max_jump_counts_) {
@@ -887,8 +896,11 @@ private:
     if (upd_y)
       raw_y_.store(median_filter(py, new_y), std::memory_order_relaxed);
 
-    // Integer overcurrent trip. Consecutive samples only — a lone over-limit
-    // sample is far more likely a conversion outside the window than a real fault.
+    // Integer overcurrent trip, per cfg_.trip_rule (trip_gate.hpp, D41). A lone
+    // over-limit sample is far more likely a conversion outside the window than
+    // a real fault: the sustained check needs `samples` of them (consecutive,
+    // or net with the leaky count; ISR samples, 50 us each at 'n 1'), the fast
+    // check a run of implausible raw conversions on one measured phase.
     const int dx = raw_x_.load(std::memory_order_relaxed) - raw_zero_[px];
     const int dy = raw_y_.load(std::memory_order_relaxed) - raw_zero_[py];
     // Reconstructed third phase: iz = -(ix + iy), so its count delta is -(dx+dy).
@@ -897,9 +909,14 @@ private:
     const int dz = -(dx + dy);
     const int lim = trip_counts_.load(std::memory_order_relaxed);
     const bool over = dx > lim || dx < -lim || dy > lim || dy < -lim || dz > lim || dz < -lim;
-    over_count_ = over ? over_count_ + 1 : 0;
-    if (over_count_ >= kTripConsecutive) {
+    const foc::TripRule &rule = cfg_.trip_rule;
+    over_count_ = foc::trip_count_step(over_count_, over, rule.leaky);
+    const bool fast = rule.fast_conversions > 0 && (imp_run_[px] >= rule.fast_conversions ||
+                                                    imp_run_[py] >= rule.fast_conversions);
+    const int fast_ph = imp_run_[px] >= rule.fast_conversions ? px : py;
+    if (over_count_ >= rule.samples || fast) {
       over_count_ = 0;
+      imp_run_[0] = imp_run_[1] = imp_run_[2] = 0;
       // SOFT trip: record and signal, but do NOT brake or disable. The old
       // comparator=0 brake shorted the back-EMF at speed (~30 A bang) — the
       // "violent stop" that then fired the hardware VDS OCP, making phantom
@@ -914,11 +931,14 @@ private:
       // Which limit fired (the reconstructed phase is a common culprit), and
       // this tick's pre-filter conversion for a filtered-vs-raw comparison.
       int tp = 3 - px - py;
-      if (dx > lim || dx < -lim)
+      if (fast)
+        tp = fast_ph;
+      else if (dx > lim || dx < -lim)
         tp = px;
       else if (dy > lim || dy < -lim)
         tp = py;
       trip_ph_.store(tp, std::memory_order_relaxed);
+      trip_fast_.store(fast, std::memory_order_relaxed);
       trip_raw_.store(cap_raw - raw_zero_[cap_ph], std::memory_order_relaxed);
       trip_raw_ph_.store(cap_ph, std::memory_order_relaxed);
       cap_frozen_.store(true, std::memory_order_relaxed); // keep the run-up to the trip
@@ -952,6 +972,7 @@ private:
   // accepted sample.
   int median_hist_[3][3] = {};
   int reject_run_[3] = {0, 0, 0};            // consecutive slew-limit rejections per phase
+  int imp_run_[3] = {0, 0, 0};               // consecutive implausible conversions (fast trip)
   int max_jump_counts_{0};                   // slew-limit threshold in raw counts
   std::atomic<int> max_plausible_counts_{0}; // plausibility threshold, raw counts (vs zero)
   int dbl_dis_counts_{0};                    // pair-disagreement threshold in raw counts
@@ -980,6 +1001,7 @@ private:
   std::atomic<int> trip_ph_{0};     // phase whose limit fired (incl. reconstructed)
   std::atomic<int> trip_raw_{0};    // trip tick's pre-filter conversion, counts
   std::atomic<int> trip_raw_ph_{0}; // phase of that conversion
+  std::atomic<bool> trip_fast_{false}; // the fast path fired, not the sustained one
 
   // ISR-only scratch (single writer, no atomics needed; pending_ph_ is also
   // written by init/prime, but only while the sampler is disabled; late_run_
@@ -987,7 +1009,7 @@ private:
   uint32_t skip_{0};
   int pending_ph_{0}; // phase whose channel is currently selected (settled)
   int late_run_{0};   // consecutive late samples -> kLateStormStrikes fault
-  int over_count_{0};
+  int over_count_{0}; // sustained trip count, see trip_gate.hpp
   uint32_t last_entry_{0};
   bool have_last_entry_{false};
 
