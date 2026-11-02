@@ -206,7 +206,7 @@ public:
     have_last_entry_ = false; // the gap across a disable is meaningless
     late_run_ = 0;
     over_count_ = 0;
-    imp_run_[0] = imp_run_[1] = imp_run_[2] = 0;
+    rail_run_[0] = rail_run_[1] = rail_run_[2] = 0;
     clear_filter_counters(); // trip reports read "since arm"
     enabled_.store(true, std::memory_order_release);
   }
@@ -289,8 +289,6 @@ public:
                                 std::memory_order_relaxed);
   }
   float trip_amps() const { return trip_amps_.load(std::memory_order_relaxed); }
-  /// The plausibility gate: readings past it are held, and the fast trip counts them.
-  float plausible_amps() const { return trip_amps() + kPlausibleMarginAmps; }
 
   // Diagnostic capture: dump the ring of the last kCapN samples (pre-median raw
   // -> amps, and ISR elapsed us), oldest first, then re-arm. Freezes it first so
@@ -401,7 +399,7 @@ public:
     int recon;      // which phase was reconstructed from ia+ib+ic=0
     float raw_amps; // the trip tick's PRE-filter conversion...
     int raw_phase;  // ...and which phase it sampled
-    bool fast;      // fast path: a measured phase's raw past the plausibility gate
+    bool fast;      // fast path: a measured phase's raw conversion railed
   };
   TripInfo trip_info() const {
     TripInfo ti{};
@@ -570,6 +568,10 @@ private:
   // visible to it. Re-derived on every set_trip_amps(), 18 A at the 15 A boot
   // trip.
   static constexpr float kPlausibleMarginAmps = 3.0f;
+  // ADC full scale (12-bit raw) and how close to either end counts as railed
+  // for the fast trip (~0.2 A at GAIN_20).
+  static constexpr int kAdcMaxCount = 4095;
+  static constexpr int kRailMarginCounts = 8;
   // Double-sample diagnostic: twins differing by more than this disagree.
   static constexpr float kDblDisagreeAmps = 3.0f;
   // Pair only when the entry gap is within ~1.5 us of nominal — a later entry
@@ -675,9 +677,11 @@ private:
     int jump = raw - h[2];
     if (jump < 0)
       jump = -jump;
-    const bool implausible = dev > max_plausible_counts_.load(std::memory_order_relaxed);
-    imp_run_[phase] = foc::implausible_run_step(imp_run_[phase], implausible); // fast trip path
-    if (implausible) {
+    // Fast trip path (D43): consecutive conversions at the ADC's limits, which
+    // is what a real short reads; noise near the gate does not repeat there.
+    const bool railed = raw <= kRailMarginCounts || raw >= kAdcMaxCount - kRailMarginCounts;
+    rail_run_[phase] = foc::run_step(rail_run_[phase], railed);
+    if (dev > max_plausible_counts_.load(std::memory_order_relaxed)) {
       imp_count_[phase].fetch_add(1, std::memory_order_relaxed);
       raw = h[2]; // non-physical amplitude -> hold, no escape credit
     } else if (jump > max_jump_counts_) {
@@ -911,12 +915,12 @@ private:
     const bool over = dx > lim || dx < -lim || dy > lim || dy < -lim || dz > lim || dz < -lim;
     const foc::TripRule &rule = cfg_.trip_rule;
     over_count_ = foc::trip_count_step(over_count_, over, rule.leaky);
-    const bool fast = rule.fast_conversions > 0 && (imp_run_[px] >= rule.fast_conversions ||
-                                                    imp_run_[py] >= rule.fast_conversions);
-    const int fast_ph = imp_run_[px] >= rule.fast_conversions ? px : py;
+    const bool fast = rule.fast_conversions > 0 && (rail_run_[px] >= rule.fast_conversions ||
+                                                    rail_run_[py] >= rule.fast_conversions);
+    const int fast_ph = rail_run_[px] >= rule.fast_conversions ? px : py;
     if (over_count_ >= rule.samples || fast) {
       over_count_ = 0;
-      imp_run_[0] = imp_run_[1] = imp_run_[2] = 0;
+      rail_run_[0] = rail_run_[1] = rail_run_[2] = 0;
       // SOFT trip: record and signal, but do NOT brake or disable. The old
       // comparator=0 brake shorted the back-EMF at speed (~30 A bang) — the
       // "violent stop" that then fired the hardware VDS OCP, making phantom
@@ -972,7 +976,7 @@ private:
   // accepted sample.
   int median_hist_[3][3] = {};
   int reject_run_[3] = {0, 0, 0};            // consecutive slew-limit rejections per phase
-  int imp_run_[3] = {0, 0, 0};               // consecutive implausible conversions (fast trip)
+  int rail_run_[3] = {0, 0, 0};              // consecutive railed conversions (fast trip)
   int max_jump_counts_{0};                   // slew-limit threshold in raw counts
   std::atomic<int> max_plausible_counts_{0}; // plausibility threshold, raw counts (vs zero)
   int dbl_dis_counts_{0};                    // pair-disagreement threshold in raw counts

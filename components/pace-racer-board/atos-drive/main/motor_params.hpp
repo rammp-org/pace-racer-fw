@@ -133,12 +133,14 @@ inline constexpr float kIqSlewAPerMs = 2.0f;
 // reads ~0 A, and the slew-gate filter latched onto those reads. Three
 // consecutive samples (150 us) is too short to ride that out. So: a net 1 ms
 // over the trip (leaky count, 20 samples at 20 kHz, +1 over / -1 clean), or
-// at once on 4 consecutive conversions of one measured phase past the
-// plausibility gate (trip + 3 A, 400 us: each phase converts every other
-// tick). The DRV8353 VDS OCP (0.30 V, D42) stays the hardware backstop.
+// at once on 10 consecutive conversions of one measured phase with the ADC
+// railed (1 ms: each phase converts every other tick; D43, was 4 past the
+// 38 A gate, which noise at a real ~33 A matched). The rail is ~+-40 A at
+// GAIN_20 ('#range' at boot prints each board's). The DRV8353 VDS OCP
+// (0.30 V, D42) stays the fast hardware backstop.
 inline constexpr int kTripSamples = 20;
 inline constexpr bool kTripLeaky = true;
-inline constexpr int kTripFastConversions = 4;
+inline constexpr int kTripFastConversions = 10;
 #else
 // NineBot S on the dyno: 15 pp, Kt 0.60 N.m/A measured (report fig 5), 520 rpm
 // speed clamp from the 1 kW campaign, 30 A hard target ceiling.
@@ -204,7 +206,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 3u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 4u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;

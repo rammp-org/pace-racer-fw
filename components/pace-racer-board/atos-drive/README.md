@@ -16,7 +16,7 @@ encoder commutation, guards and console are the parent's. Added:
 | `main/hall_drive.hpp` | hall commutation; the speed for the loop comes from a 5 Hz tracking loop on the step count |
 | `main/atos_drive.cpp` | the parent app plus hooks, the supervisor task, feedback guards, and the ATOS console commands |
 | `tests/host_mib/` | host-side MIB stand-in: a native RTPS participant that streams commands and prints state |
-| `tests/host_supervisor/` | host tests of the supervisor's accel ceiling, the iq slew and the soft-trip rule, once per profile (`cmake -S . -B build && cmake --build build && ctest --test-dir build`) |
+| `tests/host_supervisor/` | host tests of the supervisor's accel ceiling, the iq slew, the soft-trip rule and the rest hold (`cmake -S . -B build && cmake --build build && ctest --test-dir build`) |
 | `tools/provision.py` | plug in a board over USB: flash, set axis and feedback, hall-calibrate, report |
 
 ## Build
@@ -116,7 +116,7 @@ the top 20 % of the limit. The board reports the values in force in
 The software overcurrent trip is per profile (D41, `main/trip_gate.hpp`).
 Hub20 trips when any phase's filtered current is over 35 A for a net 1 ms
 (+1 per 50 us sample over, -1 per clean one), or at once when a measured
-phase reads past the 38 A plausibility gate on 4 consecutive conversions.
+phase reads the ADC railed (~40 A) on 10 consecutive conversions (D43).
 Flatbot and ninebot keep 3 consecutive samples. The trip report names the
 rule that fired.
 
@@ -232,6 +232,6 @@ loop is tracking, 0 outside a speed loop. Verified on drive_left: `hv 20` at
 - Two boards on one network; induced VDS/thermal/sampler faults; any load.
 - The hub motor: quadrature encoder source (PCNT) with hall-edge sync, R/L
   measurement, current-loop retune. `ATOS_MOTOR=hub20` only swaps constants.
-- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic, 0.3.0 with true-zero gains, 0.3.2 with the hub20 15 A boot cap and halved speed Kp, 0.4.0 with the hub20 30 A peak budget, VDS 0.20 V and 50 Hz MotorState, 0.4.1 with the hub20 150 rpm/s accel ceiling and 2 A/ms iq slew, 0.4.2 with the hub20 1 ms soft trip, 0.4.3 with hub20 VDS 0.30 V); no git stamp yet.
+- `fw_version` is a constant in `motor_params.hpp` (0.2.0 with the tuning topic, 0.3.0 with true-zero gains, 0.3.2 with the hub20 15 A boot cap and halved speed Kp, 0.4.0 with the hub20 30 A peak budget, VDS 0.20 V and 50 Hz MotorState, 0.4.1 with the hub20 150 rpm/s accel ceiling and 2 A/ms iq slew, 0.4.2 with the hub20 1 ms soft trip, 0.4.3 with hub20 VDS 0.30 V, 0.4.4 with the rest-hold settle/pull-back fix and the railed fast trip); no git stamp yet.
 - espp on the board keeps reader proxies of dead host participants (one extra
   copy of every sample per MIB restart). Needs a fix in espp itself.

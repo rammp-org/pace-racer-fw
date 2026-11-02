@@ -80,6 +80,7 @@
 #include "axis_config.hpp"
 #include "drive_supervisor.hpp"
 #include "motor_params.hpp"
+#include "rest_hold.hpp"
 
 #include "demo_link.hpp" // native USB: telemetry, console, OTA, reset, core dump
 #include "eth_link.hpp"  // the same service stream over TCP: OTA, console, reset
@@ -514,6 +515,10 @@ std::atomic<bool> g_ev_stall{false};      // no motion at the torque cap for 0.5
 static constexpr int kHallIllegalTicks = 1000; // 50 ms of 000/111
 static constexpr int kStallTicks = 10000;      // 0.5 s at the cap with no motion
 static constexpr float kStallMinSetRpm = 10.0f; // below this a stopped rotor is the plan
+// Speed-loop rest hold (rest_hold.hpp, D43): anchor once no hall step has come
+// for this long, and pull back this many rpm per step beyond the deadband.
+static constexpr float kRestSettleS = 0.25f;
+static constexpr float kRestPullRpmPerStep = 1.0f;
 std::atomic<bool> g_ev_thermal{false};
 std::atomic<bool> g_ev_overrun{false};
 std::atomic<bool> g_ev_drv_fault{false};
@@ -885,24 +890,25 @@ IRAM_ATTR void foc_task_fn(void *) {
           // within one step the integrator bleeds to 0, past it the setpoint
           // pulls back to the anchor. A slip means the slope needs that
           // current, so the bleed stays off until the wheel is driven again.
+          // D43: anchor only after kRestSettleS without a hall step (the speed
+          // loop's overshoot through zero is not a slip), and pull back in
+          // proportion to the steps beyond the deadband, not a 10 rpm kick.
           if (!esrc && target == 0.0f && (h_rest || h_set == 0.0f)) {
             const int steps_now = g_hall_poller.steps();
-            if (!h_rest && std::fabs(rpm_meas) < motor::kStoppedRpm) {
+            if (!h_rest && foc::rest_settled(rpm_meas, g_hall_poller.since_s(),
+                                             motor::kStoppedRpm, kRestSettleS)) {
               h_rest = true;
               h_rest_slipped = false;
               h_rest_steps = steps_now;
             }
             if (h_rest) {
               const int perr = h_rest_steps - steps_now;
+              h_set = foc::rest_pullback_rpm(perr, kRestPullRpmPerStep, kStallMinSetRpm);
               if (std::abs(perr) <= 1) {
-                h_set = 0.0f;
                 if (!h_rest_slipped)
                   h_integ -= h_integ * std::min(1.0f, dt / 0.5f);
               } else {
                 h_rest_slipped = true;
-                h_set = std::clamp(g_pos_kp.load(std::memory_order_relaxed) * (float)perr *
-                                       kHallStepRad * (180.0f / 3.14159265f),
-                                   -kStallMinSetRpm, kStallMinSetRpm);
               }
               mstate = 'Z';
             }
@@ -1647,8 +1653,8 @@ extern "C" void app_main(void) {
       // Which rule fired (D41): the sustained count on the filtered currents,
       // or the fast path on a measured phase's raw conversions.
       const std::string rule =
-          ti.fast ? fmt::format(" (fast: raw past {:.0f}A for {} conversions)",
-                                g_sampler.plausible_amps(), motor::kTripFastConversions)
+          ti.fast ? fmt::format(" (fast: ADC railed for {} conversions)",
+                                motor::kTripFastConversions)
                   : fmt::format(" ({} {} samples)", motor::kTripSamples,
                                 motor::kTripLeaky ? "net" : "consecutive");
       fmt::print(

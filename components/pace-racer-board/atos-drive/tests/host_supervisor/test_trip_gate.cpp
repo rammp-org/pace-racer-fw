@@ -75,21 +75,28 @@ static void test_fast() {
     CHECK(motor::kTripFastConversions == 0);
     return;
   }
-  // A short: the phase reads past the gate on every conversion.
+  // A short: the phase reads railed on every conversion.
   int run = 0, at = -1;
   for (int c = 0; c < 20 && at < 0; c++) {
-    run = foc::implausible_run_step(run, true);
+    run = foc::run_step(run, true);
     if (run >= kRule.fast_conversions)
       at = c;
   }
   CHECK(at == kRule.fast_conversions - 1);
   std::printf("  %s: fast trip after %d conversions (%.2f ms at alternating phases)\n",
               motor::kName, at + 1, (at + 1) * 2 * 0.05f);
-  // A spike burst one shorter than the run, then a sane reading: no trip.
+  // The chair's false fast trip (D43): 4 railed-looking conversions in a row,
+  // then sane ones. Must not trip.
+  run = 0;
+  for (int c = 0; c < 4; c++)
+    run = foc::run_step(run, true);
+  run = foc::run_step(run, false);
+  CHECK(run == 0 && kRule.fast_conversions > 4);
+  // A burst one shorter than the run, then a sane reading, repeated: no trip.
   run = 0;
   bool tripped = false;
   for (int c = 0; c < 100; c++) {
-    run = foc::implausible_run_step(run, c % kRule.fast_conversions != 0);
+    run = foc::run_step(run, c % kRule.fast_conversions != 0);
     tripped |= run >= kRule.fast_conversions;
   }
   CHECK(!tripped);
