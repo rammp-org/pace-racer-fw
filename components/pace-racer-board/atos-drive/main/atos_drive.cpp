@@ -171,8 +171,8 @@ static constexpr float kSpeedKi = 0.2f;  // A per rpm-second
 // rover loose. The integrator supplies the breakaway current; 2.0 wound
 // 20 A/s per 10 rpm and was too lively, 0.5 builds 5 A in a second. Needs
 // the 10 Hz tracking loop in hall_drive.hpp.
-static constexpr float kHallSpeedKp = motor::kSpeedKpHall; // per profile
-static constexpr float kHallSpeedKi = 0.5f;
+// Per profile, and on hub20 per wheel: hall_speed_kp()/hall_speed_ki() read the provisioned
+// axis (motor::hall_gains_for_axis, D44).
 // Fail-safe: while the observer has authority, |rotor flux| leaving this band
 // around lambda_pm for ~40 ms means the estimate is lost — coast, don't fight.
 static constexpr float kFluxFailLo = 0.35f;
@@ -492,11 +492,13 @@ inline float shaft_position_rad() {
     return (float)g_hall_poller.steps() * kHallStepRad;
   return g_encoder ? g_encoder->get_radians() / kEncGear : 0.0f;
 }
+inline float hall_speed_kp() { return motor::hall_gains_for_axis((int)g_axis.axis_id).kp; }
+inline float hall_speed_ki() { return motor::hall_gains_for_axis((int)g_axis.axis_id).ki; }
 /// Speed-loop gains follow the feedback source unless 'sg' overrode them.
 inline void apply_feedback_gains() {
   if (g_fb_hall.load(std::memory_order_relaxed)) {
-    g_spd_kp.store(kHallSpeedKp);
-    g_spd_ki.store(kHallSpeedKi);
+    g_spd_kp.store(hall_speed_kp());
+    g_spd_ki.store(hall_speed_ki());
   } else {
     g_spd_kp.store(kSpeedKp);
     g_spd_ki.store(kSpeedKi);
@@ -1414,8 +1416,8 @@ extern "C" void app_main(void) {
     g_spd_ki.store(std::clamp(g_axis.spd_ki, motor::kTuneKiMinRpm, motor::kTuneKiMaxRpm));
     g_spd_gains_custom.store(true);
   }
-  if (!std::isnan(g_axis.pll_hz))
-    g_hall_drive.set_pll_hz(g_axis.pll_hz);
+  // Hall tracking bandwidth: a saved tune's, else the profile's (hub20 2 Hz, D44).
+  g_hall_drive.set_pll_hz(std::isnan(g_axis.pll_hz) ? motor::kHallPllHz : g_axis.pll_hz);
   logger.info("axis: {} | feedback {} ({}) | enc ofs {} | hall table {} | motor {} | tune {}",
               axiscfg::axis_name(g_axis.axis_id), axiscfg::feedback_name(g_axis.feedback),
               g_axis.feedback_calibrated() ? "calibrated" : "NOT CALIBRATED, cannot arm",
@@ -2253,8 +2255,8 @@ extern "C" void app_main(void) {
           // live between hall edges, which is what makes low speed smooth on the
           // dyno. Speed gains follow the source, as 'fb' would set them.
           if (!g_spd_gains_custom.load()) { // a characterization 'sg' wins over the per-source defaults
-            g_spd_kp.store(use_enc ? kSpeedKp : kHallSpeedKp);
-            g_spd_ki.store(use_enc ? kSpeedKi : kHallSpeedKi);
+            g_spd_kp.store(use_enc ? kSpeedKp : hall_speed_kp());
+            g_spd_ki.store(use_enc ? kSpeedKi : hall_speed_ki());
           }
           g_hall_sub.store(HALL_SPEED);
           g_theta_src.store(use_enc ? 1 : 0);

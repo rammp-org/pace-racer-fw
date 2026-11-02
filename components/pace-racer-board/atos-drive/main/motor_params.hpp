@@ -38,6 +38,8 @@ inline constexpr float kPeakSeconds = 0.0f;
 inline constexpr int kBootVdsLevel = 0;        // DRV8353 VDS 0.06 V, ~17-22 A cold
 inline constexpr float kSpeedKpEnc = 0.05f;  // speed-loop Kp, A/rpm, encoder feedback
 inline constexpr float kSpeedKpHall = 0.25f; // speed-loop Kp, A/rpm, hall feedback
+inline constexpr float kSpeedKiHall = 0.5f;  // speed-loop Ki, A/rpm-s, hall feedback
+inline constexpr float kHallPllHz = 10.0f;   // hall speed tracking loop, Hz
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: accel_limit 0 = step
 inline constexpr float kIqSlewAPerMs = 0.0f; // no iq slew limit (D40)
 // Soft trip rule (D41): 3 consecutive samples over kBootTripAmps, no fast path.
@@ -95,6 +97,16 @@ inline constexpr int kBootVdsLevel = 6;
 // jitter (2026-10-29). Ki is unchanged, it supplies the breakaway current.
 inline constexpr float kSpeedKpEnc = 0.025f;
 inline constexpr float kSpeedKpHall = 0.125f;
+inline constexpr float kSpeedKiHall = 0.5f;
+// Hall speed tracking loop, Hz, and the per-wheel hall speed gains the chair drives on
+// (2026-11-01). The driver's tune, auto-tuned per wheel and then taken down 15 % when
+// 'vl' went to 22 V: at 16 V the voltage clamp had been quietly limiting these gains, and
+// at full strength they limit-cycled the loaded chair. 10 Hz tracking with the 0.125 / 0.5
+// defaults felt nervous to the driver; 2 Hz with these is what he chose. kSpeedKpHall /
+// kSpeedKiHall above stay the fallback for an axis without its own entry.
+inline constexpr float kHallPllHz = 2.0f;
+inline constexpr float kHallSpeedKpLeft = 0.8011f, kHallSpeedKiLeft = 0.7121f;   // drive_left
+inline constexpr float kHallSpeedKpRight = 0.9792f, kHallSpeedKiRight = 0.8011f; // drive_right
 inline constexpr float kObsR = 0.51f;     // ohm/phase, 'rl' at 0.6/1.0/1.5 V steps
 inline constexpr float kObsL = 804.0e-6f; // H/phase (the sheet's 1.885 mH is ~2x phase)
 // Wb. Observer locks 0.045..0.052 (rpm_est = rpm_hall within 0.2 % from 60
@@ -111,7 +123,11 @@ inline constexpr float kDefaultKp = 0.136f; // V/A
 inline constexpr float kDefaultKi = 86.0f;  // V/(A*s)
 // 'vl' boot default. Back-EMF is omega_e * lambda = 4.8 V at 30 rpm and 9.6 V
 // at 60, so the NineBot's 8 V clamp would stall the I/f spin outright.
-inline constexpr float kDefaultVoltLimit = 16.0f;
+// Raised 16 -> 22 V (2026-11-01): at 16 V a wheel held at the 30 A ceiling ran out of
+// voltage near 3 rad/s (30 A x 0.51 ohm + back-EMF is ~18-20 V), lost control of the
+// current and tripped the 35 A soft trip on hard turns at speed. 'vl' ceiling is
+// kMaxPhaseVolts (~24 V at kBusVoltage 45).
+inline constexpr float kDefaultVoltLimit = 22.0f;
 // Acceleration ceiling (D35, D40): accel_limit 0 or larger means this. The MIB
 // streams VELOCITY at 20 Hz with accel_limit 0, so without it the reference
 // stepped every 50 ms. It must sit above what the planner asks for or the chair
@@ -157,6 +173,8 @@ inline constexpr float kPeakSeconds = 0.0f;
 inline constexpr int kBootVdsLevel = 0;
 inline constexpr float kSpeedKpEnc = 0.05f;
 inline constexpr float kSpeedKpHall = 0.25f;
+inline constexpr float kSpeedKiHall = 0.5f;
+inline constexpr float kHallPllHz = 10.0f;
 inline constexpr float kObsR = 0.323f;
 inline constexpr float kObsL = 336.0e-6f;
 inline constexpr float kObsLambda = 0.026f; // measured
@@ -170,6 +188,23 @@ inline constexpr int kTripSamples = 3; // soft trip: 3 consecutive samples, no f
 inline constexpr bool kTripLeaky = false;
 inline constexpr int kTripFastConversions = 0;
 #endif
+
+/// Hall speed-loop gains (A/rpm, A/rpm-s) for a wheel: hub20 carries each chair wheel's own
+/// tune, every other profile and an unassigned axis get the profile's kSpeedKpHall /
+/// kSpeedKiHall. Axis numbers are rammp::AxisId (2 = drive_left, 3 = drive_right).
+struct HallGains {
+  float kp, ki;
+};
+inline constexpr HallGains hall_gains_for_axis(int axis_id) {
+#if defined(ATOS_MOTOR_HUB20)
+  if (axis_id == 2)
+    return {kHallSpeedKpLeft, kHallSpeedKiLeft};
+  if (axis_id == 3)
+    return {kHallSpeedKpRight, kHallSpeedKiRight};
+#endif
+  (void)axis_id;
+  return {kSpeedKpHall, kSpeedKiHall};
+}
 
 // 'isl' hard ceiling, A/ms. Above ~5 A/ms (169 rad/s x 30 A) the slew no longer
 // shapes anything the current loop would not do on its own.
@@ -206,7 +241,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 4u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 5u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;

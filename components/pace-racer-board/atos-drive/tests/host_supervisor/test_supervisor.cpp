@@ -152,11 +152,36 @@ static void test_slew_rising() {
   }
 }
 
+// D44: hub20 boots each chair wheel on its own tune; every other profile, and an
+// unassigned axis, on the profile's hall defaults.
+static void test_hall_gains_for_axis() {
+  const auto fallback = motor::hall_gains_for_axis(255);
+  CHECK(near(fallback.kp, motor::kSpeedKpHall) && near(fallback.ki, motor::kSpeedKiHall));
+#if defined(ATOS_MOTOR_HUB20)
+  const auto l = motor::hall_gains_for_axis(2), r = motor::hall_gains_for_axis(3);
+  CHECK(near(l.kp, 0.8011f) && near(l.ki, 0.7121f));
+  CHECK(near(r.kp, 0.9792f) && near(r.ki, 0.8011f));
+  CHECK(near(motor::kHallPllHz, 2.0f) && near(motor::kDefaultVoltLimit, 22.0f));
+  CHECK(motor::kDefaultVoltLimit <= motor::kMaxPhaseVolts);
+#else
+  CHECK(near(motor::hall_gains_for_axis(2).kp, motor::kSpeedKpHall));
+  CHECK(near(motor::kHallPllHz, 10.0f));
+#endif
+  // Inside the MotorTuning bounds, so a tune from the MIB can always reach them.
+  for (int a : {2, 3, 255}) {
+    const auto g = motor::hall_gains_for_axis(a);
+    CHECK(g.kp >= motor::kTuneKpMinRpm && g.kp <= motor::kTuneKpMaxRpm);
+    CHECK(g.ki >= motor::kTuneKiMinRpm && g.ki <= motor::kTuneKiMaxRpm);
+  }
+  CHECK(motor::kHallPllHz >= motor::kTunePllMinHz && motor::kHallPllHz <= motor::kTunePllMaxHz);
+}
+
 int main() {
   std::printf("profile %s: accel ceiling %.0f rpm/s, iq slew %.1f A/ms\n", motor::kName,
               motor::kMaxAccelRpmS, motor::kIqSlewAPerMs);
   test_accel_ceiling();
   test_slew_rising();
+  test_hall_gains_for_axis();
   std::printf("%s\n", g_fail ? "FAILED" : "ok");
   return g_fail ? 1 : 0;
 }

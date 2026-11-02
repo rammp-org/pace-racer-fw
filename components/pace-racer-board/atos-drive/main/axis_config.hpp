@@ -44,6 +44,11 @@ inline constexpr const char *kKeyFeedback = "fb";
 inline constexpr const char *kKeySpdKp = "spd_kp";
 inline constexpr const char *kKeySpdKi = "spd_ki";
 inline constexpr const char *kKeyPllHz = "pll_hz";
+// Version of the saved tune. A tune saved before this key existed (fw <= 0.4.4) is
+// ignored at boot, so the chair picks up the per-wheel hub20 defaults of fw 0.4.5 without
+// a 'tune clear' on each board (D44). Every save writes the current version.
+inline constexpr const char *kKeyTuneVer = "tune_v";
+inline constexpr uint8_t kTuneVersion = 2;
 
 enum class Feedback : uint8_t { HALL = 0, ENCODER = 1 };
 inline const char *feedback_name(Feedback f) { return f == Feedback::ENCODER ? "enc" : "hall"; }
@@ -137,9 +142,12 @@ inline bool load(AxisConfig &cfg, espp::Logger &logger) {
     if (nvs_get_blob(h, key, &v, &n) == ESP_OK && n == sizeof(float))
       out = v;
   };
-  get_f(kKeySpdKp, cfg.spd_kp);
-  get_f(kKeySpdKi, cfg.spd_ki);
-  get_f(kKeyPllHz, cfg.pll_hz);
+  uint8_t tune_ver = 0;
+  if (nvs_get_u8(h, kKeyTuneVer, &tune_ver) == ESP_OK && tune_ver == kTuneVersion) {
+    get_f(kKeySpdKp, cfg.spd_kp);
+    get_f(kKeySpdKi, cfg.spd_ki);
+    get_f(kKeyPllHz, cfg.pll_hz);
+  }
   nvs_close(h);
   return true;
 }
@@ -192,6 +200,8 @@ inline bool save_tuning(float kp_rpm, float ki_rpm, float pll_hz, espp::Logger &
       e = nvs_set_blob(h, kKeySpdKi, &ki_rpm, sizeof(ki_rpm));
     if (e == ESP_OK)
       e = nvs_set_blob(h, kKeyPllHz, &pll_hz, sizeof(pll_hz));
+    if (e == ESP_OK)
+      e = nvs_set_u8(h, kKeyTuneVer, kTuneVersion);
     return e;
   });
 }
@@ -199,7 +209,7 @@ inline bool save_tuning(float kp_rpm, float ki_rpm, float pll_hz, espp::Logger &
 /// Back to the compiled defaults at the next boot. 'tune clear' on the console.
 inline bool clear_tuning(espp::Logger &logger) {
   return detail::write(logger, [&](nvs_handle_t h) {
-    for (const char *k : {kKeySpdKp, kKeySpdKi, kKeyPllHz}) {
+    for (const char *k : {kKeySpdKp, kKeySpdKi, kKeyPllHz, kKeyTuneVer}) {
       const esp_err_t e = nvs_erase_key(h, k);
       if (e != ESP_OK && e != ESP_ERR_NVS_NOT_FOUND)
         return e;
