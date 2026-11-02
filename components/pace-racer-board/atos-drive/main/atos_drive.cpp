@@ -1189,7 +1189,7 @@ bool configure_drv(const std::shared_ptr<espp::PaceRacerBoard::GateDriver> &gd,
     drv_check(gd, "w driver_ctl");
   ok = ok && gd->set_ocp_mode(GD::OcpMode::LATCHED_SHUTDOWN, ec) &&
        gd->set_ocp_deglitch(GD::OcpDeglitch::US_4, ec) &&
-       gd->set_vds_level(kBootVds, ec); // per profile: hub20 0.20 V, board protection only
+       gd->set_vds_level(kBootVds, ec); // per profile: hub20 0.30 V, board protection only
   if (trace)
     drv_check(gd, "w ocp/vds");
   const bool want_sen = g_sense_ocp.load();
@@ -1321,7 +1321,10 @@ extern "C" void app_main(void) {
         }
       }
     }
-    logger.info("DRV8353 armed: CSA GAIN_20, VDS 0.06 V (~17-22 A), SEN 0.25 V, latched");
+    logger.info("DRV8353 armed: CSA GAIN_20, VDS {:.2f} V (level {}), SEN 0.25 V, latched",
+                motor::kBootVdsLevel >= 5 ? 0.20f + 0.10f * (float)(motor::kBootVdsLevel - 5)
+                                          : 0.06f + 0.01f * (float)motor::kBootVdsLevel,
+                motor::kBootVdsLevel);
     drv_check(gd, "after config");
   }
 

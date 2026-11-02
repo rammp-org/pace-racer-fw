@@ -82,11 +82,15 @@ inline constexpr float kHoldAmps = 10.0f; // HOLDING cap: ~16 N.m; 15 A sustaine
 // 'lim' at boot: the ATOS hooks clamp every current to the target, so it
 // matches the burst ceiling. The software trip is the real overcurrent guard,
 // 5 A over the bursts (the dyno's 35 A guard; plausibility gate at 38 A, inside
-// the ADC rail). VDS at 0.20 V (~58-74 A cold, ~30-50 A with hot FETs) only
-// protects the board itself, so it no longer trips on load spikes.
+// the ADC rail). VDS OCP only protects the board itself (D42): 0.30 V across
+// the ISC0802NLS (2.7 typ / 3.6 max mOhm cold, ~1.5x at 100 C, ~1.8x at 150 C)
+// is ~83-111 A cold, ~56-75 A at 100 C, ~46-62 A at 150 C, so even hot it sits
+// above the 35 A trip and the ~40 A ADC rail. 0.20 V fell to ~31-41 A with hot
+// FETs, inside a legitimate 30 A burst. Higher levels would leave a wider band
+// above the rail where VDS is the only fast cut-off.
 inline constexpr float kBootTargetAmps = 30.0f;
 inline constexpr float kBootTripAmps = 35.0f;
-inline constexpr int kBootVdsLevel = 5;
+inline constexpr int kBootVdsLevel = 6;
 // Speed-loop Kp (A/rpm), half the dyno/rover values: those made the chair
 // jitter (2026-10-29). Ki is unchanged, it supplies the breakaway current.
 inline constexpr float kSpeedKpEnc = 0.025f;
@@ -131,7 +135,7 @@ inline constexpr float kIqSlewAPerMs = 2.0f;
 // over the trip (leaky count, 20 samples at 20 kHz, +1 over / -1 clean), or
 // at once on 4 consecutive conversions of one measured phase past the
 // plausibility gate (trip + 3 A, 400 us: each phase converts every other
-// tick). The DRV8353 VDS OCP at 0.20 V stays the hardware backstop.
+// tick). The DRV8353 VDS OCP (0.30 V, D42) stays the hardware backstop.
 inline constexpr int kTripSamples = 20;
 inline constexpr bool kTripLeaky = true;
 inline constexpr int kTripFastConversions = 4;
@@ -200,7 +204,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 2u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 3u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;
