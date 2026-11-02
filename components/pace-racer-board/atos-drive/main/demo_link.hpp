@@ -50,6 +50,9 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_vfs.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/stream_buffer.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 #include "coredump.hpp"
@@ -305,6 +308,17 @@ private:
   static constexpr size_t kRxCap = 2048;
   static inline DemoLink *s_instance{nullptr};
   static inline int s_uart_fd{-1};
+  // stdout bytes on their way to the USB sinks. The USB writes run on a drain
+  // task pinned to TinyUSB's own core, never on the printing task: a TinyUSB
+  // write copies into its FIFO inside a spinlock critical section
+  // (dcd_edpt_xfer_fifo), which on the printer's core masks interrupts up to
+  // level 3 and spins against the TinyUSB task on the other core. When that
+  // core also carries the PWM sampling ISR, a 3000-row capdump made 2.1 % of
+  // samples late and froze the duties for up to 220 us (2026-10-23, PR #20).
+  static constexpr size_t kTxBufBytes = 8192;
+  static inline StreamBufferHandle_t s_tx{nullptr};
+  static inline std::mutex s_tx_mutex; // a stream buffer takes one writer at a time
+  static inline thread_local bool s_in_write{false};
 
   static int vfs_open(const char *, int, int) { return 0; }
   static int vfs_close(int) { return 0; }
@@ -316,22 +330,21 @@ private:
   static ssize_t vfs_write(int, const void *data, size_t size) {
     // A logging call made *by* the USB stack from inside a write would recurse
     // back into it; break the loop per task.
-    static thread_local bool in_write = false;
+    bool &in_write = s_in_write;
     if (s_uart_fd >= 0)
       ::write(s_uart_fd, data, size);
     if (in_write)
       return static_cast<ssize_t>(size);
     in_write = true;
     if (auto *self = s_instance) {
-      auto &usb = self->usb_;
       const auto bytes = std::span<const uint8_t>(static_cast<const uint8_t *>(data), size);
-      if (usb.is_cdc_connected() && usb.cdc_write_available() >= size)
-        usb.write_cdc(bytes);
-      // Only while a dashboard session is streaming telemetry (same reason as
-      // stream_on_start = false). 13 = frame overhead (9-byte header + CRC-32).
-      if (self->telemetry_.streaming() && usb.is_vendor_connected() &&
-          usb.vendor_write_available() >= size + 13)
-        usb.write_vendor(espp::stream_frame::build_frame(true, kConsoleModule, kConsoleLog, bytes));
+      if (s_tx) {
+        // Bounded wait for room, then drop: never block a printer for long.
+        std::lock_guard<std::mutex> lk(s_tx_mutex);
+        xStreamBufferSend(s_tx, data, size, pdMS_TO_TICKS(20));
+      } else {
+        self->usb_sinks(bytes); // no drain task: the old inline path
+      }
       if (self->sink_mutex_.try_lock()) {
         if (self->log_sink_)
           self->log_sink_(bytes);
@@ -342,7 +355,50 @@ private:
     return static_cast<ssize_t>(size);
   }
 
+  void usb_sinks(std::span<const uint8_t> bytes) {
+    if (usb_.is_cdc_connected() && usb_.cdc_write_available() >= bytes.size())
+      usb_.write_cdc(bytes);
+    // Only while a dashboard session is streaming telemetry (same reason as
+    // stream_on_start = false). 13 = frame overhead (9-byte header + CRC-32).
+    if (telemetry_.streaming() && usb_.is_vendor_connected() &&
+        usb_.vendor_write_available() >= bytes.size() + 13)
+      usb_.write_vendor(espp::stream_frame::build_frame(true, kConsoleModule, kConsoleLog, bytes));
+  }
+
+  // Drains s_tx into the USB sinks, on TinyUSB's core. Waits (bounded) for CDC
+  // room instead of dropping: the printer is already decoupled.
+  static void tx_task(void *) {
+    s_in_write = true; // whatever the USB stack logs from here goes to the UART only
+    static uint8_t chunk[512];
+    for (;;) {
+      const size_t n = xStreamBufferReceive(s_tx, chunk, sizeof(chunk), portMAX_DELAY);
+      auto *self = s_instance;
+      if (!self || n == 0)
+        continue;
+      auto &usb = self->usb_;
+      for (int i = 0; i < 50 && usb.is_cdc_connected() && usb.cdc_write_available() < n; i++)
+        vTaskDelay(1);
+      self->usb_sinks(std::span<const uint8_t>(chunk, n));
+    }
+  }
+
+  void start_tx_task() {
+    TaskHandle_t tusb = xTaskGetHandle("TinyUSB");
+    const BaseType_t core = tusb ? xTaskGetCoreID(tusb) : tskNO_AFFINITY;
+    s_tx = xStreamBufferCreate(kTxBufBytes, 1);
+    if (!s_tx)
+      return;
+    // Below TinyUSB (5): it has to run to drain the FIFO this task fills.
+    if (xTaskCreatePinnedToCore(tx_task, "con_tx", 4096, nullptr, 3, nullptr, core) != pdPASS) {
+      vStreamBufferDelete(s_tx);
+      s_tx = nullptr;
+      return;
+    }
+    logger_.info("stdout -> USB drained on core {}", (int)core);
+  }
+
   void route_stdout() {
+    start_tx_task();
 #if defined(CONFIG_ESP_CONSOLE_UART_NUM) && CONFIG_ESP_CONSOLE_UART_NUM >= 0
     char uart[16];
     std::snprintf(uart, sizeof(uart), "/dev/uart/%d", CONFIG_ESP_CONSOLE_UART_NUM);

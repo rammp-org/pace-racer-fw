@@ -59,6 +59,7 @@
 #include <type_traits>
 
 #include "driver/gpio.h"
+#include "hal/mcpwm_ll.h"
 #include "esp_heap_caps.h"
 #include "esp_rom_sys.h"
 #include "esp_timer.h"
@@ -324,6 +325,45 @@ std::atomic<bool> g_hall_ready{false}; // poller initialized (app_main -> FOC ta
 FocState g_foc;
 TaskHandle_t g_foc_task = nullptr;
 std::shared_ptr<espp::BldcDriver> g_driver;
+
+// Three-phase duty write that lands all three comparators in the SAME PWM
+// period. espp's set_pwm() writes the shadow registers one after another, and
+// the hardware copies shadow -> active at TEZ: if TEZ falls between the first
+// and last write, one phase runs the new duty a whole period before the other
+// two. On the NineBot or the hub (hundreds of uH) that one-period mismatch is a
+// small current blip; on a ~4 uH drone outrunner it was 13 A/us into the
+// windings and latched the DRV8353 VDS OCP on every boot (2026-10-23, PR #20).
+// The FOC task is the worst offender: it wakes on the TEP sample and its write
+// lands around TEZ. If the counter is within kDutyGuardTicks of TEZ on the way
+// down, wait for TEZ to pass, then write the three values back-to-back with
+// interrupts off. Bounded spin (one guard window at most, ~3 us).
+static constexpr uint32_t kDutyHalfPeriodTicks = espp::BldcDriver::TICKS_PER_PERIOD / 2;
+static constexpr uint32_t kDutyGuardTicks = 240; // 3 us at 80 MHz
+static portMUX_TYPE g_duty_mux = portMUX_INITIALIZER_UNLOCKED;
+static void set_duties(float a, float b, float c) {
+  static const sensorless::PwmComparators *cmp = nullptr;
+  if (!g_driver || !g_driver->is_enabled())
+    return; // same as espp set_pwm on a disabled driver
+  if (!cmp)
+    cmp = &sensorless::borrow_pwm_comparators(*g_driver);
+  // Same mapping as espp set_pwm: duty in [0, 1] of half a period (up-down count).
+  auto ticks = [](float d) { return (uint32_t)(std::clamp(d, 0.0f, 1.0f) * (float)kDutyHalfPeriodTicks); };
+  const uint32_t ta = ticks(a), tb = ticks(b), tc = ticks(c);
+  // Counter position straight from the peripheral (group 0, timer 0: the BSP
+  // creates the one and only MCPWM timer, which the sampler ISR also assumes).
+  mcpwm_dev_t *dev = MCPWM_LL_GET_HW(0);
+  for (int i = 0; i < 256; i++) { // bounded: 256 x ~20 ns reads covers the 3 us guard
+    const uint32_t cnt = mcpwm_ll_timer_get_count_value(dev, 0);
+    const bool down = mcpwm_ll_timer_get_count_direction(dev, 0) == MCPWM_TIMER_DIRECTION_DOWN;
+    if (!(down && cnt < kDutyGuardTicks))
+      break;
+  }
+  taskENTER_CRITICAL(&g_duty_mux);
+  mcpwm_comparator_set_compare_value((*cmp)[0], ta);
+  mcpwm_comparator_set_compare_value((*cmp)[1], tb);
+  mcpwm_comparator_set_compare_value((*cmp)[2], tc);
+  taskEXIT_CRITICAL(&g_duty_mux);
+}
 std::shared_ptr<espp::PaceRacerBoard::Encoder> g_encoder; // MT6701 SSI, read by BSP task
 
 // Observer parameters, console-tunable. Written by the console, read by the FOC
@@ -1085,7 +1125,7 @@ IRAM_ATTR void foc_task_fn(void *) {
     }
     const auto vab = foc::inverse_park({vd, vq}, s, c);
     const auto duties = foc::svpwm(vab, kBusVoltage, kMinDuty, kMaxDuty);
-    g_driver->set_pwm(duties.a, duties.b, duties.c);
+    set_duties(duties.a, duties.b, duties.c);
     if (g_auto_phase.load(std::memory_order_relaxed))
       g_sampler.select_lowest_two(duties.a, duties.b, duties.c);
 
@@ -1293,7 +1333,14 @@ extern "C" void app_main(void) {
   motor_cfg.zero_electric_offset = 1e-6f;
   motor_cfg.sensor_direction = espp::detail::SensorDirection::CLOCKWISE;
   if (!bsp.init_motor(motor_cfg,
-                      {.power_supply_voltage = kBusVoltage, .limit_voltage = kBusVoltage})) {
+                      // intr_priority 2: the sampler ISR must outrank SPI (W5500,
+                      // DRV8353, encoder), I2C and USB, or ~5 % of samples land
+                      // late (BSP DriverConfig docs, PR #9; 4.7 % -> 0.0 % on the
+                      // drone bench, PR #20). A late conversion at high duty lands
+                      // outside the low-side shunt window and reads ~0 A. 3
+                      // starved the console while driving.
+                      {.power_supply_voltage = kBusVoltage, .limit_voltage = kBusVoltage,
+                       .intr_priority = 2})) {
     logger.error("BSP motor init failed");
     return;
   }
@@ -1361,7 +1408,7 @@ extern "C" void app_main(void) {
 
   driver->enable();
   drv_check(bsp.gate_driver(), "after enable");
-  driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+  set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
   drv_check(bsp.gate_driver(), "after pwm center");
 
   if (!g_sampler.zero_calibrate(logger)) {
@@ -1369,12 +1416,12 @@ extern "C" void app_main(void) {
     return;
   }
   drv_check(bsp.gate_driver(), "after zero cal");
-  driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+  set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
 
   if (!g_sampler.set_edge(true /*TEP*/, logger))
     return;
   drv_check(bsp.gate_driver(), "after set_edge");
-  driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+  set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
   // Enabling the sampler starts the FOC task's control loop. With Id*=Iq*=0 the
   // loop commands 0 V -> centered duties -> no current, so this is safe.
   g_sampler.enable();
@@ -1679,7 +1726,7 @@ extern "C" void app_main(void) {
       g_id_target.store(0);
       g_iq_target.store(0);
       g_reset_pi.store(true);
-      driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+      set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
       g_request_coast.store(true);
       g_ev_overrun.store(true);
       fmt::print("! sampler persistently late / over budget — disabled; duties centered, "
@@ -1740,7 +1787,7 @@ extern "C" void app_main(void) {
         g_mode.store(HOLD);
         g_id_target.store(0);
         g_iq_target.store(0);
-        driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+        set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
         fmt::print("! DRV8353 fault 0x{:04x} — disarmed (power-cycle VM to clear)\n", fs.raw);
       }
     }
@@ -1819,7 +1866,7 @@ extern "C" void app_main(void) {
     }
     g_sampler.disable();
     g_mode.store(HOLD);
-    driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+    set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
     g_request_coast.store(true);
     fmt::print("#ota: drive unloaded, sampler off\n");
   };
@@ -2136,7 +2183,7 @@ extern "C" void app_main(void) {
       g_iq_target.store(0);
       g_hall_iq.store(0);
       g_reset_pi.store(true);
-      driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+      set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
 
       auto gd = bsp.gate_driver();
       GD::OcpControl ocp{};
@@ -2750,7 +2797,7 @@ extern "C" void app_main(void) {
       g_iq_target.store(0);
       g_reset_pi.store(true);
       g_reset_obs.store(true);
-      driver->set_pwm(kCenterDuty, kCenterDuty, kCenterDuty);
+      set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
       g_sampler.set_edge(x != 0, logger);
       g_sampler.enable(); // recovery path after a trip/overrun
       fmt::print("#edge {} — armed, targets zeroed\n",
