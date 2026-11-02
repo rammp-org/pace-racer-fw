@@ -729,7 +729,9 @@ private:
 
   // Not IRAM_ATTR: MCPWM_ISR_IRAM_SAFE=n, so this ISR runs with the flash cache
   // enabled and may live in flash like any other code (marking it IRAM here also
-  // mis-orders the literal pool at -O2 -> "dangerous relocation").
+  // mis-orders the literal pool at -O2 -> "dangerous relocation"). It is placed
+  // in IRAM by symbol instead (main/linker.lf, foc_sampler_isr): from flash,
+  // cache misses under console load stretched it past its 10 us budget.
   static bool isr_trampoline(mcpwm_timer_handle_t t, const mcpwm_timer_event_data_t *ed,
                              void *ctx) {
     return s_self ? s_self->on_sample() : false;
