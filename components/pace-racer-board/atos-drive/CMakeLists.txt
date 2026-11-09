@@ -17,4 +17,6 @@ set(
 
 project(pace_racer_atos_drive)
 
+include(cmake/espp_rtps_espp_peers_only.cmake)
+
 set(CMAKE_CXX_STANDARD 20)

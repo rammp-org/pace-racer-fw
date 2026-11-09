@@ -24,7 +24,7 @@ namespace motor {
 // as the dyno block below but with ceilings the MIB cannot raise: walking
 // pace and two thirds of the current. No acceleration ceiling: the planner
 // streams setpoints and owns the ramp through accel_limit (0 = step). Raising
-// any of these is a reflash on purpose. 60 rpm on the 267 mm wheel is 0.84 m/s.
+// any of these is a reflash on purpose. 60 rpm on the 9 in wheel is 0.72 m/s.
 inline constexpr const char *kName = "flatbot";
 inline constexpr int kPolePairs = 15;
 inline constexpr float kKt = 0.60f;
@@ -39,7 +39,7 @@ inline constexpr int kBootVdsLevel = 0;        // DRV8353 VDS 0.06 V, ~17-22 A c
 inline constexpr float kSpeedKpEnc = 0.05f;  // speed-loop Kp, A/rpm, encoder feedback
 inline constexpr float kSpeedKpHall = 0.25f; // speed-loop Kp, A/rpm, hall feedback
 inline constexpr float kSpeedKiHall = 0.5f;  // speed-loop Ki, A/rpm-s, hall feedback
-inline constexpr float kHallPllHz = 10.0f;   // hall speed tracking loop, Hz
+inline constexpr float kHallPllHz = 3.0f;    // hall speed tracking loop, Hz
 inline constexpr float kMaxAccelRpmS = 0.0f; // no accel ceiling: accel_limit 0 = step
 inline constexpr float kIqSlewAPerMs = 0.0f; // no iq slew limit (D40)
 // Soft trip rule (D41): 3 consecutive samples over kBootTripAmps, no fast path.
@@ -241,7 +241,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 6u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 8u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;

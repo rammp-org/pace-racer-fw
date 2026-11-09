@@ -1,0 +1,4 @@
+build,rtps,limits,domain_bytes,participant_bytes,heap_free_bytes,heap_min_bytes,result
+0.4.7 (86511ea + PLL 3 Hz),1.3.3,profile defaults (10 peers / 6 proxies),29408,9952,,,hangs with ROS 2 processes on eno1
+0.4.8 rejected (raised limits),1.4.2,24 peers / 24 proxies,50976,12080,27628,10280,rebooted about 20 s after boot (out of memory)
+0.4.8 (1f677c2),1.4.2,profile defaults + espp-only peers,29408,9952,57292,32460,no effect from 30 extra participants
