@@ -2,13 +2,49 @@ dependencies:
   idf:
     version: '>=5.0'
   # RTPS/DDS participant: MotorCommand in, MotorState out, over the typed
-  # pub/sub layer (espp::Publisher/Subscriber) of the embeddedRTPS-backed 1.2.
-  espp/rtps: '>=1.2.0'
+  # pub/sub layer (espp::Publisher/Subscriber).
+  # >= 1.4.1: older versions spin forever in SPDPAgent::processProxyData() once the
+  # remote-participant table is full, and that hung both wheels on the flatbot when
+  # ROS 2 processes piled up on the robot LAN (rammp-org/pace-racer-fw#22).
+  espp/rtps: '>=1.4.1'
+  # Held at the versions flashed as fw 0.4.7 (2026-11-05) while espp/rtps moves to 1.4:
+  # the rest of espp 1.4 changes the motor, ADC, interrupt and Ethernet drivers and needs
+  # a bench run before the wheels take it. Lift these together after that run.
+  espp/adc: '==1.3.3'
+  espp/base_component: '==1.3.5'
+  espp/base_peripheral: '==1.3.5'
+  espp/bldc_driver: '==1.3.3'
+  espp/bldc_motor: '==1.3.3'
+  espp/bldc_types: '==1.3.5'
+  espp/cdr: '==1.3.5'
+  espp/cli: '==1.3.5'
+  espp/coredump: '==1.3.5'
+  espp/dispatcher: '==1.3.5'
+  espp/ethernet: '==1.3.3'
+  espp/filters: '==1.3.3'
+  espp/format: '==1.3.5'
+  espp/i2c: '==1.3.3'
+  espp/interrupt: '==1.3.3'
+  espp/led: '==1.3.3'
+  espp/logger: '==1.3.5'
+  espp/magnetic_encoder: '==1.3.5'
+  espp/math: '==1.3.5'
+  espp/mt6701: '==1.3.3'
+  espp/ota: '==1.3.5'
+  espp/pid: '==1.3.5'
+  espp/reflect_cpp: '==1.3.5'
+  espp/socket: '==1.3.5'
+  espp/spi: '==1.3.3'
+  espp/stream_frame: '==1.3.5'
+  espp/task: '==1.3.5'
+  espp/telemetry: '==1.3.5'
+  espp/thread_pool: '==1.3.5'
+  espp/timer: '==1.3.5'
+  espp/usb_device: '==1.3.5'
+  espressif/esp-dsp: '==1.8.2'
+  espressif/esp_tinyusb: '==2.3.0'
+  espressif/tinyusb: '==0.21.0~2'
+  espressif/w5500: '==2.0.0'
+  espressif/wiznet_common: '==1.0.0'
   # Native USB (WebUSB) link for the dyno demo: vendor + CDC device, framed
   # stream multiplexer, OTA over the stream, telemetry, flash core dump.
-  espp/usb_device: '>=1.3.5'
-  espp/ota: '>=1.3.5'
-  espp/dispatcher: '>=1.3.5'
-  espp/telemetry: '>=1.3.5'
-  espp/coredump: '>=1.3.5'
-  espp/stream_frame: '>=1.3.5'

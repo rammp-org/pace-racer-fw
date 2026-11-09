@@ -2123,13 +2123,15 @@ extern "C" void app_main(void) {
       fmt::print("#atos link={} ip={} rx={} tx={}/{} overrun={} matched cmd={} state={} | "
                  "state={} mode={} fault={} cmd_age={}ms seq={} ack={} | pos={:.3f} rad vel={:.3f} "
                  "rad/s tq={:.2f} Nm lim tq={:.1f} vel={:.1f} acc={:.1f} | tune rx={} ack={} "
-                 "kp={:.3g} ki={:.3g} pll={:.1f}\n",
+                 "kp={:.3g} ki={:.3g} pll={:.1f} | heap free={} min={} largest={}\n",
                  g_link->up() ? "up" : "down", g_link->ip(), c.rx.load(), c.tx_ok.load(),
                  c.tx_fail.load(), c.overrun.load(), c.cmd_matched.load(), c.state_matched.load(),
                  (int)st.state, (int)st.mode, (int)st.fault_code, st.cmd_age_ms, st.last_cmd_seq,
                  st.clear_fault_ack, st.position, st.velocity, st.torque_est, st.torque_limit_eff,
                  st.vel_limit_eff, st.accel_limit_eff, c.rx_tune.load(), st.tuning_ack, st.speed_kp,
-                 st.speed_ki, st.hall_pll_hz);
+                 st.speed_ki, st.hall_pll_hz, heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                 heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     } else if (strcmp(line, "bootlog") == 0) {
       // Replay the boot-time DRV fault checks. The first line with a nonzero
       // fault1/vgs2 names the boot step that latched it.
