@@ -1,0 +1,7 @@
+# 2026-11-09, flatbot, right wheel fw 0.4.8 (1f677c2), idle DISARMED, 30 extra participants on eno1 for 60 s (stress_right.sh 30 60). Census = jetson participants seen on eno1.
+11:29:49 before |  | rx=1893 tx matched cmd=1 heap free=57296 min=24440 largest=31744  | (0.8%) cmax=69us  | census jetson_n=2 wheels=1
+11:30:08 +15s |  | rx=2257 tx matched cmd=1 heap free=57196 min=24416 largest=31744  | (1.1%) cmax=68us  | census jetson_n=32 wheels=1
+11:30:33 +35s |  | rx=2727 tx matched cmd=1 heap free=57212 min=24416 largest=31744  | (0.8%) cmax=65us  | census jetson_n=32 wheels=1
+11:30:59 +57s |  | rx=3232 tx matched cmd=1 heap free=57208 min=24416 largest=31744  | (1.1%) cmax=71us  | census jetson_n=32 wheels=1
+11:31:15 after |  | rx=3544 tx matched cmd=1 heap free=57216 min=24416 largest=31744  | (0.6%) cmax=61us  | census jetson_n=32 wheels=1
+ axis 3 drive_right online True age_ms 1 fw 0.4.8 state DISARMED fault NONE uptime_ms 192143

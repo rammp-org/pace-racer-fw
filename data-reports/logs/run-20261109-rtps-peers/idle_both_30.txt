@@ -1,0 +1,18 @@
+# 2026-11-09, flatbot, both wheels fw 0.4.8 (1f677c2), idle DISARMED, 30 extra participants on eno1 for 60 s (stress2.sh 30 60)
+11:44:33 before 192.168.4.4 |  | rx=2358 tx heap free=57356 min=32460 largest=31744  | (0.6%) cmax=73us 
+11:44:38 before 192.168.4.3 |  | rx=5292 tx heap free=57260 min=32284 largest=31744  | (0.7%) cmax=110us 
+11:45:32 loaded 192.168.4.4 |  | rx=3482 tx heap free=57140 min=32460 largest=31744  | (0.9%) cmax=74us 
+11:45:37 loaded 192.168.4.3 |  | rx=6418 tx heap free=57160 min=32284 largest=31744  | (0.9%) cmax=72us 
+baseline odom/10s 197
+up 30 participants
+t+10s odom/10s 199
+t+20s odom/10s 196
+t+30s odom/10s 196
+t+40s odom/10s 196
+t+50s odom/10s 197
+t+60s odom/10s 195
+after removal: odom/10s 200
+11:46:10 after 192.168.4.4 |  | rx=4204 tx heap free=57144 min=32460 largest=31744  | (0.8%) cmax=76us 
+11:46:14 after 192.168.4.3 |  | rx=7140 tx heap free=57136 min=32284 largest=31744  | (0.8%) cmax=74us 
+ axis 2 drive_left online True age_ms 0 fw 0.4.8 state DISARMED fault NONE uptime_ms 231131
+ axis 3 drive_right online True age_ms 19 fw 0.4.8 state DISARMED fault NONE uptime_ms 388258

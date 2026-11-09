@@ -1,0 +1,357 @@
+{"t": 0.201, "kind": "event", "what": "start", "n": 30}
+{"t": 0.216, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 21, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 550571, "right_online": true, "right_age_ms": 19, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 707718}
+{"t": 1.014, "kind": "odom", "hz": 0, "state": null}
+{"t": 1.224, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 9, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 551592, "right_online": true, "right_age_ms": 7, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 708738}
+{"t": 1.413, "kind": "wheel", "wheel": "left", "rx": 10495, "sup_state": 0, "fault": 0, "cmd_age": 54, "heap": 55476, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 81, "isr_max": 8.1}
+{"t": 1.416, "kind": "wheel", "wheel": "right", "rx": 13348, "sup_state": 0, "fault": 0, "cmd_age": 13, "heap": 57144, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 90, "isr_max": 8.0}
+{"t": 2.018, "kind": "odom", "hz": 0, "state": null}
+{"t": 2.233, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 17, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 552591, "right_online": true, "right_age_ms": 16, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 709738}
+{"t": 3.012, "kind": "odom", "hz": 0, "state": null}
+{"t": 3.243, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 8, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 553611, "right_online": true, "right_age_ms": 7, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 710758}
+{"t": 3.628, "kind": "wheel", "wheel": "left", "rx": 10538, "sup_state": 0, "fault": 0, "cmd_age": 4, "heap": 57124, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 53, "isr_max": 8.0}
+{"t": 3.658, "kind": "wheel", "wheel": "right", "rx": 13391, "sup_state": 0, "fault": 0, "cmd_age": 4, "heap": 57148, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 56, "isr_max": 7.8}
+{"t": 4.017, "kind": "odom", "hz": 0, "state": null}
+{"t": 4.251, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 16, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 554611, "right_online": true, "right_age_ms": 14, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 711758}
+{"t": 5.018, "kind": "odom", "hz": 19, "state": 1}
+{"t": 5.261, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 4, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 555631, "right_online": true, "right_age_ms": 2, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 712778}
+{"t": 5.894, "kind": "wheel", "wheel": "right", "rx": 13434, "sup_state": 0, "fault": 0, "cmd_age": 31, "heap": 57132, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 74, "isr_max": 7.7}
+{"t": 5.897, "kind": "wheel", "wheel": "left", "rx": 10581, "sup_state": 0, "fault": 0, "cmd_age": 50, "heap": 57108, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 57, "isr_max": 8.0}
+{"t": 6.006, "kind": "odom", "hz": 20, "state": 1}
+{"t": 6.27, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 11, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 556631, "right_online": true, "right_age_ms": 8, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 713778}
+{"t": 7.02, "kind": "odom", "hz": 19, "state": 1}
+{"t": 7.282, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 6, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 557651, "right_online": true, "right_age_ms": 2, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 714798}
+{"t": 8.016, "kind": "odom", "hz": 20, "state": 1}
+{"t": 8.119, "kind": "wheel", "wheel": "left", "rx": 10624, "sup_state": 0, "fault": 0, "cmd_age": 3, "heap": 57148, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 54, "isr_max": 7.9}
+{"t": 8.129, "kind": "wheel", "wheel": "right", "rx": 13477, "sup_state": 0, "fault": 0, "cmd_age": 24, "heap": 56724, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 66, "isr_max": 7.7}
+{"t": 8.291, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 16, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 558651, "right_online": true, "right_age_ms": 14, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 715798}
+{"t": 9.019, "kind": "odom", "hz": 19, "state": 1}
+{"t": 9.301, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 7, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 559671, "right_online": true, "right_age_ms": 4, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 716818}
+{"t": 10.001, "kind": "odom", "hz": 20, "state": 1}
+{"t": 10.001, "kind": "event", "what": "request AUTONOMOUS"}
+{"t": 10.31, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 16, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 560671, "right_online": true, "right_age_ms": 14, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 717818}
+{"t": 10.322, "kind": "event", "what": "AUTONOMOUS"}
+{"t": 10.333, "kind": "wheel", "wheel": "left", "rx": 10667, "sup_state": 0, "fault": 0, "cmd_age": 48, "heap": 57136, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 55, "isr_max": 8.0}
+{"t": 10.374, "kind": "wheel", "wheel": "right", "rx": 13520, "sup_state": 0, "fault": 0, "cmd_age": 4, "heap": 57132, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 51, "isr_max": 7.9}
+{"t": 11.015, "kind": "odom", "hz": 19, "state": 4}
+{"t": 11.321, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 4, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 561691, "right_online": true, "right_age_ms": 1, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 718838}
+{"t": 12.01, "kind": "odom", "hz": 20, "state": 4}
+{"t": 12.331, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 16, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 562691, "right_online": true, "right_age_ms": 14, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 719838}
+{"t": 12.551, "kind": "wheel", "wheel": "left", "rx": 10709, "sup_state": 1, "fault": 0, "cmd_age": 5, "heap": 57144, "heap_min": 32460, "late_pct": 0.6, "cmax_us": 57, "isr_max": 7.9}
+{"t": 12.595, "kind": "wheel", "wheel": "right", "rx": 13562, "sup_state": 1, "fault": 0, "cmd_age": 28, "heap": 57140, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 64, "isr_max": 7.8}
+{"t": 13.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 13.341, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 6, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 563711, "right_online": true, "right_age_ms": 4, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 720858}
+{"t": 14.017, "kind": "odom", "hz": 19, "state": 4}
+{"t": 14.349, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 14, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 564711, "right_online": true, "right_age_ms": 12, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 721858}
+{"t": 14.778, "kind": "wheel", "wheel": "left", "rx": 10751, "sup_state": 1, "fault": 0, "cmd_age": 53, "heap": 57144, "heap_min": 32460, "late_pct": 0.6, "cmax_us": 55, "isr_max": 7.9}
+{"t": 14.835, "kind": "wheel", "wheel": "right", "rx": 13605, "sup_state": 1, "fault": 0, "cmd_age": 0, "heap": 57132, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 64, "isr_max": 7.8}
+{"t": 15.02, "kind": "odom", "hz": 20, "state": 4}
+{"t": 15.362, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 565731, "right_online": true, "right_age_ms": 22, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 722858}
+{"t": 16.014, "kind": "odom", "hz": 19, "state": 4}
+{"t": 16.37, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 14, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 566731, "right_online": true, "right_age_ms": 13, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 723879}
+{"t": 16.994, "kind": "wheel", "wheel": "left", "rx": 10794, "sup_state": 1, "fault": 0, "cmd_age": 47, "heap": 57152, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 67, "isr_max": 8.0}
+{"t": 17.011, "kind": "odom", "hz": 20, "state": 4}
+{"t": 17.056, "kind": "wheel", "wheel": "right", "rx": 13647, "sup_state": 1, "fault": 0, "cmd_age": 30, "heap": 57140, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 61, "isr_max": 7.9}
+{"t": 17.38, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 2, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 567751, "right_online": true, "right_age_ms": 0, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 724898}
+{"t": 18.019, "kind": "odom", "hz": 19, "state": 4}
+{"t": 18.39, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 13, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 568751, "right_online": true, "right_age_ms": 12, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 725898}
+{"t": 19.018, "kind": "odom", "hz": 20, "state": 4}
+{"t": 19.208, "kind": "wheel", "wheel": "left", "rx": 10836, "sup_state": 1, "fault": 0, "cmd_age": 52, "heap": 57136, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 60, "isr_max": 8.0}
+{"t": 19.29, "kind": "wheel", "wheel": "right", "rx": 13690, "sup_state": 1, "fault": 0, "cmd_age": 9, "heap": 57148, "heap_min": 32284, "late_pct": 0.6, "cmax_us": 61, "isr_max": 7.8}
+{"t": 19.4, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 0, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 569771, "right_online": true, "right_age_ms": 22, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 726898}
+{"t": 20.006, "kind": "odom", "hz": 19, "state": 4}
+{"t": 20.408, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 570771, "right_online": true, "right_age_ms": 10, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 727918}
+{"t": 21.018, "kind": "odom", "hz": 20, "state": 4}
+{"t": 21.421, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 0, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 571791, "right_online": true, "right_age_ms": 3, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 728938}
+{"t": 21.433, "kind": "wheel", "wheel": "left", "rx": 10878, "sup_state": 1, "fault": 0, "cmd_age": 11, "heap": 57140, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 48, "isr_max": 8.0}
+{"t": 21.518, "kind": "wheel", "wheel": "right", "rx": 13733, "sup_state": 1, "fault": 0, "cmd_age": 16, "heap": 57148, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 49, "isr_max": 7.7}
+{"t": 22.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 22.429, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 572791, "right_online": true, "right_age_ms": 10, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 729938}
+{"t": 23.02, "kind": "odom", "hz": 20, "state": 4}
+{"t": 23.439, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 0, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 573811, "right_online": true, "right_age_ms": 20, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 730938}
+{"t": 23.651, "kind": "wheel", "wheel": "left", "rx": 10921, "sup_state": 1, "fault": 0, "cmd_age": 51, "heap": 57148, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 56, "isr_max": 8.0}
+{"t": 23.742, "kind": "wheel", "wheel": "right", "rx": 13775, "sup_state": 1, "fault": 0, "cmd_age": 19, "heap": 57144, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 56, "isr_max": 7.5}
+{"t": 24.012, "kind": "odom", "hz": 19, "state": 4}
+{"t": 24.447, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 8, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 574811, "right_online": true, "right_age_ms": 6, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 731958}
+{"t": 25.017, "kind": "odom", "hz": 20, "state": 4}
+{"t": 25.459, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 575831, "right_online": true, "right_age_ms": 18, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 732958}
+{"t": 25.931, "kind": "wheel", "wheel": "left", "rx": 10964, "sup_state": 1, "fault": 0, "cmd_age": 48, "heap": 57152, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 61, "isr_max": 7.9}
+{"t": 25.986, "kind": "wheel", "wheel": "right", "rx": 13818, "sup_state": 1, "fault": 0, "cmd_age": 31, "heap": 57096, "heap_min": 32284, "late_pct": 0.6, "cmax_us": 80, "isr_max": 7.8}
+{"t": 26.02, "kind": "odom", "hz": 19, "state": 4}
+{"t": 26.469, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 576831, "right_online": true, "right_age_ms": 10, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 733978}
+{"t": 27.016, "kind": "odom", "hz": 20, "state": 4}
+{"t": 27.48, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 577851, "right_online": true, "right_age_ms": 21, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 734978}
+{"t": 28.011, "kind": "odom", "hz": 19, "state": 4}
+{"t": 28.151, "kind": "wheel", "wheel": "left", "rx": 11007, "sup_state": 1, "fault": 0, "cmd_age": 52, "heap": 57152, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 63, "isr_max": 8.0}
+{"t": 28.217, "kind": "wheel", "wheel": "right", "rx": 13861, "sup_state": 1, "fault": 0, "cmd_age": 17, "heap": 57128, "heap_min": 32284, "late_pct": 0.6, "cmax_us": 55, "isr_max": 7.6}
+{"t": 28.488, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 11, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 578851, "right_online": true, "right_age_ms": 9, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 735998}
+{"t": 29.019, "kind": "odom", "hz": 20, "state": 4}
+{"t": 29.5, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 579871, "right_online": true, "right_age_ms": 19, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 736998}
+{"t": 30.015, "kind": "odom", "hz": 19, "state": 4}
+{"t": 30.015, "kind": "event", "what": "adding 30 participants"}
+{"t": 30.238, "kind": "event", "what": "30 participants up"}
+{"t": 30.425, "kind": "wheel", "wheel": "left", "rx": 11049, "sup_state": 1, "fault": 0, "cmd_age": 8, "heap": 57152, "heap_min": 32460, "late_pct": null, "cmax_us": null, "isr_max": null}
+{"t": 30.51, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 7, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 580868, "right_online": true, "right_age_ms": 20, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 737999}
+{"t": 30.555, "kind": "wheel", "wheel": "right", "rx": 13903, "sup_state": 1, "fault": 0, "cmd_age": 8, "heap": 57148, "heap_min": 32284, "late_pct": null, "cmax_us": null, "isr_max": null}
+{"t": 31.011, "kind": "odom", "hz": 19, "state": 4}
+{"t": 31.519, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 19, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 581868, "right_online": true, "right_age_ms": 11, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 739028}
+{"t": 32.001, "kind": "odom", "hz": 20, "state": 4}
+{"t": 32.528, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 9, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 582887, "right_online": true, "right_age_ms": 0, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 740048}
+{"t": 32.742, "kind": "wheel", "wheel": "left", "rx": 11090, "sup_state": 1, "fault": 0, "cmd_age": 3, "heap": 56136, "heap_min": 32460, "late_pct": 1.8, "cmax_us": 65, "isr_max": 8.0}
+{"t": 32.796, "kind": "wheel", "wheel": "right", "rx": 13946, "sup_state": 1, "fault": 0, "cmd_age": 15, "heap": 55704, "heap_min": 32284, "late_pct": 1.7, "cmax_us": 58, "isr_max": 7.8}
+{"t": 33.016, "kind": "odom", "hz": 19, "state": 4}
+{"t": 33.537, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 18, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 583887, "right_online": true, "right_age_ms": 11, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 741048}
+{"t": 34.005, "kind": "odom", "hz": 20, "state": 4}
+{"t": 34.547, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 6, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 584917, "right_online": true, "right_age_ms": 1, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 742068}
+{"t": 34.962, "kind": "wheel", "wheel": "left", "rx": 11134, "sup_state": 1, "fault": 0, "cmd_age": 4, "heap": 57156, "heap_min": 32460, "late_pct": 1.1, "cmax_us": 59, "isr_max": 8.0}
+{"t": 35.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 35.024, "kind": "wheel", "wheel": "right", "rx": 13987, "sup_state": 1, "fault": 0, "cmd_age": 49, "heap": 57332, "heap_min": 32284, "late_pct": 1.1, "cmax_us": 55, "isr_max": 7.7}
+{"t": 35.556, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 14, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 585917, "right_online": true, "right_age_ms": 9, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 743068}
+{"t": 36.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 36.565, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 6, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 586927, "right_online": true, "right_age_ms": 18, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 744068}
+{"t": 37.01, "kind": "odom", "hz": 20, "state": 4}
+{"t": 37.183, "kind": "wheel", "wheel": "left", "rx": 11176, "sup_state": 1, "fault": 0, "cmd_age": 0, "heap": 55472, "heap_min": 32460, "late_pct": 1.1, "cmax_us": 82, "isr_max": 8.0}
+{"t": 37.26, "kind": "wheel", "wheel": "right", "rx": 14029, "sup_state": 1, "fault": 0, "cmd_age": 12, "heap": 57140, "heap_min": 32284, "late_pct": 1.1, "cmax_us": 54, "isr_max": 7.8}
+{"t": 37.574, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 14, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 587928, "right_online": true, "right_age_ms": 9, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 745088}
+{"t": 38.014, "kind": "odom", "hz": 20, "state": 4}
+{"t": 38.586, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 5, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 588957, "right_online": true, "right_age_ms": 19, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 746088}
+{"t": 39.016, "kind": "odom", "hz": 19, "state": 4}
+{"t": 39.481, "kind": "wheel", "wheel": "left", "rx": 11218, "sup_state": 1, "fault": 0, "cmd_age": 25, "heap": 57152, "heap_min": 32460, "late_pct": 1.1, "cmax_us": 57, "isr_max": 8.0}
+{"t": 39.519, "kind": "wheel", "wheel": "right", "rx": 14072, "sup_state": 1, "fault": 0, "cmd_age": 49, "heap": 57152, "heap_min": 32284, "late_pct": 1.1, "cmax_us": 55, "isr_max": 7.6}
+{"t": 39.595, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 15, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 589947, "right_online": true, "right_age_ms": 9, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 747108}
+{"t": 40.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 40.604, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 6, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 590967, "right_online": true, "right_age_ms": 18, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 748108}
+{"t": 41.011, "kind": "odom", "hz": 20, "state": 4}
+{"t": 41.613, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 13, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 591967, "right_online": true, "right_age_ms": 7, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 749128}
+{"t": 41.705, "kind": "wheel", "wheel": "left", "rx": 11262, "sup_state": 1, "fault": 0, "cmd_age": 1, "heap": 57168, "heap_min": 32460, "late_pct": 1.0, "cmax_us": 53, "isr_max": 7.9}
+{"t": 41.766, "kind": "wheel", "wheel": "right", "rx": 14115, "sup_state": 1, "fault": 0, "cmd_age": 14, "heap": 57152, "heap_min": 32284, "late_pct": 1.0, "cmax_us": 63, "isr_max": 7.7}
+{"t": 42.018, "kind": "odom", "hz": 19, "state": 4}
+{"t": 42.622, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 22, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 592967, "right_online": true, "right_age_ms": 14, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 750129}
+{"t": 43.001, "kind": "odom", "hz": 20, "state": 4}
+{"t": 43.633, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 11, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 593987, "right_online": true, "right_age_ms": 4, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 751148}
+{"t": 43.94, "kind": "wheel", "wheel": "left", "rx": 11305, "sup_state": 1, "fault": 0, "cmd_age": 13, "heap": 57160, "heap_min": 32460, "late_pct": 1.0, "cmax_us": 53, "isr_max": 8.0}
+{"t": 44.004, "kind": "wheel", "wheel": "right", "rx": 14157, "sup_state": 1, "fault": 0, "cmd_age": 41, "heap": 57152, "heap_min": 32284, "late_pct": 1.0, "cmax_us": 69, "isr_max": 7.8}
+{"t": 44.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 44.645, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 5, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 595007, "right_online": true, "right_age_ms": 18, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 752148}
+{"t": 45.019, "kind": "odom", "hz": 20, "state": 4}
+{"t": 45.655, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 16, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 596007, "right_online": true, "right_age_ms": 8, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 753168}
+{"t": 46.011, "kind": "odom", "hz": 19, "state": 4}
+{"t": 46.161, "kind": "wheel", "wheel": "left", "rx": 11347, "sup_state": 1, "fault": 0, "cmd_age": 51, "heap": 57156, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 56, "isr_max": 8.0}
+{"t": 46.23, "kind": "wheel", "wheel": "right", "rx": 14200, "sup_state": 1, "fault": 0, "cmd_age": 21, "heap": 57140, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 53, "isr_max": 7.6}
+{"t": 46.665, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 597027, "right_online": true, "right_age_ms": 16, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 754169}
+{"t": 47.013, "kind": "odom", "hz": 20, "state": 4}
+{"t": 47.675, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 13, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 598027, "right_online": true, "right_age_ms": 7, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 755188}
+{"t": 48.016, "kind": "odom", "hz": 19, "state": 4}
+{"t": 48.45, "kind": "wheel", "wheel": "right", "rx": 14243, "sup_state": 1, "fault": 0, "cmd_age": 3, "heap": 57152, "heap_min": 32284, "late_pct": 1.0, "cmax_us": 56, "isr_max": 7.9}
+{"t": 48.523, "kind": "wheel", "wheel": "left", "rx": 11390, "sup_state": 1, "fault": 0, "cmd_age": 1, "heap": 57244, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 57, "isr_max": 8.0}
+{"t": 48.686, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 4, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 599047, "right_online": true, "right_age_ms": 18, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 756188}
+{"t": 49.013, "kind": "odom", "hz": 20, "state": 4}
+{"t": 49.696, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 14, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 600048, "right_online": true, "right_age_ms": 8, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 757208}
+{"t": 50.017, "kind": "odom", "hz": 19, "state": 4}
+{"t": 50.67, "kind": "wheel", "wheel": "right", "rx": 14284, "sup_state": 1, "fault": 0, "cmd_age": 34, "heap": 57148, "heap_min": 32284, "late_pct": 1.0, "cmax_us": 59, "isr_max": 7.8}
+{"t": 50.706, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 4, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 601067, "right_online": true, "right_age_ms": 19, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 758208}
+{"t": 50.78, "kind": "wheel", "wheel": "left", "rx": 11434, "sup_state": 1, "fault": 0, "cmd_age": 24, "heap": 56388, "heap_min": 32460, "late_pct": 1.0, "cmax_us": 54, "isr_max": 7.9}
+{"t": 51.012, "kind": "odom", "hz": 20, "state": 4}
+{"t": 51.714, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 10, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 602078, "right_online": true, "right_age_ms": 5, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 759228}
+{"t": 52.015, "kind": "odom", "hz": 19, "state": 4}
+{"t": 52.725, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 3, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 603087, "right_online": true, "right_age_ms": 16, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 760228}
+{"t": 52.906, "kind": "wheel", "wheel": "right", "rx": 14328, "sup_state": 1, "fault": 0, "cmd_age": 11, "heap": 56588, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 69, "isr_max": 7.9}
+{"t": 52.997, "kind": "wheel", "wheel": "left", "rx": 11477, "sup_state": 1, "fault": 0, "cmd_age": 28, "heap": 56996, "heap_min": 32460, "late_pct": 0.8, "cmax_us": 56, "isr_max": 7.9}
+{"t": 53.02, "kind": "odom", "hz": 20, "state": 4}
+{"t": 53.733, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 9, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 604087, "right_online": true, "right_age_ms": 5, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 761248}
+{"t": 54.014, "kind": "odom", "hz": 19, "state": 4}
+{"t": 54.744, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 605107, "right_online": true, "right_age_ms": 15, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 762248}
+{"t": 55.01, "kind": "odom", "hz": 20, "state": 4}
+{"t": 55.146, "kind": "wheel", "wheel": "right", "rx": 14370, "sup_state": 1, "fault": 0, "cmd_age": 11, "heap": 57152, "heap_min": 32284, "late_pct": 0.9, "cmax_us": 56, "isr_max": 7.8}
+{"t": 55.212, "kind": "wheel", "wheel": "left", "rx": 11519, "sup_state": 1, "fault": 0, "cmd_age": 35, "heap": 57160, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 58, "isr_max": 8.0}
+{"t": 55.754, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 606107, "right_online": true, "right_age_ms": 5, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 763268}
+{"t": 56.015, "kind": "odom", "hz": 19, "state": 4}
+{"t": 56.764, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 607127, "right_online": true, "right_age_ms": 16, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 764268}
+{"t": 57.01, "kind": "odom", "hz": 20, "state": 4}
+{"t": 57.425, "kind": "wheel", "wheel": "right", "rx": 14413, "sup_state": 1, "fault": 0, "cmd_age": 23, "heap": 57156, "heap_min": 32284, "late_pct": 1.0, "cmax_us": 56, "isr_max": 7.6}
+{"t": 57.448, "kind": "wheel", "wheel": "left", "rx": 11562, "sup_state": 1, "fault": 0, "cmd_age": 1, "heap": 57152, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 62, "isr_max": 8.0}
+{"t": 57.773, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 608127, "right_online": true, "right_age_ms": 5, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 765288}
+{"t": 58.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 58.783, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 609147, "right_online": true, "right_age_ms": 15, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 766288}
+{"t": 59.017, "kind": "odom", "hz": 20, "state": 4}
+{"t": 59.651, "kind": "wheel", "wheel": "right", "rx": 14456, "sup_state": 1, "fault": 0, "cmd_age": 4, "heap": 57132, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 55, "isr_max": 7.8}
+{"t": 59.713, "kind": "wheel", "wheel": "left", "rx": 11605, "sup_state": 1, "fault": 0, "cmd_age": 51, "heap": 57156, "heap_min": 32460, "late_pct": 0.8, "cmax_us": 62, "isr_max": 8.0}
+{"t": 59.791, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 8, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 610147, "right_online": true, "right_age_ms": 3, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 767308}
+{"t": 60.015, "kind": "odom", "hz": 19, "state": 4}
+{"t": 60.8, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 18, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 611147, "right_online": true, "right_age_ms": 12, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 768308}
+{"t": 61.011, "kind": "odom", "hz": 20, "state": 4}
+{"t": 61.807, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 6, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 612167, "right_online": true, "right_age_ms": 20, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 769308}
+{"t": 61.871, "kind": "wheel", "wheel": "right", "rx": 14498, "sup_state": 1, "fault": 0, "cmd_age": 23, "heap": 57140, "heap_min": 32284, "late_pct": 0.9, "cmax_us": 58, "isr_max": 7.9}
+{"t": 61.934, "kind": "wheel", "wheel": "left", "rx": 11648, "sup_state": 1, "fault": 0, "cmd_age": 45, "heap": 57152, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 54, "isr_max": 7.9}
+{"t": 62.015, "kind": "odom", "hz": 19, "state": 4}
+{"t": 62.818, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 17, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 613167, "right_online": true, "right_age_ms": 6, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 770328}
+{"t": 63.011, "kind": "odom", "hz": 20, "state": 4}
+{"t": 63.827, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 5, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 614187, "right_online": true, "right_age_ms": 17, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 771328}
+{"t": 64.018, "kind": "odom", "hz": 19, "state": 4}
+{"t": 64.111, "kind": "wheel", "wheel": "right", "rx": 14541, "sup_state": 1, "fault": 0, "cmd_age": 51, "heap": 57132, "heap_min": 32284, "late_pct": 1.0, "cmax_us": 68, "isr_max": 7.9}
+{"t": 64.219, "kind": "wheel", "wheel": "left", "rx": 11691, "sup_state": 1, "fault": 0, "cmd_age": 2, "heap": 57160, "heap_min": 32460, "late_pct": 1.0, "cmax_us": 64, "isr_max": 7.9}
+{"t": 64.836, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 14, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 615187, "right_online": true, "right_age_ms": 7, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 772348}
+{"t": 65.012, "kind": "odom", "hz": 20, "state": 4}
+{"t": 65.846, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 3, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 616207, "right_online": true, "right_age_ms": 19, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 773348}
+{"t": 66.019, "kind": "odom", "hz": 19, "state": 4}
+{"t": 66.33, "kind": "wheel", "wheel": "right", "rx": 14584, "sup_state": 1, "fault": 0, "cmd_age": 49, "heap": 57152, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 53, "isr_max": 7.6}
+{"t": 66.483, "kind": "wheel", "wheel": "left", "rx": 11734, "sup_state": 1, "fault": 0, "cmd_age": 8, "heap": 57152, "heap_min": 32460, "late_pct": 1.0, "cmax_us": 59, "isr_max": 7.7}
+{"t": 66.856, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 15, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 617207, "right_online": true, "right_age_ms": 6, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 774369}
+{"t": 67.014, "kind": "odom", "hz": 20, "state": 4}
+{"t": 67.867, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 3, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 618227, "right_online": true, "right_age_ms": 19, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 775360}
+{"t": 68.016, "kind": "odom", "hz": 19, "state": 4}
+{"t": 68.578, "kind": "wheel", "wheel": "right", "rx": 14626, "sup_state": 1, "fault": 0, "cmd_age": 23, "heap": 57080, "heap_min": 32284, "late_pct": 0.9, "cmax_us": 60, "isr_max": 7.8}
+{"t": 68.721, "kind": "wheel", "wheel": "left", "rx": 11777, "sup_state": 1, "fault": 0, "cmd_age": 2, "heap": 57160, "heap_min": 32460, "late_pct": 0.8, "cmax_us": 68, "isr_max": 8.0}
+{"t": 68.877, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 14, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 619227, "right_online": true, "right_age_ms": 9, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 776388}
+{"t": 69.018, "kind": "odom", "hz": 20, "state": 4}
+{"t": 69.891, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 7, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 620247, "right_online": true, "right_age_ms": 1, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 777408}
+{"t": 70.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 70.849, "kind": "wheel", "wheel": "right", "rx": 14673, "sup_state": 1, "fault": 0, "cmd_age": 13, "heap": 57140, "heap_min": 32284, "late_pct": 1.0, "cmax_us": 57, "isr_max": 7.8}
+{"t": 70.901, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 20, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 621247, "right_online": true, "right_age_ms": 13, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 778408}
+{"t": 70.953, "kind": "wheel", "wheel": "left", "rx": 11820, "sup_state": 1, "fault": 0, "cmd_age": 49, "heap": 54472, "heap_min": 32460, "late_pct": 1.0, "cmax_us": 55, "isr_max": 7.9}
+{"t": 71.01, "kind": "odom", "hz": 20, "state": 4}
+{"t": 71.912, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 9, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 622267, "right_online": true, "right_age_ms": 2, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 779428}
+{"t": 72.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 72.923, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 19, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 623267, "right_online": true, "right_age_ms": 12, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 780428}
+{"t": 73.011, "kind": "odom", "hz": 20, "state": 4}
+{"t": 73.087, "kind": "wheel", "wheel": "right", "rx": 14712, "sup_state": 1, "fault": 0, "cmd_age": 15, "heap": 57144, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 61, "isr_max": 7.8}
+{"t": 73.182, "kind": "wheel", "wheel": "left", "rx": 11862, "sup_state": 1, "fault": 0, "cmd_age": 6, "heap": 57164, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 65, "isr_max": 8.0}
+{"t": 73.933, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 8, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 624287, "right_online": true, "right_age_ms": 4, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 781448}
+{"t": 74.018, "kind": "odom", "hz": 19, "state": 4}
+{"t": 74.943, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 0, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 625307, "right_online": true, "right_age_ms": 13, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 782448}
+{"t": 75.01, "kind": "odom", "hz": 20, "state": 4}
+{"t": 75.327, "kind": "wheel", "wheel": "right", "rx": 14755, "sup_state": 1, "fault": 0, "cmd_age": 22, "heap": 56632, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 55, "isr_max": 7.8}
+{"t": 75.454, "kind": "wheel", "wheel": "left", "rx": 11905, "sup_state": 1, "fault": 0, "cmd_age": 12, "heap": 57152, "heap_min": 32460, "late_pct": 0.8, "cmax_us": 47, "isr_max": 7.9}
+{"t": 75.953, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 10, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 626307, "right_online": true, "right_age_ms": 4, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 783468}
+{"t": 76.005, "kind": "odom", "hz": 19, "state": 4}
+{"t": 76.962, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 20, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 627307, "right_online": true, "right_age_ms": 13, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 784468}
+{"t": 77.007, "kind": "odom", "hz": 20, "state": 4}
+{"t": 77.548, "kind": "wheel", "wheel": "right", "rx": 14798, "sup_state": 1, "fault": 0, "cmd_age": 7, "heap": 57152, "heap_min": 32284, "late_pct": 0.9, "cmax_us": 62, "isr_max": 7.7}
+{"t": 77.685, "kind": "wheel", "wheel": "left", "rx": 11948, "sup_state": 1, "fault": 0, "cmd_age": 8, "heap": 57152, "heap_min": 32460, "late_pct": 1.0, "cmax_us": 52, "isr_max": 7.9}
+{"t": 77.972, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 9, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 628327, "right_online": true, "right_age_ms": 2, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 785488}
+{"t": 78.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 78.981, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 17, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 629328, "right_online": true, "right_age_ms": 11, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 786488}
+{"t": 79.011, "kind": "odom", "hz": 19, "state": 4}
+{"t": 79.785, "kind": "wheel", "wheel": "right", "rx": 14840, "sup_state": 1, "fault": 0, "cmd_age": 4, "heap": 57132, "heap_min": 32284, "late_pct": 0.9, "cmax_us": 67, "isr_max": 7.6}
+{"t": 79.953, "kind": "wheel", "wheel": "left", "rx": 11991, "sup_state": 1, "fault": 0, "cmd_age": 45, "heap": 57148, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 57, "isr_max": 8.0}
+{"t": 79.991, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 8, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 630347, "right_online": true, "right_age_ms": 22, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 787488}
+{"t": 80.017, "kind": "odom", "hz": 20, "state": 4}
+{"t": 81.001, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 17, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 631347, "right_online": true, "right_age_ms": 12, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 788508}
+{"t": 81.01, "kind": "odom", "hz": 20, "state": 4}
+{"t": 82.011, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 7, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 632367, "right_online": true, "right_age_ms": 0, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 789528}
+{"t": 82.012, "kind": "wheel", "wheel": "right", "rx": 14882, "sup_state": 1, "fault": 0, "cmd_age": 24, "heap": 57160, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 58, "isr_max": 7.8}
+{"t": 82.018, "kind": "odom", "hz": 19, "state": 4}
+{"t": 82.183, "kind": "wheel", "wheel": "left", "rx": 12034, "sup_state": 1, "fault": 0, "cmd_age": 2, "heap": 57148, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 60, "isr_max": 8.0}
+{"t": 83.019, "kind": "odom", "hz": 20, "state": 4}
+{"t": 83.02, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 17, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 633367, "right_online": true, "right_age_ms": 10, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 790528}
+{"t": 84.019, "kind": "odom", "hz": 19, "state": 4}
+{"t": 84.031, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 7, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 634387, "right_online": true, "right_age_ms": 21, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 791528}
+{"t": 84.233, "kind": "wheel", "wheel": "right", "rx": 14924, "sup_state": 1, "fault": 0, "cmd_age": 38, "heap": 57148, "heap_min": 32284, "late_pct": 0.9, "cmax_us": 59, "isr_max": 7.8}
+{"t": 84.488, "kind": "wheel", "wheel": "left", "rx": 12076, "sup_state": 1, "fault": 0, "cmd_age": 2, "heap": 57152, "heap_min": 32460, "late_pct": 0.8, "cmax_us": 57, "isr_max": 7.9}
+{"t": 85.013, "kind": "odom", "hz": 19, "state": 4}
+{"t": 85.041, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 18, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 635387, "right_online": true, "right_age_ms": 11, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 792548}
+{"t": 86.011, "kind": "odom", "hz": 20, "state": 4}
+{"t": 86.053, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 636407, "right_online": true, "right_age_ms": 23, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 793548}
+{"t": 86.497, "kind": "wheel", "wheel": "right", "rx": 14967, "sup_state": 1, "fault": 0, "cmd_age": 17, "heap": 57156, "heap_min": 32284, "late_pct": 0.9, "cmax_us": 66, "isr_max": 7.6}
+{"t": 86.714, "kind": "wheel", "wheel": "left", "rx": 12120, "sup_state": 1, "fault": 0, "cmd_age": 9, "heap": 57148, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 66, "isr_max": 8.0}
+{"t": 87.017, "kind": "odom", "hz": 19, "state": 4}
+{"t": 87.062, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 18, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 637407, "right_online": true, "right_age_ms": 12, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 794568}
+{"t": 88.015, "kind": "odom", "hz": 20, "state": 4}
+{"t": 88.072, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 5, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 638428, "right_online": true, "right_age_ms": 15, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 795570}
+{"t": 88.719, "kind": "wheel", "wheel": "right", "rx": 15011, "sup_state": 1, "fault": 0, "cmd_age": 23, "heap": 56016, "heap_min": 32284, "late_pct": 0.9, "cmax_us": 52, "isr_max": 7.6}
+{"t": 88.977, "kind": "wheel", "wheel": "left", "rx": 12162, "sup_state": 1, "fault": 0, "cmd_age": 22, "heap": 57148, "heap_min": 32460, "late_pct": 0.9, "cmax_us": 57, "isr_max": 8.0}
+{"t": 89.011, "kind": "odom", "hz": 19, "state": 4}
+{"t": 89.083, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 20, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 639427, "right_online": true, "right_age_ms": 12, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 796588}
+{"t": 90.003, "kind": "odom", "hz": 20, "state": 4}
+{"t": 90.003, "kind": "event", "what": "removing participants"}
+{"t": 90.165, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 5, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 640498, "right_online": true, "right_age_ms": 7, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 797649}
+{"t": 90.584, "kind": "event", "what": "participants removed"}
+{"t": 91.017, "kind": "odom", "hz": 19, "state": 4}
+{"t": 91.053, "kind": "wheel", "wheel": "right", "rx": 15058, "sup_state": 1, "fault": 0, "cmd_age": 18, "heap": 57144, "heap_min": 32284, "late_pct": 1.0, "cmax_us": 63, "isr_max": 7.8}
+{"t": 91.179, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 15, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 641527, "right_online": true, "right_age_ms": 9, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 798688}
+{"t": 91.235, "kind": "wheel", "wheel": "left", "rx": 12206, "sup_state": 1, "fault": 0, "cmd_age": 45, "heap": 56516, "heap_min": 32460, "late_pct": 1.0, "cmax_us": 57, "isr_max": 8.0}
+{"t": 92.015, "kind": "odom", "hz": 20, "state": 4}
+{"t": 92.189, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 4, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 642547, "right_online": true, "right_age_ms": 17, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 799688}
+{"t": 93.019, "kind": "odom", "hz": 19, "state": 4}
+{"t": 93.199, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 643547, "right_online": true, "right_age_ms": 7, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 800708}
+{"t": 93.289, "kind": "wheel", "wheel": "right", "rx": 15095, "sup_state": 1, "fault": 0, "cmd_age": 7, "heap": 57136, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 51, "isr_max": 7.8}
+{"t": 93.456, "kind": "wheel", "wheel": "left", "rx": 12247, "sup_state": 1, "fault": 0, "cmd_age": 2, "heap": 57156, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 63, "isr_max": 8.0}
+{"t": 94.017, "kind": "odom", "hz": 20, "state": 4}
+{"t": 94.208, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 3, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 644567, "right_online": true, "right_age_ms": 18, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 801700}
+{"t": 95.016, "kind": "odom", "hz": 19, "state": 4}
+{"t": 95.218, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 10, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 645567, "right_online": true, "right_age_ms": 6, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 802728}
+{"t": 95.569, "kind": "wheel", "wheel": "right", "rx": 15138, "sup_state": 1, "fault": 0, "cmd_age": 24, "heap": 57152, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 72, "isr_max": 7.6}
+{"t": 95.681, "kind": "wheel", "wheel": "left", "rx": 12289, "sup_state": 1, "fault": 0, "cmd_age": 23, "heap": 57148, "heap_min": 32460, "late_pct": 0.8, "cmax_us": 50, "isr_max": 7.9}
+{"t": 96.01, "kind": "odom", "hz": 19, "state": 4}
+{"t": 96.23, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 0, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 646587, "right_online": true, "right_age_ms": 16, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 803728}
+{"t": 97.015, "kind": "odom", "hz": 20, "state": 4}
+{"t": 97.238, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 13, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 647588, "right_online": true, "right_age_ms": 7, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 804748}
+{"t": 97.85, "kind": "wheel", "wheel": "right", "rx": 15182, "sup_state": 1, "fault": 0, "cmd_age": 49, "heap": 57160, "heap_min": 32284, "late_pct": 0.6, "cmax_us": 64, "isr_max": 7.5}
+{"t": 97.946, "kind": "wheel", "wheel": "left", "rx": 12332, "sup_state": 1, "fault": 0, "cmd_age": 7, "heap": 57152, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 70, "isr_max": 7.8}
+{"t": 98.01, "kind": "odom", "hz": 19, "state": 4}
+{"t": 98.248, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 2, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 648607, "right_online": true, "right_age_ms": 16, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 805748}
+{"t": 99.015, "kind": "odom", "hz": 20, "state": 4}
+{"t": 99.259, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 15, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 649607, "right_online": true, "right_age_ms": 4, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 806768}
+{"t": 100.016, "kind": "odom", "hz": 19, "state": 4}
+{"t": 100.09, "kind": "wheel", "wheel": "right", "rx": 15225, "sup_state": 1, "fault": 0, "cmd_age": 30, "heap": 57140, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 59, "isr_max": 7.8}
+{"t": 100.162, "kind": "wheel", "wheel": "left", "rx": 12375, "sup_state": 1, "fault": 0, "cmd_age": 2, "heap": 57160, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 61, "isr_max": 7.9}
+{"t": 100.27, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 2, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 650627, "right_online": true, "right_age_ms": 18, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 807768}
+{"t": 101.002, "kind": "odom", "hz": 20, "state": 4}
+{"t": 101.278, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 651628, "right_online": true, "right_age_ms": 8, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 808788}
+{"t": 102.016, "kind": "odom", "hz": 19, "state": 4}
+{"t": 102.289, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 22, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 652627, "right_online": true, "right_age_ms": 15, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 809788}
+{"t": 102.311, "kind": "wheel", "wheel": "right", "rx": 15267, "sup_state": 1, "fault": 0, "cmd_age": 34, "heap": 57132, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 53, "isr_max": 7.8}
+{"t": 102.394, "kind": "wheel", "wheel": "left", "rx": 12417, "sup_state": 1, "fault": 0, "cmd_age": 55, "heap": 57156, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 57, "isr_max": 8.0}
+{"t": 103.012, "kind": "odom", "hz": 20, "state": 4}
+{"t": 103.297, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 653647, "right_online": true, "right_age_ms": 6, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 810808}
+{"t": 104.017, "kind": "odom", "hz": 19, "state": 4}
+{"t": 104.308, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 1, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 654667, "right_online": true, "right_age_ms": 13, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 811808}
+{"t": 104.55, "kind": "wheel", "wheel": "right", "rx": 15310, "sup_state": 1, "fault": 0, "cmd_age": 1, "heap": 57140, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 71, "isr_max": 7.8}
+{"t": 104.609, "kind": "wheel", "wheel": "left", "rx": 12460, "sup_state": 1, "fault": 0, "cmd_age": 2, "heap": 57160, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 60, "isr_max": 7.8}
+{"t": 105.011, "kind": "odom", "hz": 20, "state": 4}
+{"t": 105.318, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 11, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 655667, "right_online": true, "right_age_ms": 6, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 812828}
+{"t": 106.016, "kind": "odom", "hz": 19, "state": 4}
+{"t": 106.328, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 2, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 656687, "right_online": true, "right_age_ms": 17, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 813828}
+{"t": 106.772, "kind": "wheel", "wheel": "right", "rx": 15353, "sup_state": 1, "fault": 0, "cmd_age": 16, "heap": 57132, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 54, "isr_max": 7.8}
+{"t": 106.824, "kind": "wheel", "wheel": "left", "rx": 12502, "sup_state": 1, "fault": 0, "cmd_age": 52, "heap": 57152, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 75, "isr_max": 8.0}
+{"t": 107.02, "kind": "odom", "hz": 20, "state": 4}
+{"t": 107.338, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 9, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 657687, "right_online": true, "right_age_ms": 4, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 814848}
+{"t": 108.014, "kind": "odom", "hz": 19, "state": 4}
+{"t": 108.349, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 21, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 658687, "right_online": true, "right_age_ms": 15, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 815848}
+{"t": 109.011, "kind": "odom", "hz": 19, "state": 4}
+{"t": 109.052, "kind": "wheel", "wheel": "right", "rx": 15396, "sup_state": 1, "fault": 0, "cmd_age": 49, "heap": 57140, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 51, "isr_max": 7.6}
+{"t": 109.098, "kind": "wheel", "wheel": "left", "rx": 12545, "sup_state": 1, "fault": 0, "cmd_age": 1, "heap": 57160, "heap_min": 32460, "late_pct": 0.8, "cmax_us": 48, "isr_max": 7.9}
+{"t": 109.358, "kind": "mib", "state": "AUTONOMOUS", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "ARMED", "left_fault": "NONE", "left_uptime_ms": 659707, "right_online": true, "right_age_ms": 6, "right_state": "ARMED", "right_fault": "NONE", "right_uptime_ms": 816868}
+{"t": 110.018, "kind": "odom", "hz": 20, "state": 4}
+{"t": 110.368, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 2, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 660727, "right_online": true, "right_age_ms": 11, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 817868}
+{"t": 110.606, "kind": "event", "what": "DISABLE", "state": 1}
+{"t": 111.012, "kind": "odom", "hz": 19, "state": 1}
+{"t": 111.33, "kind": "wheel", "wheel": "right", "rx": 15439, "sup_state": 0, "fault": 0, "cmd_age": 3, "heap": 57156, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 53, "isr_max": 7.8}
+{"t": 111.367, "kind": "wheel", "wheel": "left", "rx": 12588, "sup_state": 0, "fault": 0, "cmd_age": 1, "heap": 57156, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 61, "isr_max": 7.9}
+{"t": 111.38, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 14, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 661727, "right_online": true, "right_age_ms": 4, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 818888}
+{"t": 112.037, "kind": "odom", "hz": 20, "state": 1}
+{"t": 112.389, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 2, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 662747, "right_online": true, "right_age_ms": 17, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 819888}
+{"t": 113.012, "kind": "odom", "hz": 19, "state": 1}
+{"t": 113.397, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 12, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 663747, "right_online": true, "right_age_ms": 6, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 820908}
+{"t": 113.557, "kind": "wheel", "wheel": "right", "rx": 15482, "sup_state": 0, "fault": 0, "cmd_age": 32, "heap": 57136, "heap_min": 32284, "late_pct": 0.8, "cmax_us": 65, "isr_max": 7.6}
+{"t": 113.583, "kind": "wheel", "wheel": "left", "rx": 12631, "sup_state": 0, "fault": 0, "cmd_age": 48, "heap": 57164, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 58, "isr_max": 7.9}
+{"t": 114.037, "kind": "odom", "hz": 20, "state": 1}
+{"t": 114.407, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 0, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 664767, "right_online": true, "right_age_ms": 14, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 821908}
+{"t": 115.011, "kind": "odom", "hz": 19, "state": 1}
+{"t": 115.417, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 11, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 665767, "right_online": true, "right_age_ms": 5, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 822928}
+{"t": 115.795, "kind": "wheel", "wheel": "right", "rx": 15525, "sup_state": 0, "fault": 0, "cmd_age": 27, "heap": 57152, "heap_min": 32284, "late_pct": 0.6, "cmax_us": 56, "isr_max": 7.8}
+{"t": 115.849, "kind": "wheel", "wheel": "left", "rx": 12674, "sup_state": 0, "fault": 0, "cmd_age": 4, "heap": 57156, "heap_min": 32460, "late_pct": 0.8, "cmax_us": 59, "isr_max": 7.9}
+{"t": 116.034, "kind": "odom", "hz": 20, "state": 1}
+{"t": 116.425, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 19, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 666767, "right_online": true, "right_age_ms": 13, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 823928}
+{"t": 117.005, "kind": "odom", "hz": 19, "state": 1}
+{"t": 117.434, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 9, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 667787, "right_online": true, "right_age_ms": 0, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 824948}
+{"t": 118.031, "kind": "wheel", "wheel": "right", "rx": 15568, "sup_state": 0, "fault": 0, "cmd_age": 17, "heap": 57140, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 56, "isr_max": 7.8}
+{"t": 118.033, "kind": "odom", "hz": 20, "state": 1}
+{"t": 118.066, "kind": "wheel", "wheel": "left", "rx": 12717, "sup_state": 0, "fault": 0, "cmd_age": 2, "heap": 57160, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 61, "isr_max": 7.9}
+{"t": 118.442, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 16, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 668787, "right_online": true, "right_age_ms": 10, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 825948}
+{"t": 119.011, "kind": "odom", "hz": 19, "state": 1}
+{"t": 119.453, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 4, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 669807, "right_online": true, "right_age_ms": 0, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 826959}
+{"t": 120.034, "kind": "odom", "hz": 20, "state": 1}
+{"t": 120.27, "kind": "wheel", "wheel": "right", "rx": 15611, "sup_state": 0, "fault": 0, "cmd_age": 21, "heap": 57156, "heap_min": 32284, "late_pct": 0.7, "cmax_us": 52, "isr_max": 7.8}
+{"t": 120.337, "kind": "wheel", "wheel": "left", "rx": 12760, "sup_state": 0, "fault": 0, "cmd_age": 5, "heap": 57152, "heap_min": 32460, "late_pct": 0.7, "cmax_us": 52, "isr_max": 8.0}
+{"t": 120.461, "kind": "mib", "state": "IDLE", "estop": false, "left_online": true, "left_age_ms": 15, "left_state": "DISARMED", "left_fault": "NONE", "left_uptime_ms": 670807, "right_online": true, "right_age_ms": 8, "right_state": "DISARMED", "right_fault": "NONE", "right_uptime_ms": 827968}
+{"t": 120.648, "kind": "event", "what": "end"}
