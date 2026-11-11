@@ -98,15 +98,17 @@ inline constexpr int kBootVdsLevel = 6;
 inline constexpr float kSpeedKpEnc = 0.025f;
 inline constexpr float kSpeedKpHall = 0.125f;
 inline constexpr float kSpeedKiHall = 0.5f;
-// Hall speed tracking loop, Hz, and the per-wheel hall speed gains the chair drives on
-// (2026-11-01). The driver's tune, auto-tuned per wheel and then taken down 15 % when
-// 'vl' went to 22 V: at 16 V the voltage clamp had been quietly limiting these gains, and
-// at full strength they limit-cycled the loaded chair. 10 Hz tracking with the 0.125 / 0.5
-// defaults felt nervous to the driver; 2 Hz with these is what he chose. kSpeedKpHall /
+// Hall speed tracking loop, Hz, and the hall speed gains the hub20 drive wheels boot on.
+// One pair for both wheels (2026-11-11, D45): Kp 0.7 A/rpm, Ki 0.6 A/rpm-s, under both of
+// the per-wheel tunes the chair drove on from 2026-11-01 (left 0.8011 / 0.7121, right
+// 0.9792 / 0.8011; auto-tuned per wheel, then taken down 15 % when 'vl' went to 22 V
+// because at full strength they limit-cycled the loaded chair). 10 Hz tracking with the
+// 0.125 / 0.5 defaults felt nervous to the driver; 2 Hz is what he chose. The left and
+// right constants stay separate so a wheel can take its own tune again. kSpeedKpHall /
 // kSpeedKiHall above stay the fallback for an axis without its own entry.
 inline constexpr float kHallPllHz = 2.0f;
-inline constexpr float kHallSpeedKpLeft = 0.8011f, kHallSpeedKiLeft = 0.7121f;   // drive_left
-inline constexpr float kHallSpeedKpRight = 0.9792f, kHallSpeedKiRight = 0.8011f; // drive_right
+inline constexpr float kHallSpeedKpLeft = 0.7f, kHallSpeedKiLeft = 0.6f;   // drive_left
+inline constexpr float kHallSpeedKpRight = 0.7f, kHallSpeedKiRight = 0.6f; // drive_right
 inline constexpr float kObsR = 0.51f;     // ohm/phase, 'rl' at 0.6/1.0/1.5 V steps
 inline constexpr float kObsL = 804.0e-6f; // H/phase (the sheet's 1.885 mH is ~2x phase)
 // Wb. Observer locks 0.045..0.052 (rpm_est = rpm_hall within 0.2 % from 60
@@ -189,8 +191,8 @@ inline constexpr bool kTripLeaky = false;
 inline constexpr int kTripFastConversions = 0;
 #endif
 
-/// Hall speed-loop gains (A/rpm, A/rpm-s) for a wheel: hub20 carries each chair wheel's own
-/// tune, every other profile and an unassigned axis get the profile's kSpeedKpHall /
+/// Hall speed-loop gains (A/rpm, A/rpm-s) for a wheel: hub20 carries an entry per drive
+/// wheel, every other profile and an unassigned axis get the profile's kSpeedKpHall /
 /// kSpeedKiHall. Axis numbers are rammp::AxisId (2 = drive_left, 3 = drive_right).
 struct HallGains {
   float kp, ki;
@@ -241,7 +243,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 8u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 9u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;
