@@ -152,20 +152,24 @@ static void test_slew_rising() {
   }
 }
 
-// D44: hub20 boots each chair wheel on its own tune; every other profile, and an
-// unassigned axis, on the profile's hall defaults.
+// D44, D45: hub20 boots its drive wheels on their own entries (one pair for both since
+// D45); every other profile, and an unassigned axis, on the profile's hall defaults.
 static void test_hall_gains_for_axis() {
   const auto fallback = motor::hall_gains_for_axis(255);
   CHECK(near(fallback.kp, motor::kSpeedKpHall) && near(fallback.ki, motor::kSpeedKiHall));
 #if defined(ATOS_MOTOR_HUB20)
   const auto l = motor::hall_gains_for_axis(2), r = motor::hall_gains_for_axis(3);
-  CHECK(near(l.kp, 0.8011f) && near(l.ki, 0.7121f));
-  CHECK(near(r.kp, 0.9792f) && near(r.ki, 0.8011f));
+  CHECK(near(l.kp, 0.7f) && near(l.ki, 0.6f));
+  CHECK(near(r.kp, 0.7f) && near(r.ki, 0.6f));
   CHECK(near(motor::kHallPllHz, 2.0f) && near(motor::kDefaultVoltLimit, 22.0f));
   CHECK(motor::kDefaultVoltLimit <= motor::kMaxPhaseVolts);
 #else
   CHECK(near(motor::hall_gains_for_axis(2).kp, motor::kSpeedKpHall));
+#if defined(ATOS_MOTOR_FLATBOT)
+  CHECK(near(motor::kHallPllHz, 3.0f));
+#else
   CHECK(near(motor::kHallPllHz, 10.0f));
+#endif
 #endif
   // Inside the MotorTuning bounds, so a tune from the MIB can always reach them.
   for (int a : {2, 3, 255}) {
