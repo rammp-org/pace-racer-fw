@@ -1957,7 +1957,7 @@ extern "C" void app_main(void) {
           g_demo_link->reply(espp::stream_frame::build_frame(true, 0x30, 0x82, p));
         }
       },
-      {.name = "Capture", .app = "", .description = "Binary readout of the 20 kHz capture ring"});
+      {.name = "Capture", .app = "", .description = "Binary readout of the 20 kHz capture ring", .protocol = ""});
 
   auto stream_task = espp::Task({.callback = stream_fn,
                                  .task_config = {.name = "stream", .stack_size_bytes = 8 * 1024},

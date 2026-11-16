@@ -106,10 +106,10 @@ public:
         ota_service_.module_info());
     worker_.register_module(
         kConsoleModule, [this](const espp::stream_frame::Frame &f) { handle_console(f); },
-        {.name = "Console", .app = "", .description = "Text commands in, stdout out"});
+        {.name = "Console", .app = "", .description = "Text commands in, stdout out", .protocol = ""});
     worker_.register_module(
         kSystemModule, [this](const espp::stream_frame::Frame &f) { handle_system(f); },
-        {.name = "System", .app = "", .description = "Reset and device info"});
+        {.name = "System", .app = "", .description = "Reset and device info", .protocol = ""});
     worker_.serve_discovery(cfg_.product, ota_.running_app_description().version);
   }
 
