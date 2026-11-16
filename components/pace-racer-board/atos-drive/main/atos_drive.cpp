@@ -1898,12 +1898,13 @@ extern "C" void app_main(void) {
                 []() {
                   return fmt::format(
                       "\"axis\":{},\"axis_name\":\"{}\",\"fb\":\"{}\",\"hall_cal\":{},"
-                      "\"enc_cal\":{},\"motor\":\"{}\",\"api\":{}",
+                      "\"enc_cal\":{},\"motor\":\"{}\",\"api\":{},\"rtps_restarts\":{}",
                       (int)g_axis.axis_id, axiscfg::axis_name(g_axis.axis_id),
                       axiscfg::feedback_name(g_axis.feedback),
                       g_axis.hall_calibrated() ? "true" : "false",
                       g_axis.enc_calibrated() ? "true" : "false", motor::kName,
-                      RAMMP_MOTOR_API_VERSION);
+                      RAMMP_MOTOR_API_VERSION,
+                      g_link ? g_link->counters().restarts.load(std::memory_order_relaxed) : 0u);
                 },
             .ip_fn = []() { return g_link ? g_link->ip() : std::string{}; },
         },

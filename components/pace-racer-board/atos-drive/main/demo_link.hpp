@@ -82,6 +82,12 @@ inline constexpr uint8_t kSystemInfo = 0x02;    ///< host -> device: reply with 
 inline constexpr uint8_t kSystemOk = 0x81;      ///< device -> host: reply to RESET ([u8 request type])
 inline constexpr uint8_t kSystemInfoReply = 0x82; ///< device -> host: UTF-8 JSON
 
+/// This boot's reset reason ("POWERON", "SW", "PANIC", "BROWNOUT", ...), as the USB and
+/// ethernet INFO replies report it.
+inline const char *reset_reason_name() {
+  return espp::CoreDump::reset_reason_name(espp::CoreDump::reset_reason());
+}
+
 class DemoLink {
 public:
   struct Config {
@@ -281,7 +287,7 @@ private:
           "\"core_dump\":{},\"uptime_s\":{}}}",
           cfg_.product, app.project_name, app.version, app.date, app.time,
           ota_.running_partition_label(), ota_.is_pending_verify() ? "true" : "false",
-          espp::CoreDump::reset_reason_name(espp::CoreDump::reset_reason()),
+          reset_reason_name(),
           core_dump_.has_core_dump() ? "true" : "false", esp_timer_get_time() / 1000000);
       usb_.write_vendor(espp::stream_frame::build_frame(
           true, kSystemModule, kSystemInfoReply,

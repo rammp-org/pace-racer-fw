@@ -372,11 +372,12 @@ private:
     uint8_t mac[6] = {};
     esp_read_mac(mac, ESP_MAC_BASE);
     return fmt::format("{{\"product\":\"{}\",\"project\":\"{}\",\"version\":\"{}\",\"built\":\"{} {}\","
-                       "\"partition\":\"{}\",\"pending_verify\":{},\"ip\":\"{}\",\"port\":{},"
+                       "\"partition\":\"{}\",\"pending_verify\":{},\"reset_reason\":\"{}\","
+                       "\"ip\":\"{}\",\"port\":{},"
                        "\"mac\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"uptime_s\":{}{}{}}}",
                        cfg_.product, app.project_name, app.version, app.date, app.time,
                        ota_.running_partition_label(), ota_.is_pending_verify() ? "true" : "false",
-                       cfg_.ip_fn ? cfg_.ip_fn() : "", cfg_.port, mac[0], mac[1], mac[2], mac[3],
+                       reset_reason_name(), cfg_.ip_fn ? cfg_.ip_fn() : "", cfg_.port, mac[0], mac[1], mac[2], mac[3],
                        mac[4], mac[5], esp_timer_get_time() / 1000000, extra.empty() ? "" : ",",
                        extra);
   }
