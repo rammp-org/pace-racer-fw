@@ -475,6 +475,7 @@ std::atomic<int> g_cap_every{20};
 std::atomic<int> g_cap_mode{0};
 
 std::atomic<bool> g_stream_quiet{false}; // 'sq 1': suppress the CSV stream
+std::atomic<bool> g_ota_saved_quiet{false}; // g_stream_quiet before an OTA began
 std::atomic<float> g_sine_amp{0.0f};     // sine sweep amplitude, mech rpm
 std::atomic<float> g_sine_period{8.0f};  // sine period, s
 std::atomic<float> g_hall_iq{0.0f};      // hiq torque command
@@ -1868,7 +1869,23 @@ extern "C" void app_main(void) {
     g_mode.store(HOLD);
     set_duties(kCenterDuty, kCenterDuty, kCenterDuty);
     g_request_coast.store(true);
-    fmt::print("#ota: drive unloaded, sampler off\n");
+    // Free the heap the upload needs: the CSV stream feeds the ethernet log
+    // tee (16 KB queue), and the RTPS participant holds ~65 KB (Domain + engine
+    // tasks). Running out mid-upload aborts in a failed new (PANIC).
+    // after_ota_abort brings both back if the session ends without a FINISH.
+    g_ota_saved_quiet.store(g_stream_quiet.exchange(true));
+    if (g_link)
+      g_link->suspend();
+    fmt::print("#ota: drive unloaded, sampler off, CSV quiet, RTPS down\n");
+  };
+  // A session before_ota began ended without a successful FINISH (OtaGuard):
+  // CSV back as it was and the participant back on the current lease. The
+  // drive stays unloaded (sampler off, coast) until the console re-arms it.
+  std::function<void()> after_ota_abort = []() {
+    g_stream_quiet.store(g_ota_saved_quiet.load());
+    if (g_link)
+      g_link->resume();
+    fmt::print("#ota: session ended without an update; RTPS and CSV restored\n");
   };
   g_demo_link = std::make_unique<demo::DemoLink>(demo::DemoLink::Config{
       .product = "PACE RACER",
@@ -1877,6 +1894,7 @@ extern "C" void app_main(void) {
       .channels = {"rpm_set", "rpm_hall", "iq", "iqref", "id", "vd", "vq", "t0", "t1", "t2", "t3",
                    "mode", "rpm_enc"},
       .before_ota = before_ota,
+      .after_ota_abort = after_ota_abort,
       // Never self-confirm on uptime alone: a wheel board is reached over
       // ethernet only, so EthLink confirms once the network is really up.
       .self_verify_after_s = 0,
@@ -1893,6 +1911,7 @@ extern "C" void app_main(void) {
         demo::EthLink::Config{
             .product = "PACE RACER",
             .before_ota = before_ota,
+            .after_ota_abort = after_ota_abort,
             .on_line = [](std::string_view l) { g_demo_link->push_line(l); },
             .info_json =
                 []() {
@@ -1993,6 +2012,8 @@ extern "C" void app_main(void) {
     if (ch < 0)
       ch = getchar(); // UART0 console (idf.py monitor)
     if (ch < 0) {
+      if (g_demo_link)
+        g_demo_link->poll_ota();
       std::this_thread::sleep_for(50ms);
       continue;
     }

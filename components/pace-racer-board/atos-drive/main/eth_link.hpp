@@ -72,6 +72,9 @@ public:
     std::string product;           ///< discovery device name
     /// Called right before an OTA session begins (same contract as DemoLink).
     std::function<void()> before_ota{nullptr};
+    /// A session before_ota began ended without a successful FINISH: an ABORT
+    /// or ERROR, the client disconnecting, or no OTA frame for 15 s (OtaGuard).
+    std::function<void()> after_ota_abort{nullptr};
     /// Console lines from the client go here (the app's console queue).
     std::function<void(std::string_view)> on_line{nullptr};
     /// JSON object for INFO and the discovery reply: the app adds axis,
@@ -90,6 +93,7 @@ public:
       , logger_({.tag = "EthLink", .level = cfg.log_level})
       , ota_(ota)
       , ota_service_(ota, {.send = [this](std::span<const uint8_t> f) { send(f); },
+                           .on_update_finished = [this]() { ota_guard_.finished(); },
                            .log_level = espp::Logger::Verbosity::INFO})
       , worker_({.send = [this](std::span<const uint8_t> f) { send(f); },
                  .on_overflow = [this]() { ota_service_.on_rx_overflow(); },
@@ -97,11 +101,9 @@ public:
     worker_.register_module(
         ota_service_.module_id(),
         [this](const espp::stream_frame::Frame &f) {
-          if (!f.is_reply() && f.type == 0x01 /* BEGIN */ && cfg_.before_ota) {
+          if (!f.is_reply() && f.type == 0x01 /* BEGIN */ && cfg_.before_ota)
             logger_.warn("OTA begin over ethernet: putting the plant in a safe state");
-            cfg_.before_ota();
-          }
-          ota_service_.handle(f);
+          ota_guard_.handle(ota_service_, f, cfg_.before_ota);
         },
         ota_service_.module_info());
     worker_.register_module(
@@ -111,6 +113,7 @@ public:
         kSystemModule, [this](const espp::stream_frame::Frame &f) { handle_system(f); },
         {.name = "System", .app = "", .description = "Reset and device info", .protocol = ""});
     worker_.serve_discovery(cfg_.product, ota_.running_app_description().version);
+    ota_guard_.set_after_abort(cfg_.after_ota_abort);
   }
 
   ~EthLink() { stop(); }
@@ -235,6 +238,7 @@ private:
         read_client(client);
     }
     flush_log();
+    ota_guard_.poll(ota_service_, client_fd_.load() >= 0);
     return false;
   }
 
@@ -410,6 +414,7 @@ private:
   Config cfg_;
   espp::Logger logger_;
   espp::Ota &ota_;
+  OtaGuard ota_guard_;
   espp::OtaService ota_service_;
   espp::DispatcherWorker worker_;
   std::unique_ptr<espp::Task> task_;
