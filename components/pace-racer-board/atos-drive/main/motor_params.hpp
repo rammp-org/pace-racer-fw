@@ -243,7 +243,7 @@ inline constexpr float kTuneKiMinRpm = 0.0f, kTuneKiMaxRpm = 4.0f;   // A/rpm-s
 inline constexpr float kTunePllMinHz = 0.5f, kTunePllMaxHz = 50.0f;
 
 // Firmware version reported in MotorState (major<<24 | minor<<16 | patch).
-inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 9u;
+inline constexpr uint32_t kFwVersion = (0u << 24) | (4u << 16) | 10u;
 
 // Conversions.
 inline constexpr float kPi = 3.14159265358979f;
