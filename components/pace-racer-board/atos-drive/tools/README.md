@@ -15,6 +15,7 @@ tools/provision.py --hcal         # redo the hall table even if one is saved
 tools/provision.py --no-flash     # keep the firmware on the board; NVS and calibration only
 tools/provision.py --port /dev/cu.usbmodem2101   # several boards plugged in (Linux /dev/ttyACM0, Windows COM5)
 tools/provision.py --build build-hub20           # another profile's build dir
+tools/provision.py --host drive_left --hcal --mib 192.168.4.1   # the MIB to ask for a calibration hold (this is the default)
 ```
 
 ## What it does
@@ -37,6 +38,17 @@ tools/provision.py --build build-hub20           # another profile's build dir
    for about 15 s. It checks the wheel actually turned (supply off or a
    blocked wheel stops the run with a message) and that the board reported
    `cal=1` with both direction budgets filled.
+
+   **In the chair** the MIB commands every wheel all the time, and the board
+   refuses console motion while that stream is live. So before the spin the
+   script reads the board's `atos` line, and if `cmd_age` is under 200 ms it
+   asks the MIB (`--mib`, default 192.168.4.1) for a *calibration hold* on
+   this wheel: the MIB stops commanding it, the stream goes stale, and the
+   console may drive. The hold is renewed every 20 s and released when the
+   calibration ends, fails, or is interrupted with Ctrl-C (the wheel gets
+   `stop` first). Released, the MIB commands the wheel DISARMED again. The MIB
+   grants it only when it is IDLE with the e-stop clear, so disable the drive
+   first. With no stream (a bench) no MIB is contacted.
 5. **Report.** The `axis` and `fb` lines and the boot check. Exit 0 means the
    board arms.
 
@@ -89,6 +101,20 @@ Developed on macOS; the tools also run on Linux and Windows (new
   `hs` on the console shows the raw hall state.
 - `hall calibration did not finish`: it needs 6 s of *rotation* per
   direction; a wheel that stalls part way does not count. Run again.
+- `the MIB does not know request 0x0a`: the MIB firmware predates the
+  calibration hold. Update it, or unplug the MIB's ethernet cable for the
+  calibration (the wheel's stream goes stale) and plug it back in after.
+- `the MIB refused the calibration hold`: the reason follows. Usually the
+  drive is enabled or the e-stop is latched; the MIB must be IDLE.
+- `no MIB answered at ...`: a stream is live but nothing serves :5555 at
+  that address. Pass `--mib <ip>`.
+- `the wheel's stream is still live`: the MIB held the axis but something
+  else still commands the board (a second MIB, a stand-in on the laptop),
+  or the board's axis is not the one held. The hold is released.
+- `! refused: a MotorCommand stream is live` from the board itself (the
+  dashboard, or a console by hand): take a hold first,
+  `tools/eth_link.py mib hold drive_left`, and `tools/eth_link.py mib
+  release` when done. A hold left behind lapses after 60 s.
 
 # tools/eth_link.py
 
@@ -97,6 +123,14 @@ The ethernet twin of the WebUSB tools: discovery (`PACE?` broadcast on udp
 (`main/eth_link.hpp`). `tools/eth_link.py --help` lists the actions;
 `provision.py --host` imports it. Standard library only, plus the `espp_ota`
 package already in `managed_components`.
+
+It also speaks to the MIB's calibration hold (RAMMP-mib-fw control module
+0x40 on the MIB's own tcp :5555): `tools/eth_link.py mib hold drive_left
+[--secs 60]`, `mib release [axis]` and `mib hold-status`; `mib` is
+192.168.4.1, or give the MIB's IP. A hold lasts 60 s unless renewed (ask
+again) and never more than 300 s in total. The MIB serves one TCP client and
+a newcomer replaces it, so a control panel connected to the MIB over
+ethernet is dropped by each request and reconnects.
 
 A board flashed with firmware older than 2026-10-15 does not serve the
 stream: its first flash with this build has to go over USB.

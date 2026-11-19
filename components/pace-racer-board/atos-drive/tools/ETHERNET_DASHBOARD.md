@@ -103,6 +103,30 @@ The terminal equivalent is `tools/eth_link.py drive_left flash`, and
 `tools/provision.py --host auto --motor hub20` runs the whole flow (flash,
 axis, feedback, hall calibration, report).
 
+## Calibrate a wheel in the chair
+
+Flashing works with the MIB running. Calibrating does not, on its own: the
+MIB commands every wheel all the time, and a board refuses console motion
+(the hall calibration spin) while that stream is live, with
+`! refused: a MotorCommand stream is live`. The MIB steps aside on request,
+with its calibration hold:
+
+- `tools/provision.py --host drive_left --hcal` does it for you: it asks the
+  MIB (192.168.4.1, or `--mib <ip>`) for the hold, waits for the wheel's
+  stream to go stale, runs the calibration, and releases the hold, also on
+  failure and Ctrl-C.
+- From the dashboard: in a terminal, `tools/eth_link.py mib hold drive_left`
+  first, then the dashboard's calibration, then
+  `tools/eth_link.py mib release`. The hold lapses after 60 s unless asked
+  for again.
+
+The MIB grants a hold only when it is IDLE with the e-stop clear: disable
+the drive first. While it holds a wheel the MIB is in CALIBRATE and refuses
+to drive; its MibStatus reads INITIALIZING with the message "Calibration hold". When the hold ends, the MIB
+commands the wheel DISARMED again, which also stops a spin still running.
+A MIB older than the calibration hold answers "unknown request": update it,
+or unplug its ethernet cable for the calibration.
+
 ## If a new image does not come back
 
 That is the safety net, not a brick. A new image boots on probation and is
