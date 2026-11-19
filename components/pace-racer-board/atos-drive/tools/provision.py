@@ -26,6 +26,11 @@ Steps, each reported as it goes:
   3. over the console: axis <n>, fb hall, then a reset so both take effect.
   4. if the hall table is not saved (or --hcal): the calibration spin. Wheel
      off the ground, motor supply on. The wheel turns both ways for ~15 s each.
+     The board refuses console motion while a MotorCommand stream is live, so
+     if its 'atos' line shows one (a MIB on the LAN), the MIB is asked for a
+     calibration hold on this wheel first (--mib, default 192.168.4.1) and
+     released afterwards, on failure and on Ctrl-C too. No stream (a bench):
+     no MIB needed.
   5. read back 'axis' and 'fb' and print the result line.
 
 USB needs pyserial and esptool. The ESP-IDF python env has both; the script
@@ -38,6 +43,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -59,6 +65,13 @@ HCAL_SECS = 6      # per direction, rotating ticks only
 SPIN_RPM = 30
 SPIN_AMPS = 3
 SPIN_RAMP_S = 5
+
+# The board's command watchdog (motor_params.hpp kWatchdogMs): its console refuses motion
+# while the last MotorCommand is younger than this.
+WATCHDOG_MS = 200
+MIB_HOLD_SECS = 60     # each calibration-hold request; renewed every MIB_RENEW_SECS
+MIB_RENEW_SECS = 20
+STALE_WAIT_S = 3.0     # for the wheel's stream to go stale once the MIB holds it
 
 
 def say(msg):
@@ -277,6 +290,109 @@ def hall_cal(con):
         die(f"hall calibration did not finish ({hs}); run again with the wheel free")
 
 
+def stream_age_ms(con):
+    """The wheel's MotorCommand age from its 'atos' line (65535 = never had one), or None."""
+    m = re.search(r"cmd_age=(\d+)ms", con.cmd("atos", wait=0.6))
+    return int(m.group(1)) if m else None
+
+
+class MibHold:
+    """Around the hall calibration: if the wheel's MotorCommand stream is live, ask the MIB
+    to stop commanding this axis (its calibration hold), wait until the wheel sees the
+    stream go stale, keep renewing, and release it on the way out whatever happens.
+    Released, the MIB commands the wheel DISARMED again, which also coasts a spin that
+    is still running."""
+
+    def __init__(self, con, axis, mib_host):
+        self.con, self.axis, self.mib = con, axis, mib_host
+        self.held = False
+        self.stop = threading.Event()
+        self.renewer = None
+
+    def __enter__(self):
+        age = stream_age_ms(self.con)
+        if age is None:
+            say("could not read the board's 'atos' line; trying without a MIB hold")
+            return self
+        if age >= WATCHDOG_MS:
+            say("no live MotorCommand stream on this wheel: no MIB hold needed")
+            return self
+        if not self.mib or self.mib == "none":
+            die(f"a MotorCommand stream is live (age {age} ms) and --mib none was given: the board "
+                "will refuse the spin. Pass --mib <MIB ip>, or unplug the MIB's ethernet for the "
+                "calibration.")
+        say(f"MotorCommand stream live (age {age} ms): asking the MIB at {self.mib} for a "
+            f"calibration hold on {AXES[self.axis]}")
+        try:
+            mask = eth_link.mib_hold(self.mib, self.axis, MIB_HOLD_SECS)
+        except eth_link.MibTooOld as e:
+            die(f"{e}.\n   Update the MIB firmware (RAMMP-mib-fw with the calibration hold), or unplug "
+                "the MIB's ethernet cable for the calibration and plug it back in afterwards.")
+        except eth_link.MibError as e:
+            die(f"the MIB refused the calibration hold: {e}.\n   Disable the drive (MIB IDLE), clear "
+                "the e-stop and any panel override, then run again.")
+        except (eth_link.LinkError, OSError) as e:
+            die(f"the wheel's MotorCommand stream is live but no MIB answered at {self.mib}:5555 "
+                f"({e}).\n   Pass --mib <MIB ip>, or unplug the MIB's ethernet cable for the "
+                "calibration.")
+        self.held = True
+        say(f"MIB holds {eth_link.mask_names(mask)} for {MIB_HOLD_SECS} s (renewed every "
+            f"{MIB_RENEW_SECS} s)")
+        self.renewer = threading.Thread(target=self._renew, daemon=True)
+        self.renewer.start()
+        try:
+            t0 = time.time()
+            while time.time() - t0 < STALE_WAIT_S:
+                age = stream_age_ms(self.con)
+                if age is not None and age >= WATCHDOG_MS:
+                    say(f"wheel stream stale (age {age} ms): console may drive")
+                    return self
+                time.sleep(0.3)
+        except BaseException:  # Ctrl-C or a lost console: __exit__ will not run, release here
+            self._release()
+            raise
+        self._release()
+        die(f"the MIB holds {AXES[self.axis]} but the wheel's stream is still live (age {age} ms): "
+            "something else is commanding it (another MIB? a stand-in on this laptop?), or the "
+            "board's axis is not the one held. Hold released.")
+
+    def _renew(self):
+        warned = False
+        while not self.stop.wait(MIB_RENEW_SECS):
+            try:
+                eth_link.mib_hold(self.mib, self.axis, MIB_HOLD_SECS)
+                warned = False
+            except (eth_link.LinkError, OSError) as e:
+                if not warned:
+                    print(f"!! renewing the MIB hold failed ({e}); it lapses on its own and the "
+                          "MIB then stops the wheel", file=sys.stderr, flush=True)
+                    warned = True
+
+    def _release(self):
+        self.stop.set()
+        if self.renewer:
+            self.renewer.join(timeout=5)
+        if not self.held:
+            return
+        self.held = False
+        try:
+            left = eth_link.mib_release(self.mib, self.axis)
+            say(f"MIB hold released; MIB commands {AXES[self.axis]} again"
+                + (f" (still holding {eth_link.mask_names(left)})" if left else ""))
+        except (eth_link.LinkError, OSError) as e:
+            print(f"!! releasing the MIB hold failed ({e}); it lapses within {MIB_HOLD_SECS} s, or "
+                  f"run: tools/eth_link.py {self.mib} release {AXES[self.axis]}", file=sys.stderr, flush=True)
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is KeyboardInterrupt:
+            try:
+                self.con.cmd("stop", wait=1.0)  # the wheel first; the release then coasts it anyway
+            except Exception:
+                pass
+        self._release()
+        return False
+
+
 def report(con):
     ax = first(con.cmd("axis"), "#axis")
     fb = first(con.cmd("fb"), "#fb")
@@ -345,7 +461,8 @@ def main_eth(a):
     ax = first(con.cmd("axis"), "#axis")
     if a.hcal or "hall table saved" not in ax:
         input(f"\n   Wheel {AXES[axis]} off the ground and free, motor supply ON. Enter to spin, Ctrl-C to skip: ")
-        hall_cal(con)
+        with MibHold(con, axis, a.mib):
+            hall_cal(con)
     else:
         say("hall table already saved (use --hcal to redo)")
 
@@ -368,6 +485,9 @@ def main():
     ap.add_argument("--no-flash", action="store_true", help="keep the firmware that is on the board")
     ap.add_argument("--hcal", action="store_true", help="redo the hall table even if one is saved")
     ap.add_argument("--list", action="store_true", help="show boards on USB and exit")
+    ap.add_argument("--mib", default=eth_link.MIB_DEFAULT_HOST,
+                    help="MIB to ask for a calibration hold if the wheel's MotorCommand stream is live "
+                         f"(default {eth_link.MIB_DEFAULT_HOST}; 'none' = never)")
     a = ap.parse_args()
     if not a.build:
         a.build = os.path.join(APP, f"build-{a.motor}")
@@ -418,7 +538,8 @@ def main():
     ax = first(con.cmd("axis"), "#axis")
     if a.hcal or "hall table saved" not in ax:
         input(f"\n   Wheel {AXES[axis]} off the ground and free, motor supply ON. Enter to spin, Ctrl-C to skip: ")
-        hall_cal(con)
+        with MibHold(con, axis, a.mib):
+            hall_cal(con)
     else:
         say("hall table already saved (use --hcal to redo)")
 

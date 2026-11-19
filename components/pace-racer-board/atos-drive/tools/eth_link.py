@@ -11,13 +11,24 @@ main/eth_link.hpp).
     tools/eth_link.py <board> reset
     tools/eth_link.py <board> cmd "axis"           # one console line, print what it said
     tools/eth_link.py <board> console              # interactive console (Ctrl-D to leave)
+    tools/eth_link.py mib hold drive_left          # MIB calibration hold: it stops commanding the wheel
+    tools/eth_link.py mib release [axis]           # end it (default: every axis)
+    tools/eth_link.py mib hold-status              # what the MIB holds, and for how long
 
 <board> is an IP address, an axis name (drive_left), an axis number (2), or
 'auto' (exactly one board must answer). Names and 'auto' go through the UDP
 discovery on :5556, which is a broadcast question and a unicast answer, so it
 works through the bench switch that eats board-originated multicast.
 
-Also importable: provision.py uses discover(), EthConsole, flash(), reset().
+'mib' is the MIB at its chair address, 192.168.4.1 (the chair LAN's DHCP
+server); an IP reaches another one. The calibration hold is RAMMP-mib-fw's
+control module 0x40 (CAL_HOLD / CAL_RELEASE, mib_panel_protocol.hpp) on the
+MIB's own tcp :5555. The MIB serves one TCP client at a time and a newcomer
+replaces the old one, so each request here opens its own short connection; a
+control panel connected over ethernet is dropped and reconnects.
+
+Also importable: provision.py uses discover(), EthConsole, flash(), reset(),
+mib_hold(), mib_release().
 
 Transport notes: 169.254/16 targets are reached from a socket bound to the
 physical interface that owns that range, because Tailscale's utun claims the
@@ -45,6 +56,12 @@ DISCOVERY_PORT = 5556
 CONSOLE_MODULE, SYSTEM_MODULE = 0x10, 0x20
 CON_LINE, CON_ACK, CON_LOG = 0x01, 0x81, 0x82
 SYS_RESET, SYS_INFO, SYS_OK, SYS_INFO_REPLY = 0x01, 0x02, 0x81, 0x82
+# The MIB's control module (RAMMP-mib-fw components/MibSystem/include/mib_panel_protocol.hpp).
+MIB_MODULE = 0x40
+MIB_STATUS, MIB_CAL_HOLD, MIB_CAL_RELEASE = 0x09, 0x0A, 0x0B
+MIB_OK, MIB_STATUS_REPLY, MIB_ERROR = 0x81, 0x89, 0x8F
+MIB_ALL_AXES = 0xFF
+MIB_DEFAULT_HOST = "192.168.4.1"  # RAMMP-mib-fw MIBconfig.hpp ethernet_ip
 AXES = {0: "front_caster_left", 1: "front_caster_right", 2: "drive_left", 3: "drive_right"}
 DEFAULT_BIN = os.path.join(APP, "build-hub20", "pace_racer_atos_drive.bin")
 IP_BOUND_IF = 25  # macOS setsockopt(IPPROTO_IP, ...) to pin a socket to one interface
@@ -52,6 +69,14 @@ IP_BOUND_IF = 25  # macOS setsockopt(IPPROTO_IP, ...) to pin a socket to one int
 
 class LinkError(RuntimeError):
     pass
+
+
+class MibError(LinkError):
+    """The MIB answered and refused (the reason is the message)."""
+
+
+class MibTooOld(MibError):
+    """The MIB answered but does not know the request: firmware without the calibration hold."""
 
 
 # ---------------------------------------------------------------- interfaces
@@ -394,6 +419,60 @@ def status(host):
         return OtaClient(t).get_status()
 
 
+# ---------------------------------------------------------------- MIB calibration hold
+def mib_axis(axis):
+    """Axis number, name or 'all' -> the u8 the MIB takes (0xFF = every axis)."""
+    if axis in (None, "all", MIB_ALL_AXES):
+        return MIB_ALL_AXES
+    if isinstance(axis, int) or str(axis).isdigit():
+        n = int(axis)
+        if n not in AXES:
+            raise LinkError(f"no axis {n}")
+        return n
+    for n, name in AXES.items():
+        if name == axis:
+            return n
+    raise LinkError(f"no axis named '{axis}' ({', '.join(AXES.values())})")
+
+
+def _mib_request(host, type_, payload=b"", timeout=3.0):
+    """One request to the MIB control module on its own connection -> the reply frame."""
+    with TcpTransport(host, connect_timeout=2.0) as t:
+        t.write(sf.build_frame(MIB_MODULE, type_, payload))
+        f = _await(t, MIB_MODULE, (MIB_OK, MIB_ERROR, MIB_STATUS_REPLY), timeout)
+    if f is None:
+        raise MibTooOld(f"{host}: no reply from the MIB control module (0x40)")
+    if f.type == MIB_ERROR:
+        why = f.payload[1:].decode("utf-8", "replace")
+        if why == "unknown request":
+            raise MibTooOld(f"{host}: the MIB does not know request 0x{type_:02x} (its firmware "
+                            "predates the calibration hold)")
+        raise MibError(why)
+    return f
+
+
+def mib_hold(host, axis, seconds=0):
+    """Ask the MIB to stop commanding `axis` (or renew). seconds 0 = its default (60 s).
+    Returns the mask of held axes. Raises MibTooOld, MibError, LinkError."""
+    f = _mib_request(host, MIB_CAL_HOLD, bytes([mib_axis(axis), seconds & 0xFF, (seconds >> 8) & 0xFF]))
+    return f.payload[1] if len(f.payload) > 1 else 0
+
+
+def mib_release(host, axis=MIB_ALL_AXES):
+    """End the hold for `axis` (default: every axis). Returns the mask still held."""
+    f = _mib_request(host, MIB_CAL_RELEASE, bytes([mib_axis(axis)]))
+    return f.payload[1] if len(f.payload) > 1 else 0
+
+
+def mib_status(host):
+    """The MIB's STATUS JSON; its 'cal_hold' is the hold (absent on older firmware)."""
+    return json.loads(_mib_request(host, MIB_STATUS).payload.decode())
+
+
+def mask_names(mask):
+    return ", ".join(AXES[n] for n in sorted(AXES) if mask & (1 << n)) or "none"
+
+
 # ---------------------------------------------------------------- cli
 def _say(msg):
     print(f"== {msg}", flush=True)
@@ -401,10 +480,14 @@ def _say(msg):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("target", help="'list', or a board: IP, axis name, axis number, 'auto'")
+    ap.add_argument("target", help="'list', or a board: IP, axis name, axis number, 'auto'; "
+                    "'mib' or a MIB's IP for hold / release / hold-status")
     ap.add_argument("action", nargs="?", default="info",
-                    choices=["info", "flash", "status", "mark-valid", "rollback", "reset", "cmd", "console"])
-    ap.add_argument("arg", nargs="?", help="binary for flash (default build-hub20), line for cmd")
+                    choices=["info", "flash", "status", "mark-valid", "rollback", "reset", "cmd", "console",
+                             "hold", "release", "hold-status"])
+    ap.add_argument("arg", nargs="?", help="binary for flash (default build-hub20), line for cmd, "
+                    "axis (name, number or 'all') for hold / release")
+    ap.add_argument("--secs", type=int, default=0, help="hold: seconds (0 = the MIB's default, 60)")
     ap.add_argument("--no-confirm", action="store_true", help="flash: do not mark the new image valid")
     ap.add_argument("--wait", type=float, default=1.5, help="cmd: seconds to collect output")
     a = ap.parse_args(argv)
@@ -419,6 +502,20 @@ def main(argv=None):
             print(f"{b['ip']:15s} axis {b.get('axis')} {b.get('axis_name', '?'):18s} fb {b.get('fb', '?')} "
                   f"hall_cal {b.get('hall_cal')} motor {b.get('motor', '?')} fw {b.get('version', '?')} "
                   f"{b.get('partition', '?')}{' PENDING-VERIFY' if b.get('pending_verify') else ''}")
+        return 0
+
+    if a.action in ("hold", "release", "hold-status"):
+        mib = MIB_DEFAULT_HOST if a.target == "mib" else a.target
+        if a.action == "hold":
+            if a.arg is None:
+                ap.error("hold needs an axis (name, number or 'all')")
+            print(f"MIB {mib}: holding {mask_names(mib_hold(mib, a.arg, a.secs))}; renew before it "
+                  "lapses, 'release' when done")
+        elif a.action == "release":
+            print(f"MIB {mib}: released; still held: {mask_names(mib_release(mib, a.arg))}")
+        else:
+            print(json.dumps(mib_status(mib).get("cal_hold", "no cal_hold in STATUS: MIB firmware "
+                                                 "without the calibration hold"), indent=2))
         return 0
 
     host, _ = resolve(a.target)

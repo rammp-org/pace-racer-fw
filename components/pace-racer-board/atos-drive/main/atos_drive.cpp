@@ -2053,7 +2053,8 @@ extern "C" void app_main(void) {
         if (strncmp(line, d, strlen(d)) == 0)
           drives = true;
       if (drives && g_sup && g_sup->stream_live()) {
-        fmt::print("! refused: a MotorCommand stream is live (age {} ms); stop the MIB first\n",
+        fmt::print("! refused: a MotorCommand stream is live (age {} ms); ask the MIB for a "
+                   "calibration hold (tools/provision.py does), or stop the MIB first\n",
                    g_sup->state().cmd_age_ms);
         continue;
       }

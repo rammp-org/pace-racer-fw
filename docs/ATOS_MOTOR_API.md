@@ -230,7 +230,10 @@ Fork of `halls-sensorless` (encoder-commutated `erun`/`epos` path is the drive).
    store as int64 counts, convert to rad at publish).
 6. `ibus_est`, `torque_est`, `drv_status` sampling; `fw_version` from the build.
 7. Console remains for `ecal`, `hset`, limits, `sq`, etc. Console commands that start
-   motion are refused while an MIB command stream is live (avoid two masters).
+   motion are refused while an MIB command stream is live (avoid two masters). To
+   calibrate a wheel in the chair, the MIB stops commanding it on request (its
+   calibration hold, RAMMP-mib-fw control module `CAL_HOLD`); `tools/provision.py`
+   asks for it around the hall calibration.
 
 ### Phase 3: host-side MIB stand-in (see next section)
 
