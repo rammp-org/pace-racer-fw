@@ -82,6 +82,64 @@ inline constexpr uint8_t kSystemInfo = 0x02;    ///< host -> device: reply with 
 inline constexpr uint8_t kSystemOk = 0x81;      ///< device -> host: reply to RESET ([u8 request type])
 inline constexpr uint8_t kSystemInfoReply = 0x82; ///< device -> host: UTF-8 JSON
 
+/// This boot's reset reason ("POWERON", "SW", "PANIC", "BROWNOUT", ...), as the USB and
+/// ethernet INFO replies report it.
+inline const char *reset_reason_name() {
+  return espp::CoreDump::reset_reason_name(espp::CoreDump::reset_reason());
+}
+
+/// One link's OTA session, from the BEGIN that ran before_ota to its end. A
+/// successful FINISH disarms it (the device restarts). Any other end runs
+/// after_ota_abort once, so the app can bring back what before_ota took down:
+/// an ABORT or a refused BEGIN/DATA/FINISH (the service no longer owns a
+/// session after the frame), an RX overflow abort, the host going away
+/// mid-session, or no OTA frame for kStallUs (the session is aborted first).
+class OtaGuard {
+public:
+  static constexpr int64_t kStallUs = 15 * 1000 * 1000;
+
+  /// The OTA module's frame handler, wrapped: runs before_ota on BEGIN.
+  void handle(espp::OtaService &svc, const espp::stream_frame::Frame &f,
+              const std::function<void()> &before_ota) {
+    busy_.store(true);
+    if (!f.is_reply() && f.type == 0x01 /* BEGIN */ && before_ota) {
+      before_ota();
+      finished_.store(false);
+      armed_.store(true);
+    }
+    svc.handle(f);
+    last_us_.store(esp_timer_get_time());
+    busy_.store(false);
+    if (!svc.owns_session())
+      end();
+  }
+  /// OtaService::Config::on_update_finished.
+  void finished() { finished_.store(true); }
+  /// Periodic check (a link task): link_alive false = the host is gone.
+  void poll(espp::OtaService &svc, bool link_alive) {
+    if (!armed_.load() || finished_.load() || busy_.load())
+      return;
+    const bool stalled = esp_timer_get_time() - last_us_.load() > kStallUs;
+    if (svc.owns_session() && link_alive && !stalled)
+      return;
+    if (svc.owns_session())
+      svc.on_rx_overflow(); // the service's own abort (ota_.abort + ERROR reply)
+    end();
+  }
+  void set_after_abort(std::function<void()> fn) { after_abort_ = std::move(fn); }
+
+private:
+  void end() {
+    if (finished_.load() || !armed_.exchange(false))
+      return;
+    if (after_abort_)
+      after_abort_();
+  }
+  std::atomic<bool> armed_{false}, finished_{false}, busy_{false};
+  std::atomic<int64_t> last_us_{0};
+  std::function<void()> after_abort_;
+};
+
 class DemoLink {
 public:
   struct Config {
@@ -93,6 +151,9 @@ public:
     /// application can put the plant in a safe state: flash writes disable the
     /// cache, which stalls anything running from flash for milliseconds at a time.
     std::function<void()> before_ota{nullptr};
+    /// Called when a session before_ota began ends without a successful FINISH
+    /// (see OtaGuard): bring back what before_ota took down.
+    std::function<void()> after_ota_abort{nullptr};
     /// Seconds after boot at which a PENDING_VERIFY image confirms itself if no
     /// host has done so. 0 disables self-confirmation (pure host-driven rollback).
     /// A board that is only reachable over ethernet must leave this at 0 and let
@@ -107,6 +168,7 @@ public:
       , usb_(make_usb_config(cfg))
       , ota_({.reject_same_version = false, .log_level = espp::Logger::Verbosity::INFO})
       , ota_service_(ota_, {.send = [this](std::span<const uint8_t> f) { usb_.write_vendor(f); },
+                            .on_update_finished = [this]() { ota_guard_.finished(); },
                             .log_level = espp::Logger::Verbosity::INFO})
       , core_dump_({.log_level = espp::Logger::Verbosity::WARN})
       , coredump_service_(core_dump_,
@@ -122,6 +184,7 @@ public:
       , link_({.send = [this](std::span<const uint8_t> f) { usb_.write_vendor(f); },
                .on_overflow = [this]() { ota_service_.on_rx_overflow(); },
                .task_config = {.name = "usb_rx", .stack_size_bytes = 8192}}) {
+    ota_guard_.set_after_abort(cfg.after_ota_abort);
     s_instance = this;
   }
 
@@ -139,21 +202,19 @@ public:
     link_.register_module(
         ota_service_.module_id(),
         [this](const espp::stream_frame::Frame &f) {
-          if (!f.is_reply() && f.type == 0x01 /* BEGIN */ && cfg_.before_ota) {
+          if (!f.is_reply() && f.type == 0x01 /* BEGIN */ && cfg_.before_ota)
             logger_.warn("OTA begin: putting the plant in a safe state");
-            cfg_.before_ota();
-          }
-          ota_service_.handle(f);
+          ota_guard_.handle(ota_service_, f, cfg_.before_ota);
         },
         ota_service_.module_info());
     link_.register_module(telemetry_);
     link_.register_module(coredump_service_);
     link_.register_module(
         kConsoleModule, [this](const espp::stream_frame::Frame &f) { handle_console(f); },
-        {.name = "Console", .app = "", .description = "Text commands in, stdout out"});
+        {.name = "Console", .app = "", .description = "Text commands in, stdout out", .protocol = ""});
     link_.register_module(
         kSystemModule, [this](const espp::stream_frame::Frame &f) { handle_system(f); },
-        {.name = "System", .app = "", .description = "Reset and device info"});
+        {.name = "System", .app = "", .description = "Reset and device info", .protocol = ""});
     link_.serve_discovery(cfg_.product, ota_.running_app_description().version);
 
     usb_.set_vendor_receive_callback([this](std::span<const uint8_t> d) { link_.push(d); });
@@ -179,6 +240,9 @@ public:
       start_self_verify_timer();
     return true;
   }
+
+  /// Ends a stalled USB OTA session (see OtaGuard); call from a periodic loop.
+  void poll_ota() { ota_guard_.poll(ota_service_, true); }
 
   /// One telemetry sample, values in Config::channels order.
   void emit(std::span<const float> values) { telemetry_.emit(values); }
@@ -281,7 +345,7 @@ private:
           "\"core_dump\":{},\"uptime_s\":{}}}",
           cfg_.product, app.project_name, app.version, app.date, app.time,
           ota_.running_partition_label(), ota_.is_pending_verify() ? "true" : "false",
-          espp::CoreDump::reset_reason_name(espp::CoreDump::reset_reason()),
+          reset_reason_name(),
           core_dump_.has_core_dump() ? "true" : "false", esp_timer_get_time() / 1000000);
       usb_.write_vendor(espp::stream_frame::build_frame(
           true, kSystemModule, kSystemInfoReply,
@@ -429,6 +493,7 @@ private:
   espp::Logger logger_;
   espp::UsbDevice usb_;
   espp::Ota ota_;
+  OtaGuard ota_guard_;
   espp::OtaService ota_service_;
   espp::CoreDump core_dump_;
   espp::CoreDumpService coredump_service_;

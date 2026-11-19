@@ -24,6 +24,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include "logger.hpp"
 #include "pace-racer-board.hpp"
@@ -107,6 +108,25 @@ public:
   }
 
   bool up() const { return participant_ != nullptr; }
+
+  /// Take the participant down until resume(), freeing its heap (the Domain and
+  /// the engine's tasks; ~65 KB on espp/rtps 1.4.3) for an OTA. The link task
+  /// does the teardown, so nothing else touches the participant; this waits
+  /// (up to 3 s) until it has. Commands stop, so the supervisor's command
+  /// watchdog takes over, as on a lost lease.
+  void suspend() {
+    torn_down_.store(false);
+    suspended_.store(true);
+    ip_changed_.store(true, std::memory_order_release);
+    for (int i = 0; i < 300 && !torn_down_.load(); i++)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  /// Undo suspend(): the link task brings the participant back on the
+  /// current lease, the same path as a new lease.
+  void resume() {
+    suspended_.store(false);
+    ip_changed_.store(true, std::memory_order_release);
+  }
   std::string ip() const {
     std::lock_guard<std::mutex> lk(ip_mutex_);
     return ip_;
@@ -120,9 +140,10 @@ private:
     if (ip_changed_.exchange(false, std::memory_order_acq_rel)) {
       tear_down();
       const std::string ip = this->ip();
-      if (!ip.empty() && cfg_.axis != rammp::AxisId::UNASSIGNED) {
+      if (!suspended_.load() && !ip.empty() && cfg_.axis != rammp::AxisId::UNASSIGNED) {
         bring_up(ip);
       }
+      torn_down_.store(suspended_.load() && !participant_);
       next = std::chrono::steady_clock::now();
     }
 
@@ -218,6 +239,8 @@ private:
   mutable std::mutex ip_mutex_;
   std::string ip_;
   std::atomic<bool> ip_changed_{false};
+  std::atomic<bool> suspended_{false};  ///< suspend() until resume(): no participant
+  std::atomic<bool> torn_down_{false};  ///< the link task has acted on suspend()
   std::unique_ptr<espp::RtpsParticipant> participant_;
   std::unique_ptr<espp::Publisher<rammp::MotorState>> publisher_;
   std::unique_ptr<espp::Subscriber<rammp::MotorCommand>> subscriber_;

@@ -100,3 +100,12 @@ CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 # Ethernet service stream (main/eth_link.hpp): a TCP listener, one client and
 # a UDP discovery responder on top of the RTPS participant's sockets.
 CONFIG_LWIP_MAX_SOCKETS=16
+
+# espp/rtps 1.4.3 needs ~17 KB more internal heap than 1.4.2 at participant
+# bring-up (Domain 29.4 -> 31.9 KB in one block, bigger worker/reactor stacks,
+# job-retry and reply-hold tasks). The wheel only sees espp peers, so 20
+# remote endpoint records are plenty (Domain 28.8 KB); it uses no services
+# or actions, so RPC (and its reply-hold task) is off.
+CONFIG_RTPS_LIMIT_MAX_NUM_UNMATCHED_REMOTE_WRITERS=20
+CONFIG_RTPS_LIMIT_MAX_NUM_UNMATCHED_REMOTE_READERS=20
+CONFIG_RTPS_ENABLE_RPC=n
